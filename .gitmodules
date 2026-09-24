@@ -1,0 +1,3 @@
+[submodule "wolvicmod"]
+	path = wolvicmod
+	url = https://github.com/Wolf-Tungsten/wolvicmod
