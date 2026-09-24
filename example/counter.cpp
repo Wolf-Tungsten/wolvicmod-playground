@@ -21,10 +21,7 @@ struct Counter : Module {
         cnt.update().on(negedge(rst_n)) = 0;
 
         // Count: on clk posedge while en is high.
-        cnt.update().on(posedge(clk)).en(en).reads(cnt) = [](auto src) {
-            auto [c] = src;
-            return c + 1;
-        };
+        cnt.update().on(posedge(clk)).en(en) = cnt + 1;
 
         dout = cnt;
     }
