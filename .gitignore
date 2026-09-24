@@ -1,0 +1,14 @@
+# CMake build trees (examples build at repo root: build/, build-clang/, ...)
+build/
+build-*/
+
+# Editor / tooling caches
+.cache/
+.vscode/
+compile_commands.json
+
+# Waveform dumps
+*.fst
+
+# Test output
+Testing/

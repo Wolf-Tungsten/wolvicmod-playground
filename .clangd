@@ -1,0 +1,22 @@
+# clangd configuration.
+# Example programs use the root build tree's compilation database.
+CompileFlags:
+  CompilationDatabase: build/
+
+# Framework unit tests use the framework repo's own build tree.
+---
+If:
+  PathMatch: wolvicmod/tests/.*
+CompileFlags:
+  CompilationDatabase: wolvicmod/build/
+
+# Everything else (header-only framework sources): fall back to include paths.
+---
+If:
+  PathMatch: wolvicmod/include/.*
+CompileFlags:
+  Add:
+    - -Iwolvicmod/include
+    - -Iwolvicmod/third_party
+    - -Iwolvicmod/third_party/libfst/src
+    - -std=c++20
