@@ -46,7 +46,8 @@
 
 ### 2.1 信号与类型
 
-- **flit 用 C++ struct 位级定义**：`ReqFlit/RespFlit/DataFlit/SnoopFlit/HReqFlit`（zhujiang 格式，`ZJ/zhujiang/chi/Flit.scala:27-127`）与 `CHIREQ/CHIRSP/CHIDAT/CHISNP`（xscache 格式，`XSCache/src/main/scala/xscache/chi/Message.scala:428-557`）各一套，字段用 `uint64_t` + 位段辅助函数。注意 **DAT.DBID：zhujiang 16b vs xscache 12b**，适配层做零扩展/截断（对齐 `ZhuJiangBridge.scala:213-214,232`）
+- **flit 用 C++ struct 位级定义**：`ReqFlit/RespFlit/DataFlit/SnoopFlit/HReqFlit`（zhujiang 格式，`ZJ/zhujiang/chi/Flit.scala:27-127`）与 `CHIREQ/CHIRSP/CHIDAT/CHISNP`（xscache 格式，`XSCache/src/main/scala/xscache/chi/Message.scala:428-557`）各一套，字段用 `uint64_t` + 位段辅助函数。注意 **DAT.DBID：zhujiang 16b vs xscache 12b**，适配层做零扩展/截断（对齐 `ZhuJiangBridge.scala:213-214,232`）——✅ 已实现于 `proj-xiangshan-l3/model/`（`bit_pack.h` 位段助手 / `zj_flit.h` / `xs_flit.h` / `ring_slot.h`，单测 `tests/test_flit.cpp`）。**参数化方式 = 编译期 config traits**（模板参数 `Cfg`，与 RTL elaboration-time Parameters 同级；默认 = kunminghu-v3 锁定值）。实测锁定值：niw=**11**（`ZhuJiangNoCTopology.scala:17` 覆盖 nodeNidBits=8，非 ZJParameters 默认 5）、raw=48、dw=256、CHI Issue=E.b（Makefile 钉死，ZhuJiang 只支持 E.b）；总宽经生成 RTL 端口核实：环 REQ 105/RSP 66/DAT 375/HRQ 128（`build/rtl/Router*.sv`），xscache seam REQ 118/RSP 66/DAT 367/SNP 102（`CoupledL2.sv` `io_decoupledCHI_*`）
+- **xscache seam 是 CHI Bundle 的裁剪子集**（firtool 裁掉桥不读写的字段，剩余字段即边界契约）：CHIREQ 裁 returnNID/returnTxnID/ns/likelyshared/allowRetry/pCrdType/lpIDWithPadding/tagOp/traceTag（mpam 仅 partID 9b；mpam/rsvdc 被 mapReq 读但落入 zhujiang 零宽字段，无语义）；**rx_rsp 无 tgtID**（mapRsp 不回填恒 0，`ZhuJiangBridge.scala:187-199`）；CHIDAT 裁 ccID/tagOp/tag/tu/traceTag/rsvdc（dataCheck/poison 配置 require 关闭）；CHISNP 裁 ns(恒 false)/traceTag/mpam
 - **Decoupled 通道 = 两个端口**：`Out<FlitTx>`（`{valid, bits}` 合体 struct）+ `In<Bool>` ready；fire = valid && ready。反压路径保持组合
 - **环链路（valid-only 无 ready）**：`RingSlot {valid, flit, rsvdValid, rsvdPayload}`，每站每通道每方向一个 `Reg<RingSlot>`
 - **复位**：全局同步复位一根 `Bool`，Update 用 `.on(posedge(clk))` + 复位优先级（先注册）；不建模 M 节点的两相复位时序
@@ -121,7 +122,7 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 
 ### 3.1 XscChiAdapter
 
-- 职责：`ZhuJiangBridge.scala:152-252` 的 `mapReq/mapRsp/mapDat/mapSnp` 字段级重映射（xscache Bundle ↔ zhujiang Flit），双向各四条通道，**全组合**（RTL 中就是纯连线）
+- 职责：`ZhuJiangBridge.scala:152-252`（实际路径 `XSCache/src/test/scala/ZhuJiangBridge.scala`，package zhujiang）的 `mapReq/mapRsp/mapDat/mapSnp` 字段级重映射（xscache Bundle ↔ zhujiang Flit），双向各四条通道，**全组合**（RTL 中就是纯连线）
 - wolvicmod 形态：无状态，四对 Assign；同时承载 DBID 12↔16 的宽度适配断言
 - 附带断言：路由到 CC 的 REQ 不允许出现（RTL 桥里 `ready:=false.B`，`ZhuJiangBridge.scala:147`）
 
