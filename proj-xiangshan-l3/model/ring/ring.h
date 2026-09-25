@@ -33,6 +33,7 @@
 #include "model/ring/channel_tap.h"
 #include "model/ring/hrq_flit.h"
 #include "model/ring_slot.h"
+#include "model/wire_conn.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
@@ -380,14 +381,7 @@ private:
                       Out<Dec<SnoopFlit>>* snpOut, In<bool>* snpOutRdy);
 };
 
-// 纯连线接线（无字段变换）：child.Out→child.In、parent.Out→child.Out 等
-// 跨方向连接的统一形式（同方向直连用 operator=，见 Signal 快路径）。
-namespace detail {
-template <class D, class S>
-inline void wireConn(D& dst, S& src) {
-    dst.assign().reads(src) = [](auto s) { return std::get<0>(s); };
-}
-}  // namespace detail
+// 纯连线接线 detail::wireConn 已上移到 model/wire_conn.h（zj::detail）。
 
 inline void Ring::buildReqChan(int i, In<Dec<RReqFlit>>* rx, Out<bool>* rxRdy,
                                Out<Dec<RReqFlit>>* tx, In<bool>* txRdy,

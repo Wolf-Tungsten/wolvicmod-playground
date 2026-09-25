@@ -14,6 +14,9 @@
 #   ./run.sh ring             # 环级对拍（wolvicmod Ring vs RTL ZRING，免 refgen：
 #                             #   直接用 XiangShan emu 构建产物 build/rtl 的
 #                             #   ZRING2X1C1P1D1M1G32，与目标配置同源同参）
+#   ./run.sh socket           # CC socket 对拍（wolvicmod CcSocket vs RTL
+#                             #   SocketDevSide+SocketIcnSide 背对背，免 refgen，
+#                             #   同样直接用 build/rtl）
 #   ./run.sh --skip-refgen    # SV 已生成时跳过 Chisel 阶段
 #   ./run.sh --skip-build     # 只重跑对拍
 set -euo pipefail
@@ -33,8 +36,8 @@ for arg in "$@"; do
     --skip-refgen) SKIP_REFGEN=1 ;;
     --skip-build)  SKIP_BUILD=1 ;;
     -j*)           JOBS="${arg#-j}" ;;
-    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|all) MODULE="$arg" ;;
-    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|all）" >&2; exit 2 ;;
+    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|all) MODULE="$arg" ;;
+    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|all）" >&2; exit 2 ;;
   esac
 done
 
@@ -58,6 +61,7 @@ case "$MODULE" in
   spsram) MODULES=(spsram); ALL_CFGS=("${SPSRAM_CFGS[@]}") ;;
   dpsram) MODULES=(dpsram); ALL_CFGS=("${DPSRAM_CFGS[@]}") ;;
   ring)   MODULES=(ring) ;;   # 免 refgen：直接用 XS_RTL 的 ZRING
+  socket) MODULES=(socket) ;; # 免 refgen：直接用 XS_RTL 的 Socket{Dev,Icn}Side
   all)    MODULES=(fastq viparb qosarb alloc spsram dpsram)
           ALL_CFGS=("${FASTQ_CFGS[@]}" "${VIPARB_CFGS[@]}" "${QOSARB_CFGS[@]}"
                     "${ALLOC_CFGS[@]}" "${SPSRAM_CFGS[@]}" "${DPSRAM_CFGS[@]}") ;;
@@ -71,9 +75,9 @@ if [[ -e "$VERIFY_DIR/refgen/out" && ! -L "$VERIFY_DIR/refgen/out" ]]; then
 fi
 ln -sfn "$OUT/mill" "$VERIFY_DIR/refgen/out"
 
-# ---------- 1. refgen：逐配置生成 SV（ring 免）----------
-if [[ "$MODULE" == "ring" ]]; then
-  echo "==> [1/4] refgen 不适用（ring 直接用 $XS_RTL/$ZRING_TOP.sv）"
+# ---------- 1. refgen：逐配置生成 SV（ring/socket 免）----------
+if [[ "$MODULE" == "ring" || "$MODULE" == "socket" ]]; then
+  echo "==> [1/4] refgen 不适用（$MODULE 直接用 $XS_RTL 的构建产物）"
 elif [[ "$SKIP_REFGEN" == 0 ]]; then
   echo "==> [1/4] refgen: 逐配置生成 SystemVerilog（${#ALL_CFGS[@]} 个配置）"
   for cfg in "${ALL_CFGS[@]}"; do
@@ -103,6 +107,17 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
         echo "verilate FAILED for zring"; tail -10 "$OUT/obj/zring.verilate.log"; exit 1; }
     make -C "$obj" -f VZRing.mk -j"$JOBS" > "$OUT/obj/zring.make.log" 2>&1 || {
       echo "verilated make FAILED for zring"; tail -10 "$OUT/obj/zring.make.log"; exit 1; }
+  elif [[ "$MODULE" == "socket" ]]; then
+    obj="$OUT/obj/ccsocket"
+    mkdir -p "$obj"
+    # 同 ring：wrapper 显式传入，子模块闭包（Socket*/ChiPdc*/PDC/Queue）由 -y 解析
+    verilator --cc --top-module CcSocketRef -Mdir "$obj" --prefix VCcSocket \
+      -Wno-fatal -Wno-WIDTH -Wno-LATCH -Wno-MULTIDRIVEN -Wno-UNOPTTHREADS \
+      "$VERIFY_DIR/cosim/xs_assert_shim.sv" "$VERIFY_DIR/cosim/cc_socket_ref.sv" \
+      -y "$XS_RTL" +libext+.sv > "$OUT/obj/ccsocket.verilate.log" 2>&1 || {
+        echo "verilate FAILED for ccsocket"; tail -10 "$OUT/obj/ccsocket.verilate.log"; exit 1; }
+    make -C "$obj" -f VCcSocket.mk -j"$JOBS" > "$OUT/obj/ccsocket.make.log" 2>&1 || {
+        echo "verilated make FAILED for ccsocket"; tail -10 "$OUT/obj/ccsocket.make.log"; exit 1; }
   else
   for cfg in "${ALL_CFGS[@]}"; do
     obj="$OUT/obj/$cfg"
@@ -129,12 +144,15 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       spsram) cfgs=("${SPSRAM_CFGS[@]}") ;;
       dpsram) cfgs=("${DPSRAM_CFGS[@]}") ;;
       ring)   cfgs=(zring) ;;
+      socket) cfgs=(ccsocket) ;;
     esac
     incs=() libs=()
     for cfg in "${cfgs[@]}"; do
       incs+=("-I$OUT/obj/$cfg")
       if [[ "$cfg" == "zring" ]]; then
         libs+=("$OUT/obj/$cfg/VZRing__ALL.a")
+      elif [[ "$cfg" == "ccsocket" ]]; then
+        libs+=("$OUT/obj/$cfg/VCcSocket__ALL.a")
       else
         libs+=("$OUT/obj/$cfg/V$cfg"__ALL.a)
       fi
