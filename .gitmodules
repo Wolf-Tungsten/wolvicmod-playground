@@ -1,3 +1,7 @@
 [submodule "wolvicmod"]
 	path = wolvicmod
 	url = https://github.com/Wolf-Tungsten/wolvicmod
+[submodule "proj-xiangshan-l3/XiangShan"]
+	path = proj-xiangshan-l3/XiangShan
+	url = git@github.com:OpenXiangShan/XiangShan.git
+	branch = kunminghu-v3

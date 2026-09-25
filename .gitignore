@@ -12,3 +12,6 @@ compile_commands.json
 
 # Test output
 Testing/
+
+# Java / mill 构建产物（out 目录及指向它的符号链接）
+out

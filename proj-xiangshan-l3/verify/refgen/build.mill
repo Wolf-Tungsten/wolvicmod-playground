@@ -1,0 +1,83 @@
+package build
+
+import $ivy.`org.chipsalliance::firtool-resolver:2.1.1`
+import mill._
+import mill.scalalib._
+
+// refgen：对拍参考源生成器。chisel 版本钉死 XiangShan kunminghu-v3 主仓
+// （build.mill:19/42：chisel 7.13.0 + scala 2.13.17 + chisel-plugin 7.13.0）。
+// 参考 RTL 只引用真实源码，不复制不重写：
+//   - chisel3 标准库（util.Queue / Pipe / Arbiter / RRArbiter）随 chisel 依赖
+//   - xs-utils 裁剪子集（FastQueue/VipArbiter/ConditionArbiter/SRAM 模板及闭包）
+//   - dongjiang utils 的 FastArb.scala / Alloc.scala
+//   - rocket-chip cde（Alloc.scala 的 import org.chipsalliance.cde.config 需要）
+
+val wsRoot = os.Path(sys.env("MILL_WORKSPACE_ROOT"))  // verify/refgen（build.mill 所在目录）
+val projRoot = wsRoot / ".." / ".."                   // proj-xiangshan-l3
+val xsUtilsRoot =
+    projRoot / "XiangShan" / "XSCache" / "ZhuJiang" / "xs-utils" / "src" / "main" / "scala"
+val dongjiangUtils =
+    projRoot / "XiangShan" / "XSCache" / "ZhuJiang" / "src" / "main" / "scala" / "dongjiang" / "utils"
+
+// xs-utils 裁剪子集（整树会拖入 rocket-chip diplomacy/tilelink 全家桶；本子集
+// 的 import 闭包只到 firrtl.annotations（chisel jar 内）与 cde）
+val xsUtilsSubset = Seq(
+  "xs/utils/queue/FastQueue.scala",
+  "xs/utils/queue/CircularQueuePtr.scala",
+  "xs/utils/queue/MimoQueue.scala",
+  "xs/utils/queue/OverrideableQueue.scala",
+  "xs/utils/arb/BaseArbiter.scala",
+  "xs/utils/arb/VipArbiter.scala",
+  "xs/utils/arb/ConditionArbiter.scala",
+  "xs/utils/ResetRRArbiter.scala",
+  "xs/utils/ResetGen.scala",
+  "xs/utils/package.scala",
+  "xs/utils/GlobalData.scala",
+  "xs/utils/ClockGate.scala",
+  "xs/utils/FileRegisters.scala",
+  "xs/utils/Hold.scala",
+  "xs/utils/dft/package.scala",
+  "xs/utils/mbist/Mbist.scala",
+  "xs/utils/mbist/MbistBus.scala",
+  "xs/utils/mbist/MbistClockGateCell.scala",
+  "xs/utils/mbist/MbistCsvGen.scala",
+  "xs/utils/mbist/MbistPipeline.scala",
+  "xs/utils/sram/SinglePortSramTemplate.scala",
+  "xs/utils/sram/DualPortSramTemplate.scala",
+  "xs/utils/sram/SRAMTemplate.scala",
+  "xs/utils/sram/SramProto.scala",
+  "xs/utils/sram/SramHelper.scala",
+  "xs/utils/sram/SramInstGen.scala",
+  "xs/utils/sram/SramResetGen.scala",
+  "xs/utils/sram/SramQueue.scala",
+  "sifive/enterprise/firrtl/FullAsyncResetAnnotation.scala",
+  "sifive/enterprise/firrtl/NestedPrefixModulesAnnotation.scala",
+)
+
+val dongjiangSubset = Seq(
+  "FastArb.scala",
+  "Alloc.scala",
+)
+
+object refgen extends ScalaModule {
+  def scalaVersion = "2.13.17"
+
+  def mainClass = Some("refgen.RefGen")
+
+  def scalacOptions = Seq("-language:reflectiveCalls", "-Ymacro-annotations", "-Ytasty-reader")
+
+  def ivyDeps = Agg(
+    mvn"org.chipsalliance::chisel:7.13.0",
+    mvn"com.lihaoyi::sourcecode:0.4.4",
+    mvn"org.chipsalliance::firtool-resolver:2.1.1",  // main() 里直接 Resolve 到缓存的 firtool
+  )
+
+  def scalacPluginIvyDeps = Agg(mvn"org.chipsalliance:::chisel-plugin:7.13.0")
+
+  def sources = Task.Sources {
+    Seq(PathRef(wsRoot / "src")) ++
+      xsUtilsSubset.map(f => PathRef(xsUtilsRoot / os.RelPath(f))) ++
+      dongjiangSubset.map(f => PathRef(dongjiangUtils / f)) ++
+      Seq(PathRef(projRoot / "XiangShan" / "rocket-chip" / "cde" / "cde" / "src"))
+  }
+}
