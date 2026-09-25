@@ -11,6 +11,9 @@
 # 用法：
 #   ./run.sh                  # 全矩阵
 #   ./run.sh fastq            # 单模块（fastq|viparb|qosarb|alloc|spsram|dpsram）
+#   ./run.sh ring             # 环级对拍（wolvicmod Ring vs RTL ZRING，免 refgen：
+#                             #   直接用 XiangShan emu 构建产物 build/rtl 的
+#                             #   ZRING2X1C1P1D1M1G32，与目标配置同源同参）
 #   ./run.sh --skip-refgen    # SV 已生成时跳过 Chisel 阶段
 #   ./run.sh --skip-build     # 只重跑对拍
 set -euo pipefail
@@ -30,8 +33,8 @@ for arg in "$@"; do
     --skip-refgen) SKIP_REFGEN=1 ;;
     --skip-build)  SKIP_BUILD=1 ;;
     -j*)           JOBS="${arg#-j}" ;;
-    fastq|viparb|qosarb|alloc|spsram|dpsram|all) MODULE="$arg" ;;
-    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|all）" >&2; exit 2 ;;
+    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|all) MODULE="$arg" ;;
+    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|all）" >&2; exit 2 ;;
   esac
 done
 
@@ -45,6 +48,8 @@ DPSRAM_CFGS=(DpSramRef_s16w1_b1_su1_l1_o1 DpSramRef_s16w1_b0_su1_l1_o1 DpSramRef
 
 MODULES=()
 ALL_CFGS=()
+XS_RTL="$PROJ_DIR/XiangShan/build/rtl"   # emu 构建产物（ZhuJiang 配置）
+ZRING_TOP=ZRING2X1C1P1D1M1G32
 case "$MODULE" in
   fastq)  MODULES=(fastq);  ALL_CFGS=("${FASTQ_CFGS[@]}") ;;
   viparb) MODULES=(viparb); ALL_CFGS=("${VIPARB_CFGS[@]}") ;;
@@ -52,6 +57,7 @@ case "$MODULE" in
   alloc)  MODULES=(alloc);  ALL_CFGS=("${ALLOC_CFGS[@]}") ;;
   spsram) MODULES=(spsram); ALL_CFGS=("${SPSRAM_CFGS[@]}") ;;
   dpsram) MODULES=(dpsram); ALL_CFGS=("${DPSRAM_CFGS[@]}") ;;
+  ring)   MODULES=(ring) ;;   # 免 refgen：直接用 XS_RTL 的 ZRING
   all)    MODULES=(fastq viparb qosarb alloc spsram dpsram)
           ALL_CFGS=("${FASTQ_CFGS[@]}" "${VIPARB_CFGS[@]}" "${QOSARB_CFGS[@]}"
                     "${ALLOC_CFGS[@]}" "${SPSRAM_CFGS[@]}" "${DPSRAM_CFGS[@]}") ;;
@@ -65,8 +71,10 @@ if [[ -e "$VERIFY_DIR/refgen/out" && ! -L "$VERIFY_DIR/refgen/out" ]]; then
 fi
 ln -sfn "$OUT/mill" "$VERIFY_DIR/refgen/out"
 
-# ---------- 1. refgen：逐配置生成 SV ----------
-if [[ "$SKIP_REFGEN" == 0 ]]; then
+# ---------- 1. refgen：逐配置生成 SV（ring 免）----------
+if [[ "$MODULE" == "ring" ]]; then
+  echo "==> [1/4] refgen 不适用（ring 直接用 $XS_RTL/$ZRING_TOP.sv）"
+elif [[ "$SKIP_REFGEN" == 0 ]]; then
   echo "==> [1/4] refgen: 逐配置生成 SystemVerilog（${#ALL_CFGS[@]} 个配置）"
   for cfg in "${ALL_CFGS[@]}"; do
     mkdir -p "$OUT/sv/$cfg"
@@ -81,8 +89,21 @@ fi
 
 # ---------- 2. verilate + 3. 构建 harness ----------
 if [[ "$SKIP_BUILD" == 0 ]]; then
-  echo "==> [2/4] verilator: 编译参考模型（${#ALL_CFGS[@]} 个配置）"
+  echo "==> [2/4] verilator: 编译参考模型"
   mkdir -p "$OUT/obj"
+  if [[ "$MODULE" == "ring" ]]; then
+    obj="$OUT/obj/zring"
+    mkdir -p "$obj"
+    # 顶层文件显式传入；-y 从 emu 构建产物自动解析子模块闭包（文件名=模块名）；
+    # xs_assert_shim 提供 xs_assert_v2 桩（emu 流程中它是 difftest DPI-C 导入）
+    verilator --cc --top-module "$ZRING_TOP" -Mdir "$obj" --prefix VZRing \
+      -Wno-fatal -Wno-WIDTH -Wno-LATCH -Wno-MULTIDRIVEN -Wno-UNOPTTHREADS \
+      "$VERIFY_DIR/cosim/xs_assert_shim.sv" "$XS_RTL/$ZRING_TOP.sv" \
+      -y "$XS_RTL" +libext+.sv > "$OUT/obj/zring.verilate.log" 2>&1 || {
+        echo "verilate FAILED for zring"; tail -10 "$OUT/obj/zring.verilate.log"; exit 1; }
+    make -C "$obj" -f VZRing.mk -j"$JOBS" > "$OUT/obj/zring.make.log" 2>&1 || {
+      echo "verilated make FAILED for zring"; tail -10 "$OUT/obj/zring.make.log"; exit 1; }
+  else
   for cfg in "${ALL_CFGS[@]}"; do
     obj="$OUT/obj/$cfg"
     mkdir -p "$obj"
@@ -93,6 +114,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
     make -C "$obj" -f "V$cfg.mk" -j"$JOBS" > "$OUT/obj/$cfg.make.log" 2>&1 || {
       echo "verilated make FAILED for $cfg"; tail -10 "$OUT/obj/$cfg.make.log"; exit 1; }
   done
+  fi
   g++ -std=c++20 -O2 -I"$VR_ROOT/include" -c "$VR_ROOT/include/verilated.cpp" -o "$OUT/verilated.o"
   g++ -std=c++20 -O2 -I"$VR_ROOT/include" -c "$VR_ROOT/include/verilated_threads.cpp" -o "$OUT/verilated_threads.o"
 
@@ -106,11 +128,16 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       alloc)  cfgs=("${ALLOC_CFGS[@]}") ;;
       spsram) cfgs=("${SPSRAM_CFGS[@]}") ;;
       dpsram) cfgs=("${DPSRAM_CFGS[@]}") ;;
+      ring)   cfgs=(zring) ;;
     esac
     incs=() libs=()
     for cfg in "${cfgs[@]}"; do
       incs+=("-I$OUT/obj/$cfg")
-      libs+=("$OUT/obj/$cfg/V$cfg"__ALL.a)
+      if [[ "$cfg" == "zring" ]]; then
+        libs+=("$OUT/obj/$cfg/VZRing__ALL.a")
+      else
+        libs+=("$OUT/obj/$cfg/V$cfg"__ALL.a)
+      fi
     done
     g++ -std=c++20 -O2 -Wall -Wextra -Wno-sign-compare \
       -I"$VR_ROOT/include" -I"$VR_ROOT/include/vltstd" \

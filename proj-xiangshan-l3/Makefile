@@ -2,7 +2,8 @@
 #
 #   make test                 项目侧单元测试（ctest，逐文件独立条目）
 #   make cosim                项目侧预制菜 RTL 对拍全矩阵
-#   make cosim M=fastq        单模块对拍（fastq|viparb|qosarb|alloc|spsram|dpsram）
+#   make cosim M=fastq        单模块对拍（fastq|viparb|qosarb|alloc|spsram|dpsram|ring）
+#                             # M=ring：环级对拍（直接用 XiangShan/build/rtl 的 ZRING，须先 emu）
 #   make emu [LLC=ZhuJiang]   构建 XiangShan emu（默认 DefaultConfig + OpenLLC）
 #   make coremark             用现有 emu 运行 coremark 仿真
 #   make emu-clean            手动清除 XiangShan 构建产物

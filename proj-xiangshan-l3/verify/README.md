@@ -11,7 +11,8 @@ kunminghu-v3 `build.mill` 版本）生成 SystemVerilog、Verilator 5.047 编译
 ```bash
 # 推荐入口：项目根目录的 Makefile
 make -C proj-xiangshan-l3 cosim            # 全矩阵
-make -C proj-xiangshan-l3 cosim M=fastq    # 单模块（fastq|viparb|qosarb|alloc|spsram|dpsram）
+make -C proj-xiangshan-l3 cosim M=fastq    # 单模块（fastq|viparb|qosarb|alloc|spsram|dpsram|ring）
+#   M=ring 环级对拍：直接用 XiangShan/build/rtl 的 ZRING（须先 make emu LLC=ZhuJiang）
 
 # 或直接调脚本（支持更多开关）：
 proj-xiangshan-l3/verify/run.sh               # 全矩阵
@@ -45,7 +46,7 @@ verify/
 │           └── DpSramRef.scala     # × 3 配置（bypass/nobypass/ways=2）
 ├── cosim/             # C++ 对拍 harness（verilated 参考模型 + zj::prefab）
 │   ├── common.h       #   拍协议/失配报告（前 16 拍激励回放）/密度激励
-│   └── harness_{fastq,viparb,qosarb,alloc,spsram,dpsram}.cpp
+│   └── harness_{fastq,viparb,qosarb,alloc,spsram,dpsram,ring}.cpp + xs_assert_shim.sv
 ├── run.sh
 └── （无生成物——全部产物在 ../build/verify/：sv/<cfg>/、obj/<cfg>/、bin/、mill/、日志；
      refgen/out 是指向 build/verify/mill 的符号链接，mill 0.12 无 --out-dir）

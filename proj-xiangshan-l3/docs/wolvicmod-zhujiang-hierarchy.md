@@ -136,6 +136,20 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 
 ### 3.3 Ring / RouterStop
 
+✅ P1 已实现于 `proj-xiangshan-l3/model/ring/`（`hrq_flit.h` HRQ 车道超集类型 /
+`eject_buffer.h` VipTable+EjectBuffer / `channel_tap.h` SingleChannelTap+ChannelTap+RingPipe /
+`ring.h` STOP_TABLE+Ring 组装），环级对拍零失配（见 §5.1 与实施计划第 2 步）。
+
+**as-built 备注（对拍实证补充）**：
+- HRQ 车道用超集 struct（HReqFlit⊕SnoopFlit+is_snp），四种车道都有 tgt/src/txn/qos 字段直访
+- ResetRRArbiter 语义 = chisel RRArbiter（仅复位风格差异），eject 合流/HF 的 HRQ 注入合并均用 `RRArb`
+- **firtool 端口裁剪即边界契约**（对拍 harness 的来源）：ZRING 顶层 RI/HI 的 icn 端口是子集——
+  `rni rx_req` 无 TgtID/Excl、`rni rx_resp` 仅 Opcode/SrcID/TgtID/TxnID、`hni rx_resp` 仅
+  DBID/Opcode/QoS/TgtID/TxnID、`hni` 无 rx_req（ERQ 注入口不存在）；`rni tx_resp`、
+  `hni tx_resp`/`tx_data` 无 ready 且 bits 大子集化。**P5 的 DPI 薄壳端口清单须按裁剪后的
+  实际端口对齐**（届时按 Top 层重新生成的端口表核对）
+- 复位：M 节点 resetInject 链沿环传播约 20+ 拍，对拍时空跑 32 拍待稳定
+
 对齐 `ZJ/xijiang/router/base/`（`BaseRouter.scala`、`ChannelTap.scala`、`EjectBuffer.scala`）：
 
 - **链路**：每站每通道 `Reg<RingSlot>` 打 1 拍 ⇒ 每跳 1 拍；无 tap 的通道纯 Pipe 直透
