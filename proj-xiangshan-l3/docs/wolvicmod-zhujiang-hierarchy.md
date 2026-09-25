@@ -126,6 +126,12 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 - wolvicmod 形态：无状态，四对 Assign；同时承载 DBID 12↔16 的宽度适配断言
 - 附带断言：路由到 CC 的 REQ 不允许出现（RTL 桥里 `ready:=false.B`，`ZhuJiangBridge.scala:147`）
 
+**as-built 备注（P2 实证补充）**：✅ 已实现于 `model/cc/xsc_chi_adapter.h`（自由函数
+`mapReq/mapRspZj/mapRspXs/mapDatZj/mapDatXs/mapSnp` + 纯组合模块，无 clk 端口）。
+- firtool 把桥逻辑内联成 XSTop 的端口连线（`XSTop.sv` socket 实例 `io_icn_*` ↔ `_core_with_l2_io_decoupledCHI_*`）——"纯组合"假设经生成 RTL 证实
+- 端口裁剪即契约：`io_decoupledCHI_rx_rsp` 无 `tgtID`（`mapRspXs` 亦不回填，恒 0）；`io_icn_tx_req` 整个不存在（eject REQ 死端，模型侧 `l2_tx_req_rdy` 恒 false）
+- `io_decoupledCHI_tx_req` 保留 `mpam_partID(9b)/rsvdc(4b)`（被 mapReq 读但落 zhujiang 零宽字段，无语义）
+
 ### 3.2 CcSocket（PDC）
 
 对齐 `ZJ/device/socket/PowerDomainCrossing.scala:16-62`，每通道每方向：
@@ -133,6 +139,13 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 - Tx 侧：5 token 计数 Reg + 1 级寄存；`ready = tokens.orR`
 - Rx 侧：1 级寄存 + 5 项 flow Queue
 - 行为结果：L2↔CC 路由器之间每通道 ≈2 拍固定延迟 + 双向各 5 项在途
+
+**as-built 备注（P2 实证补充）**：✅ 已实现于 `model/cc/`（`pdc.h` 的 `PdcTx/PdcRx`
++ `cc_socket.h` 的 `CcSocket`，inject REQ/RSP/DAT × eject REQ/RSP/DAT/SNP 七通道）。
+- CC socket 在生成 RTL 中 = `SocketDevSide`（XSTop 内实例 `socket`，`io_icn_*`）+ `SocketIcnSide`（`zhujiang_opt.ccn_0_0x8`，`io_dev_*`）背对背，PDC 线（`ccn_0x8_sync_*`）在 Top 层直连；kunminghu-v3 单时钟域，两侧同 clk
+- 合成流量对拍：`verify/cosim/cc_socket_ref.sv` + `harness_socket.cpp`（`run.sh socket`）：3 seed × 20 万拍 × 1740 万比对/seed = **5220 万比对零失配**
+- **真实流量 trace 重放**（`tests/test_trace_replay.cpp`，`make replay`）：coremark 前端 2 万拍，驱动 L2 CHI 缝六通道 + 环侧 eject 四通道/inject ready，`io_decoupledCHI_*`（`core_with_l2` 口）与 `ccn_0_0x8.io_dev_*` 双侧逐拍比对，**265,459 次比对零失配**。注意：bits 仅在 valid=1 时比对——difftest 开 `RANDOMIZE_REG_INIT`，valid=0 时 RTL bits 是随机垃圾（don't-care）
+- grant→token 回补有 2 拍可见延迟（激励驱动后需隔拍观察）
 
 ### 3.3 Ring / RouterStop
 
@@ -167,6 +180,18 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 - 每 lan：ChiBuffer（每通道深 2 队列 ×1 级）+ friends 方向选择（tx flit 按目标 NID 属于哪个 lan 的 friends 决定从 hfp0/hfp1 发出，并改写 HomeNID/ReturnNID）
 - ERQ 口：按 S 节点 addrSets（全匹配）选 TgtID=S
 - 内部 1 个 DongJiang，2 lan 经 ResetRRArbiter 汇入
+
+**as-built 备注（P2 实证补充）**：✅ 外壳已实现于 `model/home/home_shell.h`
+（`HomeShell<Cfg>`，Cfg 为 NTTP——createChildModule 只支持默认构造；每 lan 7 个
+`Queue<F,2>` ChiBuffer + 3 个 `RRArb<F,2>` eject 合流；inject friends 组合分发：
+ERQ 选址 `addr.ci==ci?0x30:0`、ReturnNID noDmt(0x7FF) 改写 srcId、DAT.HomeNID 改写），
+HNF 暂用行为桩 `model/home/hnf_stub.h`（16 项池、8 拍延迟、先 RSP(Comp 0x04) 后
+DAT(CompData)，丢弃 RSP/DAT、不发 SNP/ERQ），P3 由 DongJiang 全量替换。
+实测锁定值：bank0 = nids{0x00,0x38} friends{{0x08,0x18},{0x40,0x30}}、
+bank1 = nids{0x10,0x28} friends{{0x18,0x08},{0x30,0x40}}、mem_nid=0x30；
+hnxPipelineDepth=0 → 每 lan 仅 1 级 ChiBuffer。
+组装见 `model/zj_l3.h`（adapter→cc_socket→ring n1；n0/n7→shell0、n2/n5→shell1；
+n3/n4/n6 直通外露）。
 
 ### 3.5 DongJiang（HNF 本体）
 
@@ -212,7 +237,7 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 |---|---|---|
 | P0 | 时序原语库（§2.2）+ 单测 | ✅ 已达成：两侧 ctest 全绿（逐文件独立条目）+ RTL 对拍零失配（两侧 `verify/run.sh`：27 配置 × 3 seed × 10 万拍，累计 858 万拍 / 4155 万次比对） |
 | P1 | Ring + RouterStop + ChannelTap/EjectBuffer | 环上传输 trace 对拍 |
-| P2 | XscChiAdapter + CcSocket + HomeWrapper 外壳 | L2↔环通路连通（HNF 用行为桩） |
+| P2 | XscChiAdapter + CcSocket + HomeWrapper 外壳 | ✅ 已达成：单测全绿 + socket 对拍 5220 万比对零失配 + **coremark 前端 2 万拍 trace 重放到 CC 边界（26.5 万比对零失配，`make replay`）**（HNF 用行为桩） |
 | P3 | DongJiang 全量（Directory→DataBlock→Backend→Frontend→ChiXbar） | LLC hit/miss/snoop 定向用例对拍 |
 | P4 | S/HI 桥 + 顶层组装 | standalone coremark trace 重放全对 |
 | P5 | DPI-C 集成 + coremark 系统级验证 | difftest 过 + cycleCnt=316,801 |

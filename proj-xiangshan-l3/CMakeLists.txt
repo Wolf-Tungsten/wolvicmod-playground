@@ -29,3 +29,8 @@ foreach(src ${ZJ_PREFAB_TEST_SOURCES})
     target_link_libraries(${name} PRIVATE wolvicmod)
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
+
+# trace 重放测试：trace 文件缺失时以 77 退出 → 跳过（make replay 一键生成+运行）
+if(TEST test_trace_replay)
+    set_tests_properties(test_trace_replay PROPERTIES SKIP_RETURN_CODE 77)
+endif()

@@ -107,6 +107,30 @@ make emu CONFIG=DefaultConfig LLC=ZhuJiang EMU_THREADS=8 -j32
 - `EMU_THREADS=16` 不可行：Verilator 报 `UNOPTTHREADS`（环形 NoC 可并行度不足），warning 按 error 处理导致 verilation 失败；`8` 已验证可干净通过（代价是仿真变慢）
 - 若遇到 verilation 失败但 `build/verilator-compile/` 已残留产出，make 会误判为完成——必须 `rm -rf build/verilator-compile` 再重建
 
+### 2.4 波形抓取与 trace 重放（P2 验收 ✅）
+
+```bash
+make -C proj-xiangshan-l3 emu LLC=ZhuJiang TRACE=fst   # 重建带 FST 波形的 emu（~23 min；只重 verilate，不重 elaborate）
+make -C proj-xiangshan-l3 replay                        # 一键：dump 前 2 万拍 FST → 提取 CC 边界 trace → 重放对拍（~3 min）
+make -C proj-xiangshan-l3 replay N=50000                # 换窗口长度
+```
+
+`make replay` 的流程：
+
+1. `emu -b 0 -e N -C N --dump-wave` 抓 coremark 前端 N 拍 FST（`build/trace/cc_front.fst`）
+2. `fst2vcd | verify/trace/extract_cc_trace.py` 流式过滤出 CC 边界两侧信号（L2 CHI 缝 `core_with_l2.io_decoupledCHI_*` 六通道 + socket 环侧 `zhujiang_opt.ccn_0_0x8.io_dev_*` 七通道，~193 列），重建逐拍 trace（`build/trace/cc_front.txt`）
+3. `tests/test_trace_replay.cpp` 重放：输入侧逐拍驱动 wolvicmod `XscChiAdapter+CcSocket`，输出侧逐拍与 trace 比对
+
+验收结果：前端 2 万拍（实际有效 19,965 拍，前 35 拍复位）**265,459 次比对零失配**。
+
+注意点：
+
+- `TRACE=fst` 与 LLC 配置一样被 `.llc-config` 印记跟踪：仅 trace 设置变化时只删 `build/verilator-compile` 重 verilate，不重新 elaborate RTL
+- `--dump-wave` 只在 `[log_begin, log_end]` 窗口内 dump（`-b/-e`）；不带窗口跑会段错误（emu 未编 trace 支持时）
+- trace 比对中 bits 仅在 valid=1 时有效：difftest 开 `RANDOMIZE_REG_INIT`，valid=0 时 RTL 的 bits 是随机初值（don't-care）
+- `make test` 在 trace 缺失时自动跳过 `test_trace_replay`（ctest SKIP）
+
+
 ### 2.3 两种配置对比（coremark-2-iteration 基线）
 
 | 配置 | cycleCnt | IPC | host time |
