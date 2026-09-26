@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
                 std::fprintf(f, "%s{", k ? "," : "");
                 for (uint32_t l = 0; l < l_sti; ++l)
                     std::fprintf(f, "%s0x%x", l ? "," : "",
-                                 getw<28>(d.out_cc, ((i * l_si + j) * l_ti + k) * l_sti + l));
+                                 getw<29>(d.out_cc, ((i * l_si + j) * l_ti + k) * l_sti + l));
                 std::fprintf(f, "}");
             }
             std::fprintf(f, "}");

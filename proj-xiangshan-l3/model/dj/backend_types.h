@@ -38,6 +38,7 @@ struct Chi {  // HasNodeId + channel + op + order/expCA + snpField + dataVec + H
     uint16_t fwdTxnID = 0;  // 12bit
     bool retToSrc = false;
     bool toLAN = false;
+    bool fromLAN = true;    // 本配置恒 1（ring 侧 setRx tgt=LAN）
 
     bool toBBN() const { return !toLAN; }
     uint16_t getNoC() const { return toLAN ? 0 : 1; }  // LAN=0, BBN=1
@@ -45,13 +46,70 @@ struct Chi {  // HasNodeId + channel + op + order/expCA + snpField + dataVec + H
     bool memCacheable() const { return (memAttr >> 2) & 1; }
     bool memDevice() const { return (memAttr >> 1) & 1; }
     bool memEwa() const { return memAttr & 1; }
-    bool isCopyBackWrite() const {
-        // CopyBack 写族：WriteUnique*/WriteBack*/WriteClean*/WriteEvict*（Opcode 高位段）
-        // 见 ReqOpcode：0x17/0x18/0x19/0x1a/0x1b/0x42(WriteEvictOrEvict)/0x20/0x21
-        return opcode == 0x17 || opcode == 0x18 || opcode == 0x19 || opcode == 0x1a ||
-               opcode == 0x1b || opcode == 0x42 || opcode == 0x20 || opcode == 0x21;
+    // ---- channel 判定 ----
+    bool isReq() const { return channel == 0; }
+    bool isDat() const { return channel == 1; }
+    bool isRsp() const { return channel == 2; }
+    bool isSnp() const { return channel == 3; }
+    bool reqIs(uint8_t op) const { return isReq() && opcode == op; }
+    bool snpIs(uint8_t op) const { return isSnp() && opcode == op; }
+    // ---- opcode 族（OpBundles.scala；仅列本配置会出现的值） ----
+    bool isAllocatingRead() const {
+        return isReq() && (opcode == 0x01 || opcode == 0x02 || opcode == 0x26 ||
+                           opcode == 0x07 || opcode == 0x22);
     }
-    bool isImmediateWrite() const { return opcode == 0x1c || opcode == 0x1d; }  // WriteNoSnp*
+    bool isNonAllocatingRead() const {
+        return isReq() && (opcode == 0x04 || opcode == 0x11 || opcode == 0x03 ||
+                           opcode == 0x24 || opcode == 0x25);
+    }
+    bool isRead() const { return isAllocatingRead() || isNonAllocatingRead(); }
+    bool isDataless() const {
+        return isReq() && (opcode == 0x08 || opcode == 0x09 || opcode == 0x0a ||
+                           opcode == 0x0b || opcode == 0x0c || opcode == 0x0d ||
+                           opcode == 0x23);
+    }
+    bool isWriteFull() const {
+        return isReq() && (opcode == 0x1d || opcode == 0x19 || opcode == 0x20 ||
+                           opcode == 0x1b || opcode == 0x17 || opcode == 0x15 ||
+                           opcode == 0x42);
+    }
+    bool isWritePtl() const {
+        return isReq() && (opcode == 0x1c || opcode == 0x18 || opcode == 0x21 ||
+                           opcode == 0x1a);
+    }
+    bool isWrite() const { return isWriteFull() || isWritePtl(); }
+    bool isCopyBackWrite() const {
+        return isReq() && (opcode == 0x1b || opcode == 0x1a || opcode == 0x17 ||
+                           opcode == 0x42 || opcode == 0x15);
+    }
+    bool isImmediateWrite() const {
+        return isReq() && (opcode == 0x1c || opcode == 0x1d || opcode == 0x18 ||
+                           opcode == 0x19 || opcode == 0x21 || opcode == 0x20);
+    }
+    bool isSnpFwd() const {
+        return isSnp() && (opcode == 0x11 || opcode == 0x12 || opcode == 0x13 ||
+                           opcode == 0x14 || opcode == 0x16 || opcode == 0x17);
+    }
+    // ---- order 判定 ----
+    bool isEO() const { return order == 3; }
+    bool isRO() const { return order == 2 && !expCompAck; }
+    bool isOWO() const { return order == 2 && expCompAck; }
+    bool isRA() const { return order == 1; }
+    bool noOrder() const { return order == 0; }
+    // ---- 尺寸 ----
+    bool isFullSize() const { return dataVec == 3; }
+    bool isZero() const { return dataVec == 0; }
+    bool isHalfSize() const { return !isZero() && !isFullSize(); }
+    // ---- getChiInst（DJBundles.scala:142）→ 18bit ChiInst 打包 ----
+    uint32_t getChiInst() const {
+        const bool allocate = !isDataless() && !isSnp() && memAllocate();
+        const bool ewa = !isDataless() && !isSnp() && memEwa();
+        const bool full = !isDataless() && memCacheable() && !isSnp() && isFullSize();
+        return (1u << 17) | (static_cast<uint32_t>(channel) << 15) |
+               (static_cast<uint32_t>(fromLAN) << 14) | (static_cast<uint32_t>(toLAN) << 13) |
+               (static_cast<uint32_t>(opcode) << 6) | (expCompAck << 5) | (allocate << 4) |
+               (ewa << 3) | (static_cast<uint32_t>(order) << 1) | full;
+    }
     bool operator==(const Chi&) const = default;
 };
 
