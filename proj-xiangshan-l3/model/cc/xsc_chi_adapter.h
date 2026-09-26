@@ -21,7 +21,6 @@
 
 #include <cstdint>
 
-#include "model/wire_conn.h"
 #include "model/xs_flit.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
@@ -183,7 +182,7 @@ public:
             d.bits  = mapReq(chi_tx_req.bits);
             return d;
         };
-        detail::wireConn(chi_tx_req_rdy, zj_rx_req_rdy);
+        chi_tx_req_rdy = zj_rx_req_rdy;
         zj_rx_rsp.assign().reads(chi_tx_rsp) = [](auto src) {
             auto [chi_tx_rsp] = src;
             Dec<chi::RespFlit> d;
@@ -191,7 +190,7 @@ public:
             d.bits  = mapRspZj(chi_tx_rsp.bits);
             return d;
         };
-        detail::wireConn(chi_tx_rsp_rdy, zj_rx_rsp_rdy);
+        chi_tx_rsp_rdy = zj_rx_rsp_rdy;
         zj_rx_dat.assign().reads(chi_tx_dat) = [](auto src) {
             auto [chi_tx_dat] = src;
             Dec<chi::DataFlit> d;
@@ -199,7 +198,7 @@ public:
             d.bits  = mapDatZj(chi_tx_dat.bits);
             return d;
         };
-        detail::wireConn(chi_tx_dat_rdy, zj_rx_dat_rdy);
+        chi_tx_dat_rdy = zj_rx_dat_rdy;
         // ZJ → L2（mapRsp/mapDat/mapSnp）+ ready 直通
         chi_rx_rsp.assign().reads(zj_tx_rsp) = [](auto src) {
             auto [zj_tx_rsp] = src;
@@ -208,7 +207,7 @@ public:
             d.bits  = mapRspXs(zj_tx_rsp.bits);
             return d;
         };
-        detail::wireConn(zj_tx_rsp_rdy, chi_rx_rsp_rdy);
+        zj_tx_rsp_rdy = chi_rx_rsp_rdy;
         chi_rx_dat.assign().reads(zj_tx_dat) = [](auto src) {
             auto [zj_tx_dat] = src;
             Dec<CHIDAT> d;
@@ -216,7 +215,7 @@ public:
             d.bits  = mapDatXs(zj_tx_dat.bits);
             return d;
         };
-        detail::wireConn(zj_tx_dat_rdy, chi_rx_dat_rdy);
+        zj_tx_dat_rdy = chi_rx_dat_rdy;
         chi_rx_snp.assign().reads(zj_tx_snp) = [](auto src) {
             auto [zj_tx_snp] = src;
             Dec<CHISNP> d;
@@ -224,7 +223,7 @@ public:
             d.bits  = mapSnp(zj_tx_snp.bits);
             return d;
         };
-        detail::wireConn(zj_tx_snp_rdy, chi_rx_snp_rdy);
+        zj_tx_snp_rdy = chi_rx_snp_rdy;
     }
 };
 

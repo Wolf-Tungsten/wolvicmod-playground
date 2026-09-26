@@ -30,7 +30,6 @@
 #include <array>
 #include <cstdint>
 
-#include "model/wire_conn.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
@@ -206,11 +205,11 @@ public:
         buildEjLan(lan1_rx_resp, lan1_rx_resp_rdy, lan1_ej_rsp_q, arb_rsp, 1);
         buildEjLan(lan0_rx_data, lan0_rx_data_rdy, lan0_ej_dat_q, arb_dat, 0);
         buildEjLan(lan1_rx_data, lan1_rx_data_rdy, lan1_ej_dat_q, arb_dat, 1);
-        detail::wireConn(hnx_rx_req, arb_req.out);
+        hnx_rx_req = arb_req.out;
         arb_req.out_rdy = hnx_rx_req_rdy;
-        detail::wireConn(hnx_rx_resp, arb_rsp.out);
+        hnx_rx_resp = arb_rsp.out;
         arb_rsp.out_rdy = hnx_rx_resp_rdy;
-        detail::wireConn(hnx_rx_data, arb_dat.out);
+        hnx_rx_data = arb_dat.out;
         arb_dat.out_rdy = hnx_rx_data_rdy;
 
         // ---- inject：hnx_tx_* → friends 分发 → q → lan_tx_* ----
@@ -249,21 +248,21 @@ public:
                     return b;
                 });
 
-        detail::wireConn(lan0_tx_resp, lan0_ij_rsp_q.deq);
+        lan0_tx_resp = lan0_ij_rsp_q.deq;
         lan0_ij_rsp_q.deq_rdy = lan0_tx_resp_rdy;
-        detail::wireConn(lan0_tx_data, lan0_ij_dat_q.deq);
+        lan0_tx_data = lan0_ij_dat_q.deq;
         lan0_ij_dat_q.deq_rdy = lan0_tx_data_rdy;
-        detail::wireConn(lan0_tx_snoop, lan0_ij_snp_q.deq);
+        lan0_tx_snoop = lan0_ij_snp_q.deq;
         lan0_ij_snp_q.deq_rdy = lan0_tx_snoop_rdy;
-        detail::wireConn(lan0_tx_erq, lan0_ij_erq_q.deq);
+        lan0_tx_erq = lan0_ij_erq_q.deq;
         lan0_ij_erq_q.deq_rdy = lan0_tx_erq_rdy;
-        detail::wireConn(lan1_tx_resp, lan1_ij_rsp_q.deq);
+        lan1_tx_resp = lan1_ij_rsp_q.deq;
         lan1_ij_rsp_q.deq_rdy = lan1_tx_resp_rdy;
-        detail::wireConn(lan1_tx_data, lan1_ij_dat_q.deq);
+        lan1_tx_data = lan1_ij_dat_q.deq;
         lan1_ij_dat_q.deq_rdy = lan1_tx_data_rdy;
-        detail::wireConn(lan1_tx_snoop, lan1_ij_snp_q.deq);
+        lan1_tx_snoop = lan1_ij_snp_q.deq;
         lan1_ij_snp_q.deq_rdy = lan1_tx_snoop_rdy;
-        detail::wireConn(lan1_tx_erq, lan1_ij_erq_q.deq);
+        lan1_tx_erq = lan1_ij_erq_q.deq;
         lan1_ij_erq_q.deq_rdy = lan1_tx_erq_rdy;
     }
 
@@ -291,7 +290,7 @@ private:
     void buildEjLan(In<Dec<F>>& lanRx, Out<bool>& lanRxRdy, Queue<F, 2>& q, RRArb<F, 2>& arb,
                     uint32_t idx) {
         q.enq = lanRx;
-        detail::wireConn(lanRxRdy, q.enq_rdy);
+        lanRxRdy = q.enq_rdy;
         q.deq_rdy.assign().reads(arb.in_rdy) = [idx](auto src) {
             auto [arb_in_rdy] = src;
             return arb_in_rdy[idx];

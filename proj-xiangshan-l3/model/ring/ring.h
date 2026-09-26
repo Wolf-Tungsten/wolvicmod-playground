@@ -33,7 +33,6 @@
 #include "model/ring/channel_tap.h"
 #include "model/ring/hrq_flit.h"
 #include "model/ring_slot.h"
-#include "model/wire_conn.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
@@ -410,7 +409,6 @@ private:
                       Out<Dec<SnoopFlit>>* snpOut, In<bool>* snpOutRdy);
 };
 
-// 纯连线接线 detail::wireConn 已上移到 model/wire_conn.h（zj::detail）。
 
 inline void Ring::buildReqChan(int i, In<Dec<RReqFlit>>* rx, Out<bool>* rxRdy,
                                Out<Dec<RReqFlit>>* tx, In<bool>* txRdy,
@@ -427,13 +425,13 @@ inline void Ring::buildReqChan(int i, In<Dec<RReqFlit>>* rx, Out<bool>* rxRdy,
                 return rnDecode(rx, ci, dec);
             };
         } else {
-            detail::wireConn(injq->enq, *rx);
+            injq->enq = *rx;
         }
-        detail::wireConn(*rxRdy, injq->enq_rdy);
+        *rxRdy = injq->enq_rdy;
     }
     if (tap != nullptr && sp.ejReq) {
-        detail::wireConn(*tx, tap->eject);
-        detail::wireConn(tap->eject_rdy, *txRdy);
+        *tx = tap->eject;
+        tap->eject_rdy = *txRdy;
     }
 }
 
@@ -445,12 +443,12 @@ inline void Ring::buildRspChan(int i, In<Dec<RespFlit>>* rx, Out<bool>* rxRdy,
     Queue<RespFlit, 2>*            injq;
     buildChannel(i, lane, sp.injRsp, sp.ejRsp, tap, injq, "rsp");
     if (injq != nullptr) {
-        detail::wireConn(injq->enq, *rx);
-        detail::wireConn(*rxRdy, injq->enq_rdy);
+        injq->enq = *rx;
+        *rxRdy = injq->enq_rdy;
     }
     if (tap != nullptr && sp.ejRsp) {
-        detail::wireConn(*tx, tap->eject);
-        detail::wireConn(tap->eject_rdy, *txRdy);
+        *tx = tap->eject;
+        tap->eject_rdy = *txRdy;
     }
 }
 
@@ -462,12 +460,12 @@ inline void Ring::buildDatChan(int i, In<Dec<DataFlit>>* rx, Out<bool>* rxRdy,
     Queue<DataFlit, 2>*           injq;
     buildChannel(i, lane, sp.injDat, sp.ejDat, tap, injq, "dat");
     if (injq != nullptr) {
-        detail::wireConn(injq->enq, *rx);
-        detail::wireConn(*rxRdy, injq->enq_rdy);
+        injq->enq = *rx;
+        *rxRdy = injq->enq_rdy;
     }
     if (tap != nullptr && sp.ejDat) {
-        detail::wireConn(*tx, tap->eject);
-        detail::wireConn(tap->eject_rdy, *txRdy);
+        *tx = tap->eject;
+        tap->eject_rdy = *txRdy;
     }
 }
 
@@ -497,7 +495,7 @@ inline void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>
             };
             erqInRdy->assign().reads(arb.in_rdy) = [](auto src) { return std::get<0>(src)[0]; };
             snpInRdy->assign().reads(arb.in_rdy) = [](auto src) { return std::get<0>(src)[1]; };
-            detail::wireConn(injq->enq, arb.out);
+            injq->enq = arb.out;
             arb.out_rdy.assign().reads(injq->enq_rdy) = [](auto src) { return std::get<0>(src); };
         } else {
             // HI：仅 ERQ 直连（BaseRouter.scala:149-150）
@@ -508,7 +506,7 @@ inline void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>
                 d.bits  = HrqFlit::fromHreq(erq.bits);
                 return d;
             };
-            detail::wireConn(*erqInRdy, injq->enq_rdy);
+            *erqInRdy = injq->enq_rdy;
         }
     }
     if (tap != nullptr && sp.ejHrq) {
@@ -521,7 +519,7 @@ inline void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>
                 d.bits  = tap_eject.bits.toSnp();
                 return d;
             };
-            detail::wireConn(tap->eject_rdy, *snpOutRdy);
+            tap->eject_rdy = *snpOutRdy;
         } else {
             // S：HRQ 车道 → HReqFlit（ERQ）
             erqOut->assign().reads(tap->eject) = [](auto src) {
@@ -531,7 +529,7 @@ inline void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>
                 d.bits  = tap_eject.bits.toHreq();
                 return d;
             };
-            detail::wireConn(tap->eject_rdy, *erqOutRdy);
+            tap->eject_rdy = *erqOutRdy;
         }
     }
 }
@@ -611,14 +609,14 @@ inline Ring::Ring() {
     // 链路（Ring.scala:23-26）：rings(0).rx ← 左邻 rings(0).tx；rings(1).rx ← 右邻
     for (int i = 0; i < 10; ++i) {
         const int l = (i + 9) % 10, r = (i + 1) % 10;
-        detail::wireConn(*reqLane.rx0[i], *reqLane.tx0[l]);
-        detail::wireConn(*reqLane.rx1[i], *reqLane.tx1[r]);
-        detail::wireConn(*rspLane.rx0[i], *rspLane.tx0[l]);
-        detail::wireConn(*rspLane.rx1[i], *rspLane.tx1[r]);
-        detail::wireConn(*datLane.rx0[i], *datLane.tx0[l]);
-        detail::wireConn(*datLane.rx1[i], *datLane.tx1[r]);
-        detail::wireConn(*hrqLane.rx0[i], *hrqLane.tx0[l]);
-        detail::wireConn(*hrqLane.rx1[i], *hrqLane.tx1[r]);
+        *reqLane.rx0[i] = *reqLane.tx0[l];
+        *reqLane.rx1[i] = *reqLane.tx1[r];
+        *rspLane.rx0[i] = *rspLane.tx0[l];
+        *rspLane.rx1[i] = *rspLane.tx1[r];
+        *datLane.rx0[i] = *datLane.tx0[l];
+        *datLane.rx1[i] = *datLane.tx1[r];
+        *hrqLane.rx0[i] = *hrqLane.tx0[l];
+        *hrqLane.rx1[i] = *hrqLane.tx1[r];
     }
 }
 

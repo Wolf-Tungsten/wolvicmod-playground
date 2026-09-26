@@ -28,7 +28,6 @@
 
 #include "model/cc/cc_socket.h"
 #include "model/cc/xsc_chi_adapter.h"
-#include "model/wire_conn.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 
@@ -77,37 +76,37 @@ public:
     SUB(sock::CcSocket, socket);
 
     CcBoundary() {
-        detail::wireConn(socket.l2_rx_req, adapter.zj_rx_req);
-        detail::wireConn(socket.l2_rx_resp, adapter.zj_rx_rsp);
-        detail::wireConn(socket.l2_rx_data, adapter.zj_rx_dat);
-        detail::wireConn(adapter.zj_rx_req_rdy, socket.l2_rx_req_rdy);
-        detail::wireConn(adapter.zj_rx_rsp_rdy, socket.l2_rx_resp_rdy);
-        detail::wireConn(adapter.zj_rx_dat_rdy, socket.l2_rx_data_rdy);
-        detail::wireConn(adapter.zj_tx_rsp, socket.l2_tx_resp);
-        detail::wireConn(adapter.zj_tx_dat, socket.l2_tx_data);
-        detail::wireConn(adapter.zj_tx_snp, socket.l2_tx_snoop);
-        detail::wireConn(socket.l2_tx_resp_rdy, adapter.zj_tx_rsp_rdy);
-        detail::wireConn(socket.l2_tx_data_rdy, adapter.zj_tx_dat_rdy);
-        detail::wireConn(socket.l2_tx_snoop_rdy, adapter.zj_tx_snp_rdy);
+        socket.l2_rx_req = adapter.zj_rx_req;
+        socket.l2_rx_resp = adapter.zj_rx_rsp;
+        socket.l2_rx_data = adapter.zj_rx_dat;
+        adapter.zj_rx_req_rdy = socket.l2_rx_req_rdy;
+        adapter.zj_rx_rsp_rdy = socket.l2_rx_resp_rdy;
+        adapter.zj_rx_dat_rdy = socket.l2_rx_data_rdy;
+        adapter.zj_tx_rsp = socket.l2_tx_resp;
+        adapter.zj_tx_dat = socket.l2_tx_data;
+        adapter.zj_tx_snp = socket.l2_tx_snoop;
+        socket.l2_tx_resp_rdy = adapter.zj_tx_rsp_rdy;
+        socket.l2_tx_data_rdy = adapter.zj_tx_dat_rdy;
+        socket.l2_tx_snoop_rdy = adapter.zj_tx_snp_rdy;
         // eject REQ 死端（ZhuJiangBridge tx.req.ready := false.B）
         socket.l2_tx_req_rdy = false;
 
         adapter.chi_tx_req = chi_tx_req;
         adapter.chi_tx_rsp = chi_tx_rsp;
         adapter.chi_tx_dat = chi_tx_dat;
-        detail::wireConn(chi_tx_req_rdy, adapter.chi_tx_req_rdy);
-        detail::wireConn(chi_tx_rsp_rdy, adapter.chi_tx_rsp_rdy);
-        detail::wireConn(chi_tx_dat_rdy, adapter.chi_tx_dat_rdy);
-        detail::wireConn(chi_rx_rsp, adapter.chi_rx_rsp);
-        detail::wireConn(chi_rx_dat, adapter.chi_rx_dat);
-        detail::wireConn(chi_rx_snp, adapter.chi_rx_snp);
+        chi_tx_req_rdy = adapter.chi_tx_req_rdy;
+        chi_tx_rsp_rdy = adapter.chi_tx_rsp_rdy;
+        chi_tx_dat_rdy = adapter.chi_tx_dat_rdy;
+        chi_rx_rsp = adapter.chi_rx_rsp;
+        chi_rx_dat = adapter.chi_rx_dat;
+        chi_rx_snp = adapter.chi_rx_snp;
         adapter.chi_rx_rsp_rdy = chi_rx_rsp_rdy;
         adapter.chi_rx_dat_rdy = chi_rx_dat_rdy;
         adapter.chi_rx_snp_rdy = chi_rx_snp_rdy;
 
-        detail::wireConn(ring_rx_req, socket.ring_rx_req);
-        detail::wireConn(ring_rx_resp, socket.ring_rx_resp);
-        detail::wireConn(ring_rx_data, socket.ring_rx_data);
+        ring_rx_req = socket.ring_rx_req;
+        ring_rx_resp = socket.ring_rx_resp;
+        ring_rx_data = socket.ring_rx_data;
         socket.ring_rx_req_rdy = ring_rx_req_rdy;
         socket.ring_rx_resp_rdy = ring_rx_resp_rdy;
         socket.ring_rx_data_rdy = ring_rx_data_rdy;
@@ -115,10 +114,10 @@ public:
         socket.ring_tx_resp = ring_tx_resp;
         socket.ring_tx_data = ring_tx_data;
         socket.ring_tx_snoop = ring_tx_snoop;
-        detail::wireConn(ring_tx_req_rdy, socket.ring_tx_req_rdy);
-        detail::wireConn(ring_tx_resp_rdy, socket.ring_tx_resp_rdy);
-        detail::wireConn(ring_tx_data_rdy, socket.ring_tx_data_rdy);
-        detail::wireConn(ring_tx_snoop_rdy, socket.ring_tx_snoop_rdy);
+        ring_tx_req_rdy = socket.ring_tx_req_rdy;
+        ring_tx_resp_rdy = socket.ring_tx_resp_rdy;
+        ring_tx_data_rdy = socket.ring_tx_data_rdy;
+        ring_tx_snoop_rdy = socket.ring_tx_snoop_rdy;
 
         socket.clk = clk;
     }

@@ -23,7 +23,6 @@
 #include <cstdint>
 
 #include "model/cc/pdc.h"
-#include "model/wire_conn.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
@@ -105,10 +104,10 @@ private:
         tx.clk = clk;
         rx.clk = clk;
         tx.enq = src;
-        detail::wireConn(srcRdy, tx.enq_rdy);
-        detail::wireConn(rx.pdc, tx.pdc);
-        detail::wireConn(tx.pdc_grant, rx.pdc_grant);
-        detail::wireConn(dst, rx.deq);
+        srcRdy = tx.enq_rdy;
+        rx.pdc = tx.pdc;
+        tx.pdc_grant = rx.pdc_grant;
+        dst = rx.deq;
         rx.deq_rdy = dstRdy;
     }
 };

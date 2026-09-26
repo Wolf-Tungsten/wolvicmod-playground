@@ -18,7 +18,6 @@
 #include "model/home/hnf_stub.h"
 #include "model/home/home_shell.h"
 #include "model/ring/ring.h"
-#include "model/wire_conn.h"
 #include "model/xs_flit.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
@@ -102,48 +101,48 @@ public:
         adapter.chi_tx_req = chi_tx_req;
         adapter.chi_tx_rsp = chi_tx_rsp;
         adapter.chi_tx_dat = chi_tx_dat;
-        detail::wireConn(chi_tx_req_rdy, adapter.chi_tx_req_rdy);
-        detail::wireConn(chi_tx_rsp_rdy, adapter.chi_tx_rsp_rdy);
-        detail::wireConn(chi_tx_dat_rdy, adapter.chi_tx_dat_rdy);
-        detail::wireConn(chi_rx_rsp, adapter.chi_rx_rsp);
-        detail::wireConn(chi_rx_dat, adapter.chi_rx_dat);
-        detail::wireConn(chi_rx_snp, adapter.chi_rx_snp);
+        chi_tx_req_rdy = adapter.chi_tx_req_rdy;
+        chi_tx_rsp_rdy = adapter.chi_tx_rsp_rdy;
+        chi_tx_dat_rdy = adapter.chi_tx_dat_rdy;
+        chi_rx_rsp = adapter.chi_rx_rsp;
+        chi_rx_dat = adapter.chi_rx_dat;
+        chi_rx_snp = adapter.chi_rx_snp;
         adapter.chi_rx_rsp_rdy = chi_rx_rsp_rdy;
         adapter.chi_rx_dat_rdy = chi_rx_dat_rdy;
         adapter.chi_rx_snp_rdy = chi_rx_snp_rdy;
 
         // adapter ↔ cc_socket（L2 侧）
-        detail::wireConn(cc_socket.l2_rx_req, adapter.zj_rx_req);
-        detail::wireConn(cc_socket.l2_rx_resp, adapter.zj_rx_rsp);
-        detail::wireConn(cc_socket.l2_rx_data, adapter.zj_rx_dat);
-        detail::wireConn(adapter.zj_rx_req_rdy, cc_socket.l2_rx_req_rdy);
-        detail::wireConn(adapter.zj_rx_rsp_rdy, cc_socket.l2_rx_resp_rdy);
-        detail::wireConn(adapter.zj_rx_dat_rdy, cc_socket.l2_rx_data_rdy);
-        detail::wireConn(adapter.zj_tx_rsp, cc_socket.l2_tx_resp);
-        detail::wireConn(adapter.zj_tx_dat, cc_socket.l2_tx_data);
-        detail::wireConn(adapter.zj_tx_snp, cc_socket.l2_tx_snoop);
-        detail::wireConn(cc_socket.l2_tx_resp_rdy, adapter.zj_tx_rsp_rdy);
-        detail::wireConn(cc_socket.l2_tx_data_rdy, adapter.zj_tx_dat_rdy);
-        detail::wireConn(cc_socket.l2_tx_snoop_rdy, adapter.zj_tx_snp_rdy);
+        cc_socket.l2_rx_req = adapter.zj_rx_req;
+        cc_socket.l2_rx_resp = adapter.zj_rx_rsp;
+        cc_socket.l2_rx_data = adapter.zj_rx_dat;
+        adapter.zj_rx_req_rdy = cc_socket.l2_rx_req_rdy;
+        adapter.zj_rx_rsp_rdy = cc_socket.l2_rx_resp_rdy;
+        adapter.zj_rx_dat_rdy = cc_socket.l2_rx_data_rdy;
+        adapter.zj_tx_rsp = cc_socket.l2_tx_resp;
+        adapter.zj_tx_dat = cc_socket.l2_tx_data;
+        adapter.zj_tx_snp = cc_socket.l2_tx_snoop;
+        cc_socket.l2_tx_resp_rdy = adapter.zj_tx_rsp_rdy;
+        cc_socket.l2_tx_data_rdy = adapter.zj_tx_dat_rdy;
+        cc_socket.l2_tx_snoop_rdy = adapter.zj_tx_snp_rdy;
         // eject REQ：观察口外露 + rdy 恒 false
-        detail::wireConn(cc_tx_req, cc_socket.l2_tx_req);
+        cc_tx_req = cc_socket.l2_tx_req;
         cc_socket.l2_tx_req_rdy = false;
 
         // cc_socket ↔ ring n1(CC)
-        detail::wireConn(ring.n1_rx_req, cc_socket.ring_rx_req);
-        detail::wireConn(ring.n1_rx_resp, cc_socket.ring_rx_resp);
-        detail::wireConn(ring.n1_rx_data, cc_socket.ring_rx_data);
-        detail::wireConn(cc_socket.ring_rx_req_rdy, ring.n1_rx_req_rdy);
-        detail::wireConn(cc_socket.ring_rx_resp_rdy, ring.n1_rx_resp_rdy);
-        detail::wireConn(cc_socket.ring_rx_data_rdy, ring.n1_rx_data_rdy);
-        detail::wireConn(cc_socket.ring_tx_req, ring.n1_tx_req);
-        detail::wireConn(cc_socket.ring_tx_resp, ring.n1_tx_resp);
-        detail::wireConn(cc_socket.ring_tx_data, ring.n1_tx_data);
-        detail::wireConn(cc_socket.ring_tx_snoop, ring.n1_tx_snoop);
-        detail::wireConn(ring.n1_tx_req_rdy, cc_socket.ring_tx_req_rdy);
-        detail::wireConn(ring.n1_tx_resp_rdy, cc_socket.ring_tx_resp_rdy);
-        detail::wireConn(ring.n1_tx_data_rdy, cc_socket.ring_tx_data_rdy);
-        detail::wireConn(ring.n1_tx_snoop_rdy, cc_socket.ring_tx_snoop_rdy);
+        ring.n1_rx_req = cc_socket.ring_rx_req;
+        ring.n1_rx_resp = cc_socket.ring_rx_resp;
+        ring.n1_rx_data = cc_socket.ring_rx_data;
+        cc_socket.ring_rx_req_rdy = ring.n1_rx_req_rdy;
+        cc_socket.ring_rx_resp_rdy = ring.n1_rx_resp_rdy;
+        cc_socket.ring_rx_data_rdy = ring.n1_rx_data_rdy;
+        cc_socket.ring_tx_req = ring.n1_tx_req;
+        cc_socket.ring_tx_resp = ring.n1_tx_resp;
+        cc_socket.ring_tx_data = ring.n1_tx_data;
+        cc_socket.ring_tx_snoop = ring.n1_tx_snoop;
+        ring.n1_tx_req_rdy = cc_socket.ring_tx_req_rdy;
+        ring.n1_tx_resp_rdy = cc_socket.ring_tx_resp_rdy;
+        ring.n1_tx_data_rdy = cc_socket.ring_tx_data_rdy;
+        ring.n1_tx_snoop_rdy = cc_socket.ring_tx_snoop_rdy;
 
         // ring HF 站 ↔ HomeShell lan（经端口索引视图）
         connLan(ring.stops[0], shell0.lan[0]);
@@ -159,33 +158,33 @@ public:
         ring.n3_rx_req = n3_rx_req;
         ring.n3_rx_resp = n3_rx_resp;
         ring.n3_rx_data = n3_rx_data;
-        detail::wireConn(n3_rx_req_rdy, ring.n3_rx_req_rdy);
-        detail::wireConn(n3_rx_resp_rdy, ring.n3_rx_resp_rdy);
-        detail::wireConn(n3_rx_data_rdy, ring.n3_rx_data_rdy);
-        detail::wireConn(n3_tx_resp, ring.n3_tx_resp);
-        detail::wireConn(n3_tx_data, ring.n3_tx_data);
+        n3_rx_req_rdy = ring.n3_rx_req_rdy;
+        n3_rx_resp_rdy = ring.n3_rx_resp_rdy;
+        n3_rx_data_rdy = ring.n3_rx_data_rdy;
+        n3_tx_resp = ring.n3_tx_resp;
+        n3_tx_data = ring.n3_tx_data;
         ring.n3_tx_resp_rdy = n3_tx_resp_rdy;
         ring.n3_tx_data_rdy = n3_tx_data_rdy;
 
         ring.n4_rx_req = n4_rx_req;
         ring.n4_rx_resp = n4_rx_resp;
         ring.n4_rx_data = n4_rx_data;
-        detail::wireConn(n4_rx_req_rdy, ring.n4_rx_req_rdy);
-        detail::wireConn(n4_rx_resp_rdy, ring.n4_rx_resp_rdy);
-        detail::wireConn(n4_rx_data_rdy, ring.n4_rx_data_rdy);
-        detail::wireConn(n4_tx_req, ring.n4_tx_req);
-        detail::wireConn(n4_tx_resp, ring.n4_tx_resp);
-        detail::wireConn(n4_tx_data, ring.n4_tx_data);
+        n4_rx_req_rdy = ring.n4_rx_req_rdy;
+        n4_rx_resp_rdy = ring.n4_rx_resp_rdy;
+        n4_rx_data_rdy = ring.n4_rx_data_rdy;
+        n4_tx_req = ring.n4_tx_req;
+        n4_tx_resp = ring.n4_tx_resp;
+        n4_tx_data = ring.n4_tx_data;
         ring.n4_tx_req_rdy = n4_tx_req_rdy;
         ring.n4_tx_resp_rdy = n4_tx_resp_rdy;
         ring.n4_tx_data_rdy = n4_tx_data_rdy;
 
         ring.n6_rx_resp = n6_rx_resp;
         ring.n6_rx_data = n6_rx_data;
-        detail::wireConn(n6_rx_resp_rdy, ring.n6_rx_resp_rdy);
-        detail::wireConn(n6_rx_data_rdy, ring.n6_rx_data_rdy);
-        detail::wireConn(n6_tx_req, ring.n6_tx_req);
-        detail::wireConn(n6_tx_data, ring.n6_tx_data);
+        n6_rx_resp_rdy = ring.n6_rx_resp_rdy;
+        n6_rx_data_rdy = ring.n6_rx_data_rdy;
+        n6_tx_req = ring.n6_tx_req;
+        n6_tx_data = ring.n6_tx_data;
         ring.n6_tx_req_rdy = n6_tx_req_rdy;
         ring.n6_tx_data_rdy = n6_tx_data_rdy;
 
@@ -205,39 +204,39 @@ private:
     // kStopTable 保证非空）
     static void connLan(ring::StopIO& r, home::LanIO& l) {
         // eject（ring → shell）：ring nX_tx_* → shell lan_rx_*
-        detail::wireConn(*l.rx_req, *r.tx_req);
-        detail::wireConn(*l.rx_resp, *r.tx_resp);
-        detail::wireConn(*l.rx_data, *r.tx_data);
-        detail::wireConn(*r.tx_req_rdy, *l.rx_req_rdy);
-        detail::wireConn(*r.tx_resp_rdy, *l.rx_resp_rdy);
-        detail::wireConn(*r.tx_data_rdy, *l.rx_data_rdy);
+        *l.rx_req = *r.tx_req;
+        *l.rx_resp = *r.tx_resp;
+        *l.rx_data = *r.tx_data;
+        *r.tx_req_rdy = *l.rx_req_rdy;
+        *r.tx_resp_rdy = *l.rx_resp_rdy;
+        *r.tx_data_rdy = *l.rx_data_rdy;
         // inject（shell → ring）：shell lan_tx_* → ring nX_rx_*
-        detail::wireConn(*r.rx_resp, *l.tx_resp);
-        detail::wireConn(*r.rx_data, *l.tx_data);
-        detail::wireConn(*r.rx_snoop, *l.tx_snoop);
-        detail::wireConn(*r.rx_erq, *l.tx_erq);
-        detail::wireConn(*l.tx_resp_rdy, *r.rx_resp_rdy);
-        detail::wireConn(*l.tx_data_rdy, *r.rx_data_rdy);
-        detail::wireConn(*l.tx_snoop_rdy, *r.rx_snoop_rdy);
-        detail::wireConn(*l.tx_erq_rdy, *r.rx_erq_rdy);
+        *r.rx_resp = *l.tx_resp;
+        *r.rx_data = *l.tx_data;
+        *r.rx_snoop = *l.tx_snoop;
+        *r.rx_erq = *l.tx_erq;
+        *l.tx_resp_rdy = *r.rx_resp_rdy;
+        *l.tx_data_rdy = *r.rx_data_rdy;
+        *l.tx_snoop_rdy = *r.rx_snoop_rdy;
+        *l.tx_erq_rdy = *r.rx_erq_rdy;
     }
 
     template <class ShellT>
     void connHnx(ShellT& shell, home::HnfStub& hnf) {
-        detail::wireConn(hnf.hnx_rx_req, shell.hnx_rx_req);
-        detail::wireConn(hnf.hnx_rx_resp, shell.hnx_rx_resp);
-        detail::wireConn(hnf.hnx_rx_data, shell.hnx_rx_data);
-        detail::wireConn(shell.hnx_rx_req_rdy, hnf.hnx_rx_req_rdy);
-        detail::wireConn(shell.hnx_rx_resp_rdy, hnf.hnx_rx_resp_rdy);
-        detail::wireConn(shell.hnx_rx_data_rdy, hnf.hnx_rx_data_rdy);
-        detail::wireConn(shell.hnx_tx_resp, hnf.hnx_tx_resp);
-        detail::wireConn(shell.hnx_tx_data, hnf.hnx_tx_data);
-        detail::wireConn(shell.hnx_tx_snoop, hnf.hnx_tx_snoop);
-        detail::wireConn(shell.hnx_tx_erq, hnf.hnx_tx_erq);
-        detail::wireConn(hnf.hnx_tx_resp_rdy, shell.hnx_tx_resp_rdy);
-        detail::wireConn(hnf.hnx_tx_data_rdy, shell.hnx_tx_data_rdy);
-        detail::wireConn(hnf.hnx_tx_snoop_rdy, shell.hnx_tx_snoop_rdy);
-        detail::wireConn(hnf.hnx_tx_erq_rdy, shell.hnx_tx_erq_rdy);
+        hnf.hnx_rx_req = shell.hnx_rx_req;
+        hnf.hnx_rx_resp = shell.hnx_rx_resp;
+        hnf.hnx_rx_data = shell.hnx_rx_data;
+        shell.hnx_rx_req_rdy = hnf.hnx_rx_req_rdy;
+        shell.hnx_rx_resp_rdy = hnf.hnx_rx_resp_rdy;
+        shell.hnx_rx_data_rdy = hnf.hnx_rx_data_rdy;
+        shell.hnx_tx_resp = hnf.hnx_tx_resp;
+        shell.hnx_tx_data = hnf.hnx_tx_data;
+        shell.hnx_tx_snoop = hnf.hnx_tx_snoop;
+        shell.hnx_tx_erq = hnf.hnx_tx_erq;
+        hnf.hnx_tx_resp_rdy = shell.hnx_tx_resp_rdy;
+        hnf.hnx_tx_data_rdy = shell.hnx_tx_data_rdy;
+        hnf.hnx_tx_snoop_rdy = shell.hnx_tx_snoop_rdy;
+        hnf.hnx_tx_erq_rdy = shell.hnx_tx_erq_rdy;
     }
 };
 

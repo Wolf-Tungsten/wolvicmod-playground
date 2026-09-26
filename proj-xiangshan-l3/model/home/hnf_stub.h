@@ -12,7 +12,6 @@
 #include <array>
 #include <cstdint>
 
-#include "model/wire_conn.h"
 #include "model/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"

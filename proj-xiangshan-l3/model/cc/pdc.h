@@ -18,7 +18,6 @@
 
 #include <cstdint>
 
-#include "model/wire_conn.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/dec.h"
@@ -124,7 +123,7 @@ public:
             return d;
         };
         // rxq.enq_rdy 悬空（RTL 中仅接 assert(rxq.io.enq.ready)）
-        detail::wireConn(deq, rxq.deq);
+        deq = rxq.deq;
         rxq.deq_rdy = deq_rdy;
         pdc_grant.assign().reads(st) = [](auto src) {
             auto [st] = src;
