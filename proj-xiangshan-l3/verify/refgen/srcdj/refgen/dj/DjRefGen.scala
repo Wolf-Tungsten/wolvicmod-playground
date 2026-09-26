@@ -30,7 +30,8 @@ object DjRefGen extends App {
   def emitIf(name: String)(gen: => RawModule): Unit =
     if (filter.forall(name.contains)) emit(gen)
 
-  private val all: Seq[(String, () => RawModule)] = refs.DirectoryRef.configs
+  private val all: Seq[(String, () => RawModule)] =
+    refs.DirectoryRef.configs ++ refs.DataBlockRef.configs
   for ((name, gen) <- all) emitIf(name)(gen())
   println(s"[refgen-dj] done -> $outDir")
 }

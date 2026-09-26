@@ -131,9 +131,94 @@ DJParam{ addressBits=48, llcSizeInB=16MB(32M/2), sfSizeInB=2MB(2M*2*1/2),
 - 响应间隔 ≥2 拍；wResp 每拍 ≤1。
 - unlock 的 hnIdx 必须指向已锁项（PopCount==1 断言），且 way < lockWays。
 
-## 4. 待办提炼（后续子步骤开工前补）
+## 4. 5.2 DataBlock 语义（data/{DataBlock,BeatStorage,DataBuffer,DBIDCtrl,DataCM}.scala）
 
-- 5.2 DataBlock：BeatStorage/DataBuffer/DBIDCtrl/DataCM（八态 FSM）
+### 4.1 组装（DataBlock.scala）
+
+- `beatStorage` = nrDSBank(4) × nrBeat(2) 个 BeatStorage（每实例一条 HomeDatRam：
+  SpSram 256bit × 65536 组，setup=2+lat=2+outputReg ⇒ **5 拍出数**）。
+- `DataCM`（64 entry 控制 FSM）+ `DBIDCtrl`（dbid 分配池）+ `DataBuffer`（写数据缓冲）。
+- 端口：txDat(Decoupled DataFlit 出)、rxDat(入)、updHnTxnID、reqDB(HnTxnID+dataVec 入)、
+  task(Valid DataTask 入)、resp(Valid HnTxnID 出)、cleanDB(HnTxnID+dataVec 入)。
+- txDat 二选一：`dbToCHI`(buf.toCHI.valid) 优先，`dsToCHI`(dsResp.valid & toCHI) 次之；
+  bits 取 `dataCM.getChiDat.bits`（entry 寄存的 DataFlit），DataID/Data/BE 按源替换
+  （dsResp 侧 BE=全 1）。`rxDat.ready = buf.fromCHI.ready = !dsResp.valid`。
+- DS 读写口按 (bank, beatNum) 交叉分发；dsResp 经两级 fastArb（先 8 合 1 后 Pipe）入 buf。
+
+### 4.2 BeatStorage（5 拍流水）
+
+- shift{read,write} 5bit；`reqReady = !req(4)`（请求隔 2 拍，对齐 SRAM interval=2）；
+  `write.ready = rstDone & reqReady`，`read.ready = … & !write.valid`（写优先）。
+- 无 shouldReset（数据阵列不复位）→ rstDoneReg 第 1 拍即锁存。
+- resp：shift.outResp（d0+5）+ respPipe(5) 携带 {dcid, dbid, beatNum, toCHI}。
+
+### 4.3 DBIDPool / DBIDCtrl
+
+- Pool = 2 × FastQueue(64)（dbid 7bit，偶/奇分queue）；上电 64 拍逐拍预充
+  （q0←Cat(0,i)、q1←Cat(1,i)），rstDone 后 deq.valid 放行。
+- enq（release 回池）：1 个 → 短queue（count<=）；2 个 → 一边一个。
+- deq（alloc）：hasTwo = 两 queue 均非空 ⇒ `req.ready`；req.bits(i)=1 才弹对应输出；
+  只弹 1 个时从**长**queue取（count>=），2 个时一边一个。resp(i) 组合直连。
+
+### 4.4 DataBuffer（datBuf：DpSram 8bit × 128 组(dbid) × 32 字节lane，1 拍读）
+
+- `maskRegVec[dbid]` = 已收字节掩码：clean→0；dsResp.fire→全 1；
+  fromCHI.fire→（CompData/SnpRespData(/Fwded)→全 1，其余(NCBWr 系)→ m|BE）。
+- `replRegVec[dbid]`：readToDS.fire & repl 置位，clean 清除。
+- 写口（valid+1 拍提交）：dsResp 优先（fromCHI.ready=!dsResp.valid）；
+  mask = dsWriReg ? (replReg ? 全1 : ~mask) : (CompData/SnpResp 系 ? ~mask : BE)。
+- 读口：rreq = RegNext(readToCHI.fire | readToDS.fire)（DS 优先选 dbid），
+  rresp 再 +1 拍 ⇒ 读数据 fire+2 拍与 toCHIQ/toDSQ enq 对齐（2bit 移位 rToXSftReg(0)）。
+- readToCHI.ready = hasFreetoCHI & !readToDS.valid（DS 优先）；hasFree =
+  对应 Q(depth2).freeNum > 在途读数。
+- toCHIQ enq：Data=rresp、BE=maskRegVec(dbid)、DataID=Cat(beatNum,0)；
+  toDSQ enq：beat=rresp + {dcid, ds, beatNum} 寄存两拍链。
+
+### 4.5 DataCtrlEntry FSM（8 态，entry 数 = 64 = nrDataCM）
+
+状态：FREE→(alloc.fire)→ALLOC→(taskHit→REPL/READ/SEND/SAVE 按 dataOp 优先级 repl>read>send>save；
+cleanHit→CLEAN)；REPL→(readAll&saveAll)→sendAll?RESP:SEND；READ→readAll→(send→SEND / save→SAVE / RESP)；
+SEND→sendAll→(save→SAVE / RESP)；SAVE→saveAll→RESP；RESP→(resp.fire)→ALLOC；
+CLEAN→(release.fire)→isZero?FREE:ALLOC。
+- **entry 生命周期**：一次 alloc 可服务同 hnTxnID 的多个 task（RESP→ALLOC 循环），
+  dbid 由 clean 分段释放（release.dataVec = reg.dataVec & task.dataVec）。
+- 三通道计数（以 read 为例，send/save 同构）：sReadVec=待发 beat 位图、wReadVec=待回写完成位图；
+  taskHit 且 dataOp 对应位置位 → 两图同装 task.dataVec；发射(sFire)清 s 位、完成(wFire:
+  dsWriDB/txDatFire/dbWriDS 按 dcid+beatNum 匹配)清 w 位；isXAll = w 图全空。
+- readToDB.valid = isRepl|isRead（REPL 须 sReadVec 与 sSaveVec 非空且同步）；
+  readToDS.valid = isRepl|isSave；readToCHI.valid = isSend。
+- critical：alloc/taskHit 清；发射时 PopCount(剩) > 1 保持。
+- updHnTxnID：匹配即改 task.hnTxnID；task/clean/upd 均按 hnTxnID 全等匹配。
+
+### 4.6 DataCM 仲裁
+
+- reqDBIn.ready = reqDBOut.ready & hasFreeDC；alloc 到 freeDCID（首个 FREE entry），
+  dbidVec 同拍取自 DBIDCtrl.resp。**task 延迟 1 拍**（taskReg/taskFireReg）广播全 entry。
+- 读仲裁：repl 优先——某 entry isRepl 时其 readToDB/readToDS **捆绑同发**
+  （out.valid 互接对方 ready，两边同 ready 才 fire）；多个 repl 取 critical 优先再按 dcid 序。
+  非 repl 走 connectReadToX：critical（valid&critical）唯一者优先，否则 fastQosRRArb
+  （QoS==0xf 高优先层 + VipArbiter RR；resp/release 用 fastRRArb.validOut（RR，valid-only））。
+- getDBID：TxnID 匹配唯一 entry → dbidVec(entry)(DataID==2?1:0)。
+- 工具件语义（FastArb.scala）：fastArb=chisel 固定优先 Arbiter；fastRRArb=VipArbiter；
+  fastQosRRArb=qos 0xf 高优层套 VipArbiter。均有 prefab（wolvicmod VipArb / proj FastQueue 已验证）。
+
+### 4.7 对拍要点（harness 激励合法性）
+
+- task 须在 alloc 之后（≥1 拍，entry 仍 ALLOC）且 hnTxnID 匹配唯一 entry；
+  resp(Valid) 无反压；clean 仅在 ALLOC 态（resp 后/未 task 前）；updHnTxnID 同。
+- rxDat 的 TxnID+DataID 必须命中在途 entry 且对应 beat 未收（getDBID PopCount==1）；
+  无协议联锁保证 readToDS 晚于数据到达——激励应尽快送 rxDat 以覆盖真实 merge。
+- 释放闭环：resp 后须在有限拍内 clean（否则 dbid/entry 泄漏，超时断言 80000 拍）。
+- 预充窗口：DBIDPool 64 拍内 reqDB.rdy=0（对齐比对）；BeatStorage 无横扫。
+- dataVec 非零；repl 通道 readToDB/readToDS 捆绑同拍 fire。
+- **同拍同类动作只发一路**（task/upd/clean 都是单拍 Valid 脉冲）：harness 曾因同拍
+  两个 clean 互相覆盖导致 entry 永远等不到 clean → 僵尸 entry → 同 hnTxnID 双 entry
+  （RTL dbgVec 断言域），排障路径：entry dump 实证双 entry 后再回溯调度器。
+  getDBID 在多匹配时按 PriorityEncoder 取**首个** dcid（模型初版取末位，违例域
+  才暴露，顺手修为忠实）。
+
+## 5. 待办提炼（后续子步骤开工前补）
+
 - 5.3 Backend：Commit、Read/Write/Snoop/Replace/Dataless CM、Decode Pipe、仲裁网络
 - 5.4 Frontend：FastQueue→ToChiTask→TaskBuffer→Block s0/s1→PoS
 - 5.5 ChiXbar：组合分发 + cBusy
