@@ -89,31 +89,34 @@ constexpr uint32_t ccResp(uint32_t v) { return (v >> 4) & 7; }
 constexpr uint32_t ccFwdResp(uint32_t v) { return (v >> 1) & 7; }
 constexpr uint32_t ccFullSize(uint32_t v) { return v & 1; }
 
-// ---------------- 内容寻址译码（PriorityEncoder；无匹配 → 0） ----------------
+// ---------------- 内容寻址译码 ----------------
+// 低位索引优先匹配；无匹配返回末位索引——Chisel decode() 用 PriorityMux 实现，
+// 其语义为"所有选择子为假时取最后一个值"（已由 SecDecProbe 对真实 RTL 实证：
+// 行 [0x10,0..] 下 si=0x13 等无匹配输入 → 6 = l_si-1，而非 0）。
 
 // decode("chi")：ChiInst 全等匹配（断言唯一）
 inline uint32_t decChi(uint32_t inst) {
     for (uint32_t i = 0; i < kLci; ++i)
         if (kChi[i] == inst) return i;
-    return 0;
+    return kLci - 1;
 }
 // decode("state")：在 ci 行内 StateInst 全等匹配
 inline uint32_t decState(uint32_t ci, uint32_t inst) {
     for (uint32_t j = 0; j < kLsi; ++j)
         if (kSi[ci][j] == inst) return j;
-    return 0;
+    return kLsi - 1;
 }
 // decode("task")：在 (ci, si) 行内 TaskInst 全等匹配
 inline uint32_t decTask(uint32_t ci, uint32_t si, uint32_t inst) {
     for (uint32_t k = 0; k < kLti; ++k)
         if (kTi[ci][si][k] == inst) return k;
-    return 0;
+    return kLti - 1;
 }
 // decode("secTask")：在 (ci, si, ti) 行内 SecTaskInst 全等匹配
 inline uint32_t decSec(uint32_t ci, uint32_t si, uint32_t ti, uint32_t inst) {
     for (uint32_t l = 0; l < kLsti; ++l)
         if (kSti[ci][si][ti][l] == inst) return l;
-    return 0;
+    return kLsti - 1;
 }
 
 // ---------------- GetDecRes：按 decList 索引查码 ----------------

@@ -360,7 +360,139 @@ WAITDATA →(dataRespHit)→ RESPCMT →(resp.fire)→ FREE（isRespCmt = state=
 - 验收：`run.sh backend` 3 seed × 15 万拍 = **1445 万比对零失配**。Backend 不设
   独立单测，行为验证全部走该对拍。
 
-## 7. 待办提炼（后续子步骤开工前补）
+## 7. 5.4 Frontend 语义（frontend/{Frontend,ToChiTask,TaskBuffer,Block,PoS,Decode}.scala）
 
-- 5.4 Frontend：FastQueue→ToChiTask→TaskBuffer→Block s0/s1→PoS
+### 7.1 组装（Frontend.scala，每 dirBank 一份）
+
+- 主链路：rxReq → FastQueue(2) → ReqToChiTask → reqTaskBuf（16 项，sort）→
+  （与 hprTaskBuf(8) 仲裁：selectReq = !hpr.chiTask_s0.valid & !hpr.lockTask；
+  **本配置 hasHPR=false，HPR 恒空转，selectReq 恒真**）→ Block s0/s1 →
+  Pipe(readDirLatency-1=3) → Decode s2/s3 → cmtTask_s3。
+- Block 同步拍发 posAlloc_s0（addr+channel）→ PosTable（返回 block_s1/hnIdx_s1/
+  sleep_s1/wakeup）；wakeup 广播回两个 TaskBuffer。
+- 出口：readDir(→Directory)、respDir(←Directory rRespVec)、reqDB_s1(Block 快回)、
+  reqDB_s3(Decode 快路)、fastData_s3、cleanDB_s3、fastResp_s1(FastQueue 出)、
+  cmtTask(→Backend，Decode 出口不再有 Pipe)、getAddrVec(←PosTable 槽地址)、
+  reqPosVec/posRespVec/updPosTag/cleanPoS(↔ReplaceCM/Backend)、alrUsePoS、working。
+- io.cleanDB.ready 有 HAssert 必须恒 1（DongJiang 顶层 fastArb 保证）。
+
+### 7.2 ReqToChiTask（纯组合）
+
+- 字段直搬：addr/qos/nodeId=SrcID/channel=REQ/opcode/txnID/order/snpAttr/snoopMe/
+  memAttr/expCompAck/size；toLAN = addr.ci==config.ci；fromLAN = flit.tgt==LAN（恒 1）。
+- dataVec(1) = size==6 | addr(5)；dataVec(0) = size==6 | !addr(5)。
+
+### 7.3 TaskEntry / TaskBuffer（TaskState one-hot：FREE/SEND/WAIT/SLEEP）
+
+- FSM：FREE→(in.fire)→SEND→(s0.fire)→WAIT→(wakeup 命中→SEND / sleep_s1→SLEEP /
+  retry_s1→SEND / 否则→FREE)；SLEEP→(wakeup)→SEND。
+- wakeup 按 useAddr 全等匹配（每个 PosEntry 的 wakeup 经 PosTable Mux1H 广播）。
+- sort（req/hpr buf 均开）：nidReg 记录"同 useAddr 在途任务数"（入队时 init），
+  同址任务 release 时全员 -1（othRel）；s0.valid = isSend & nid==0（保序：同址
+  按入队序出站）。release = RegNext(isValid) & isFree。
+- 超时：isWait & retry_s1 每拍计数，到 8 拍 lock=1；TaskBuffer 有 lock 项时
+  **锁定该项优先出站**（lockVec PriorityEncoder + hasLockReg 锁住仲裁），否则
+  fastRRArb 轮转。io.lockTask = hasLockReg。
+- 池化：Alloc 分配入队（首个 FREE 项）。
+
+### 7.4 Block（s0 寄存 1 拍为 s1；三条阻塞源）
+
+- validReg_s1/taskReg_s1 ← chiTask_s0（valid 每拍采样；bits en=valid）。
+- 阻塞：pos = posBlock_s1；dir = cacheable & !readDir.ready；
+  resp = blockByDB | (shouldResp & !fastResp.ready)，其中
+  sReceipt = isRead & (isEO|isRO)（拍 s0 的字段）、sDBID = isWrite & !isCopyBackWrite、
+  shouldResp = sReceipt | (sDBID & reqDB.ready)、blockByDB = sDBID & !reqDB.ready。
+- retry_s1 = validReg_s1 & any（回 TaskBuffer 的 WAIT→SEND 与 PosSet 的 s1 保持）。
+- task_s1 = s0 + hnIdx_s1 + alr{reqDB: reqDB_s1.fire, sData: false,
+  sDBID: fastResp_s1.fire & op==DBIDResp}（valid = validReg & !any）。
+- readDir_s1：valid = validReg & cacheable & !(pos|resp)；addr/hnIdx 同 task。
+- reqDB_s1：valid = validReg & sDBID & fastResp.ready & !(pos|dir)，dataVec=Full。
+- fastResp_s1：valid = validReg & shouldResp & !(pos|dir)；Opcode =
+  sReceipt?ReadReceipt:DBIDResp；DBID=hnTxnID；TgtID=nodeId；SrcID=getNoC；TxnID/QoS 透传。
+- 时序意义：s1 有效后若阻塞则**整个 s1 内容保持**（taskReg 只在 chiTask_s0.valid
+  时更新——上游 arbitration 每拍都会给 valid，所以等价于每拍重写；阻塞期间上游
+  selectReq/TaskBuffer 保持同一任务）。
+
+### 7.5 PosEntry / PosSet / PosTable
+
+- PosEntry 状态 {req, snp, tagVal, tag(posTagBits=38), offset(6)}：
+  alloc(addrVal/tag/offset 写入)、updTag 同字段刷新（仅允许 offset=0）、
+  clean(req/snp 各自清)、wakeup = RegNext(cleanHit & one(req^snp) & tagVal)。
+- PosSet（16 way）：alloc 两拍流水——
+  s0：matTagVec = 同 tag 且 tagVal 的 way（重入检查）；freeVec（!valid 且未被
+  s1 在途占用）；blockReq = matTag | !hasFree；matchReqS1 = s1 在途同 tag → 也阻；
+  block = (isSnp ? blockSnp : blockReq) | matchReqS1 | lockReg | reqPoS.valid。
+  allocWay = freeWay（无 BBN canNest 恒 false 路径）。
+  s1：allocReg_s1（en = !block_s0 的 valid）+ allocWayReg；**entry alloc.fire 于
+  s1 拍**（allocHit = allocReg_s1.valid & !retry_s1 & way 匹配）。
+  sleep_s1 = RegNext(alloc.valid & matTag)；block_s1 = RegNext(alloc.valid & block_s0)
+  | reqPoS.valid；hnIdx_s1.valid = RegNext(alloc.valid) & !reqPoS.valid。
+- reqPoS（ReplaceCM 要槽）：replSelWay = req→way15 / snp→way14 / 否则首个 free
+  （dropRight 2）；reqPosFire = reqPoS.valid & freeVec(selWay) & !lockReg；
+  posResp = RegNext(fire)+RegEnable(selWay)；**lockReg**：fire 置位、本 set 的
+  updTag 清除（repl 槽地址就绪前阻塞新 alloc）。
+- entry alloc.bits：reqPoS.valid 时 addrVal=0/addr=0/channel=reqPoS.channel；
+  否则 addrVal=1/addr=allocReg_s1/channel=allocReg_s1.channel。
+- PosTable：4 set 按 addr.posSet 分发；alrUsePoS = 全 valid 计数；working=任意 valid；
+  getAddrVec.result = stateVec(set)(way).addr（catPoS(bankId, tag, set, dirBank) 重组）。
+- wakeup：PosTable Mux1H（各 set 内再 Mux1H）。
+
+### 7.6 Decode（s2 = fstDec；s3 = SecDec+GetDecRes+组装）
+
+- chiInst_s2 = task_s2.chi.getChiInst（valid 由 task_s2.valid 门控）→ fstDec →
+  decList_s2（RegEnable 到 s3）。
+- stateInst_s3 = respDir.valid ? respDir.getStateInst(chi.metaIdOH) : Lit(valid=1)；
+  其 valid 字段 := validReg_s3 → secDec → decList_s3 → GetDecRes 查 taskCode/cmtCode。
+- 一致性断言（Block+4 拍目录延迟保证）：cacheable 任务 s3 时 respDir 必有效；
+  非 cacheable 必无效。
+- cmtTask_s3：dir=respDir（无效时清零）、alr{reqDB|=reqDB_s3.fire、sData=fastData_s3.fire、
+  sDBID 透传}、decList、task=taskCode、cmt=task.isValid?0:cmtCode、
+  ds.set(addr, respDir.llc.way)。
+- **快路径** respCompData = validReg & !task.isValid & cmt.sendResp & channel==DAT &
+  opcode==CompData：reqDB_s3.valid（dataVec=chi.dataVec）+ fastData_s3.valid（=
+  respCompData & reqDB.ready；txDat.Resp=cmt.resp、Opcode=CompData、dataOp.read+send）。
+- cleanUnuseDB = validReg & alr.reqDB & !isFullSize & !(sf.hit|llc.hit)：
+  cleanDB_s3 释放未用 beat（dataVec = ~chi.dataVec）。
+
+### 7.7 对拍要点（harness 激励合法性）
+
+- rxReq 只发 decode 表内 14 个合法 opcode（reqIsLegal 子集：readNoSnp/readOnce/
+  readNSD/readUnique/makeUnique/evict/cleanShared/cleanInvalid/makeInvalid/
+  writeNoSnpPtl/writeUniquePtl/writeUniqueFull/writeBackFull/writeCleanFull/
+  writeEvictOrEvict），addr 须带 cacheable=1（device=0）。
+- memAttr.device 必须 0；非全尺寸任务必须 isAllocatingRead|isDataless|isWriteFull
+  （ReqToChiTask 的 HAssert）——非 cacheable 请求只发全尺寸 WriteNoSnp 系。
+- respDir 由 Directory 侧（对拍环境）按 4 拍延迟回送（rRespVec 语义：llc+sf 两
+  half，命中时 wayOH/hit/meta 一致；非 cacheable 任务不回）。
+- posRespVec 与 updPosTag 由 ReplaceCM 侧环境按 PoS 规则产生；cleanPoS 来自
+  Backend 环境（本步对拍时由 harness 扮演 Backend+Directory 两侧环境）。
+
+### 7.8 对拍发现的四处建模陷阱（全部经生成 SV / 探针实证）
+
+1. **RegNext(x) | y ≠ RegNext(x | y)**：PoS.scala 的
+   `block_s1 = RegNext(alloc_s0.valid & block_s0) | reqPoS.valid` 与
+   `hnIdx_s1.valid = RegNext(alloc_s0.valid) & !reqPoS.valid`——reqPoS.valid 的
+   组合项在输出拍生效，不能一并寄存（模型曾把 req_pos_valid 写进寄存器读集，
+   多阻塞一拍）。
+2. **chisel PriorityMux 无匹配取末值**：Decode 的四级内容寻址译码
+   `PriorityEncoder(vec.map(_ === inst))` 由 PriorityMux 实现，无匹配时返回末位
+   索引（l-1）而非 0。SecDecProbe 实证：行 [0x10,0×6] 下 si=0x13（llc 命中 UC 的
+   ReadNoSnp-expCompAck，表外状态）→ 6。dj_decode.h 的 dec* 函数据此返回 kL-1。
+3. **TaskBuffer 仲裁器 out.ready 与 hasLockReg 无关**：生成 SV 中
+   `.io_out_ready(io_chiTask_s0_ready)` 直连——锁定期间仲裁器照常每拍 fire 并
+   推进 vip 指针，只是输出被锁定项覆盖。模型曾用 `!has_lock_reg` 门控 out_rdy，
+   导致 vip 指针漂移（白盒对拍在 cyc38 即发现，端口失配在百拍后才浮现）。
+4. **lockIdx 无 lock 时默认 N-1**：锁定窗口内若 lockVec 已空（锁定项刚发射），
+   选中项 = PriorityMux 默认的末项（tb[15]）而非回退到 RR 仲裁输出。
+
+调试基建：FE_INTCMP=1 白盒对拍（ref 经 Verilator CELL 直读内部寄存器 vs dut
+.get()，覆盖 16 任务项/4×16 PoS 项/vip/hasLockReg/Block/Decode 控制寄存器，报首
+个发散拍）、FE_INTWATCH=lo:hi 窗口监视、FE_TRACE=N 端口轨迹；refgen 侧
+GetDecResProbe/SecDecProbe 探针裁决译码语义争议。
+
+对拍结果：`run.sh frontend` 3 seed × 15 万拍 = **766 万比对零失配**；
+dj_decode.h 无匹配语义修正后 `run.sh backend` 回归仍零失配。
+
+## 8. 待办提炼（后续子步骤开工前补）
+
 - 5.5 ChiXbar：组合分发 + cBusy
