@@ -141,6 +141,9 @@ public:
     // lan 端口索引视图（构造期填充，见 ctor 开头）
     std::array<LanIO, 2> lan;
 
+    HomeShell();
+
+private:
     using ReqQ  = Queue<RReqFlit, 2>;
     using RspQ  = Queue<RespFlit, 2>;
     using DatQ  = Queue<DataFlit, 2>;
@@ -170,101 +173,6 @@ public:
     MOD(RspArb, arb_rsp);
     MOD(DatArb, arb_dat);
 
-    HomeShell() {
-        // lan 端口索引视图（实体归本模块持有；供 ZjL3 按 lanIdx 接线）
-        lan[0].rx_req = &lan0_rx_req;      lan[0].rx_req_rdy = &lan0_rx_req_rdy;
-        lan[0].rx_resp = &lan0_rx_resp;    lan[0].rx_resp_rdy = &lan0_rx_resp_rdy;
-        lan[0].rx_data = &lan0_rx_data;    lan[0].rx_data_rdy = &lan0_rx_data_rdy;
-        lan[0].tx_resp = &lan0_tx_resp;    lan[0].tx_resp_rdy = &lan0_tx_resp_rdy;
-        lan[0].tx_data = &lan0_tx_data;    lan[0].tx_data_rdy = &lan0_tx_data_rdy;
-        lan[0].tx_snoop = &lan0_tx_snoop;  lan[0].tx_snoop_rdy = &lan0_tx_snoop_rdy;
-        lan[0].tx_erq = &lan0_tx_erq;      lan[0].tx_erq_rdy = &lan0_tx_erq_rdy;
-        lan[1].rx_req = &lan1_rx_req;      lan[1].rx_req_rdy = &lan1_rx_req_rdy;
-        lan[1].rx_resp = &lan1_rx_resp;    lan[1].rx_resp_rdy = &lan1_rx_resp_rdy;
-        lan[1].rx_data = &lan1_rx_data;    lan[1].rx_data_rdy = &lan1_rx_data_rdy;
-        lan[1].tx_resp = &lan1_tx_resp;    lan[1].tx_resp_rdy = &lan1_tx_resp_rdy;
-        lan[1].tx_data = &lan1_tx_data;    lan[1].tx_data_rdy = &lan1_tx_data_rdy;
-        lan[1].tx_snoop = &lan1_tx_snoop;  lan[1].tx_snoop_rdy = &lan1_tx_snoop_rdy;
-        lan[1].tx_erq = &lan1_tx_erq;      lan[1].tx_erq_rdy = &lan1_tx_erq_rdy;
-
-        lan0_ej_req_q.clk = clk; lan0_ej_rsp_q.clk = clk; lan0_ej_dat_q.clk = clk;
-        lan1_ej_req_q.clk = clk; lan1_ej_rsp_q.clk = clk; lan1_ej_dat_q.clk = clk;
-        lan0_ij_rsp_q.clk = clk; lan0_ij_dat_q.clk = clk;
-        lan0_ij_snp_q.clk = clk; lan0_ij_erq_q.clk = clk;
-        lan1_ij_rsp_q.clk = clk; lan1_ij_dat_q.clk = clk;
-        lan1_ij_snp_q.clk = clk; lan1_ij_erq_q.clk = clk;
-        arb_req.clk = clk; arb_rsp.clk = clk; arb_dat.clk = clk;
-
-        // ---- eject：lan_rx_* → q → arb → hnx_rx_* ----
-        buildEjArb(arb_req, lan0_ej_req_q, lan1_ej_req_q);
-        buildEjArb(arb_rsp, lan0_ej_rsp_q, lan1_ej_rsp_q);
-        buildEjArb(arb_dat, lan0_ej_dat_q, lan1_ej_dat_q);
-        buildEjLan(lan0_rx_req, lan0_rx_req_rdy, lan0_ej_req_q, arb_req, 0);
-        buildEjLan(lan1_rx_req, lan1_rx_req_rdy, lan1_ej_req_q, arb_req, 1);
-        buildEjLan(lan0_rx_resp, lan0_rx_resp_rdy, lan0_ej_rsp_q, arb_rsp, 0);
-        buildEjLan(lan1_rx_resp, lan1_rx_resp_rdy, lan1_ej_rsp_q, arb_rsp, 1);
-        buildEjLan(lan0_rx_data, lan0_rx_data_rdy, lan0_ej_dat_q, arb_dat, 0);
-        buildEjLan(lan1_rx_data, lan1_rx_data_rdy, lan1_ej_dat_q, arb_dat, 1);
-        hnx_rx_req = arb_req.out;
-        arb_req.out_rdy = hnx_rx_req_rdy;
-        hnx_rx_resp = arb_rsp.out;
-        arb_rsp.out_rdy = hnx_rx_resp_rdy;
-        hnx_rx_data = arb_dat.out;
-        arb_dat.out_rdy = hnx_rx_data_rdy;
-
-        // ---- inject：hnx_tx_* → friends 分发 → q → lan_tx_* ----
-        // RSP：tgt 直通，无字段改写
-        buildIj(hnx_tx_resp, hnx_tx_resp_rdy, lan0_ij_rsp_q, lan1_ij_rsp_q,
-                [](const RespFlit& b, uint8_t) { return b.tgt_id; },
-                [](RespFlit b, uint16_t tgt, uint16_t) {
-                    b.tgt_id = tgt;
-                    return b;
-                });
-        // DAT：HomeNID := srcId
-        buildIj(hnx_tx_data, hnx_tx_data_rdy, lan0_ij_dat_q, lan1_ij_dat_q,
-                [](const DataFlit& b, uint8_t) { return b.tgt_id; },
-                [](DataFlit b, uint16_t tgt, uint16_t srcId) {
-                    b.tgt_id   = tgt;
-                    b.home_nid = srcId;
-                    return b;
-                });
-        // SNP：tgt 直通，无字段改写
-        buildIj(hnx_tx_snoop, hnx_tx_snoop_rdy, lan0_ij_snp_q, lan1_ij_snp_q,
-                [](const SnoopFlit& b, uint8_t) { return b.tgt_id; },
-                [](SnoopFlit b, uint16_t tgt, uint16_t) {
-                    b.tgt_id = tgt;
-                    return b;
-                });
-        // ERQ：按 mems addrCheck 选址；ReturnNID noDmt 改写
-        buildIj(hnx_tx_erq, hnx_tx_erq_rdy, lan0_ij_erq_q, lan1_ij_erq_q,
-                [](const HReqFlit& b, uint8_t ci_v) {
-                    const bool hit = ((b.addr >> 44) & 0xF) == (ci_v & 0xF);
-                    return hit ? Cfg.mem_nid : uint16_t{0};
-                },
-                [](HReqFlit b, uint16_t tgt, uint16_t srcId) {
-                    const bool noDmt = b.return_nid == 0x7FF;  // andR
-                    b.return_nid   = noDmt ? srcId : b.return_nid;
-                    b.tgt_id       = tgt;
-                    return b;
-                });
-
-        lan0_tx_resp = lan0_ij_rsp_q.deq;
-        lan0_ij_rsp_q.deq_rdy = lan0_tx_resp_rdy;
-        lan0_tx_data = lan0_ij_dat_q.deq;
-        lan0_ij_dat_q.deq_rdy = lan0_tx_data_rdy;
-        lan0_tx_snoop = lan0_ij_snp_q.deq;
-        lan0_ij_snp_q.deq_rdy = lan0_tx_snoop_rdy;
-        lan0_tx_erq = lan0_ij_erq_q.deq;
-        lan0_ij_erq_q.deq_rdy = lan0_tx_erq_rdy;
-        lan1_tx_resp = lan1_ij_rsp_q.deq;
-        lan1_ij_rsp_q.deq_rdy = lan1_tx_resp_rdy;
-        lan1_tx_data = lan1_ij_dat_q.deq;
-        lan1_ij_dat_q.deq_rdy = lan1_tx_data_rdy;
-        lan1_tx_snoop = lan1_ij_snp_q.deq;
-        lan1_ij_snp_q.deq_rdy = lan1_tx_snoop_rdy;
-        lan1_tx_erq = lan1_ij_erq_q.deq;
-        lan1_ij_erq_q.deq_rdy = lan1_tx_erq_rdy;
-    }
 
 private:
     static bool friendsHit(uint16_t tgt, int lan) {
@@ -327,4 +235,100 @@ private:
     }
 };
 
+template <HomeShellCfg Cfg>
+HomeShell<Cfg>::HomeShell() {
+    // lan 端口索引视图（实体归本模块持有；供 ZjL3 按 lanIdx 接线）
+    lan[0].rx_req = &lan0_rx_req;      lan[0].rx_req_rdy = &lan0_rx_req_rdy;
+    lan[0].rx_resp = &lan0_rx_resp;    lan[0].rx_resp_rdy = &lan0_rx_resp_rdy;
+    lan[0].rx_data = &lan0_rx_data;    lan[0].rx_data_rdy = &lan0_rx_data_rdy;
+    lan[0].tx_resp = &lan0_tx_resp;    lan[0].tx_resp_rdy = &lan0_tx_resp_rdy;
+    lan[0].tx_data = &lan0_tx_data;    lan[0].tx_data_rdy = &lan0_tx_data_rdy;
+    lan[0].tx_snoop = &lan0_tx_snoop;  lan[0].tx_snoop_rdy = &lan0_tx_snoop_rdy;
+    lan[0].tx_erq = &lan0_tx_erq;      lan[0].tx_erq_rdy = &lan0_tx_erq_rdy;
+    lan[1].rx_req = &lan1_rx_req;      lan[1].rx_req_rdy = &lan1_rx_req_rdy;
+    lan[1].rx_resp = &lan1_rx_resp;    lan[1].rx_resp_rdy = &lan1_rx_resp_rdy;
+    lan[1].rx_data = &lan1_rx_data;    lan[1].rx_data_rdy = &lan1_rx_data_rdy;
+    lan[1].tx_resp = &lan1_tx_resp;    lan[1].tx_resp_rdy = &lan1_tx_resp_rdy;
+    lan[1].tx_data = &lan1_tx_data;    lan[1].tx_data_rdy = &lan1_tx_data_rdy;
+    lan[1].tx_snoop = &lan1_tx_snoop;  lan[1].tx_snoop_rdy = &lan1_tx_snoop_rdy;
+    lan[1].tx_erq = &lan1_tx_erq;      lan[1].tx_erq_rdy = &lan1_tx_erq_rdy;
+
+    lan0_ej_req_q.clk = clk; lan0_ej_rsp_q.clk = clk; lan0_ej_dat_q.clk = clk;
+    lan1_ej_req_q.clk = clk; lan1_ej_rsp_q.clk = clk; lan1_ej_dat_q.clk = clk;
+    lan0_ij_rsp_q.clk = clk; lan0_ij_dat_q.clk = clk;
+    lan0_ij_snp_q.clk = clk; lan0_ij_erq_q.clk = clk;
+    lan1_ij_rsp_q.clk = clk; lan1_ij_dat_q.clk = clk;
+    lan1_ij_snp_q.clk = clk; lan1_ij_erq_q.clk = clk;
+    arb_req.clk = clk; arb_rsp.clk = clk; arb_dat.clk = clk;
+
+    // ---- eject：lan_rx_* → q → arb → hnx_rx_* ----
+    buildEjArb(arb_req, lan0_ej_req_q, lan1_ej_req_q);
+    buildEjArb(arb_rsp, lan0_ej_rsp_q, lan1_ej_rsp_q);
+    buildEjArb(arb_dat, lan0_ej_dat_q, lan1_ej_dat_q);
+    buildEjLan(lan0_rx_req, lan0_rx_req_rdy, lan0_ej_req_q, arb_req, 0);
+    buildEjLan(lan1_rx_req, lan1_rx_req_rdy, lan1_ej_req_q, arb_req, 1);
+    buildEjLan(lan0_rx_resp, lan0_rx_resp_rdy, lan0_ej_rsp_q, arb_rsp, 0);
+    buildEjLan(lan1_rx_resp, lan1_rx_resp_rdy, lan1_ej_rsp_q, arb_rsp, 1);
+    buildEjLan(lan0_rx_data, lan0_rx_data_rdy, lan0_ej_dat_q, arb_dat, 0);
+    buildEjLan(lan1_rx_data, lan1_rx_data_rdy, lan1_ej_dat_q, arb_dat, 1);
+    hnx_rx_req = arb_req.out;
+    arb_req.out_rdy = hnx_rx_req_rdy;
+    hnx_rx_resp = arb_rsp.out;
+    arb_rsp.out_rdy = hnx_rx_resp_rdy;
+    hnx_rx_data = arb_dat.out;
+    arb_dat.out_rdy = hnx_rx_data_rdy;
+
+    // ---- inject：hnx_tx_* → friends 分发 → q → lan_tx_* ----
+    // RSP：tgt 直通，无字段改写
+    buildIj(hnx_tx_resp, hnx_tx_resp_rdy, lan0_ij_rsp_q, lan1_ij_rsp_q,
+            [](const RespFlit& b, uint8_t) { return b.tgt_id; },
+            [](RespFlit b, uint16_t tgt, uint16_t) {
+                b.tgt_id = tgt;
+                return b;
+            });
+    // DAT：HomeNID := srcId
+    buildIj(hnx_tx_data, hnx_tx_data_rdy, lan0_ij_dat_q, lan1_ij_dat_q,
+            [](const DataFlit& b, uint8_t) { return b.tgt_id; },
+            [](DataFlit b, uint16_t tgt, uint16_t srcId) {
+                b.tgt_id   = tgt;
+                b.home_nid = srcId;
+                return b;
+            });
+    // SNP：tgt 直通，无字段改写
+    buildIj(hnx_tx_snoop, hnx_tx_snoop_rdy, lan0_ij_snp_q, lan1_ij_snp_q,
+            [](const SnoopFlit& b, uint8_t) { return b.tgt_id; },
+            [](SnoopFlit b, uint16_t tgt, uint16_t) {
+                b.tgt_id = tgt;
+                return b;
+            });
+    // ERQ：按 mems addrCheck 选址；ReturnNID noDmt 改写
+    buildIj(hnx_tx_erq, hnx_tx_erq_rdy, lan0_ij_erq_q, lan1_ij_erq_q,
+            [](const HReqFlit& b, uint8_t ci_v) {
+                const bool hit = ((b.addr >> 44) & 0xF) == (ci_v & 0xF);
+                return hit ? Cfg.mem_nid : uint16_t{0};
+            },
+            [](HReqFlit b, uint16_t tgt, uint16_t srcId) {
+                const bool noDmt = b.return_nid == 0x7FF;  // andR
+                b.return_nid   = noDmt ? srcId : b.return_nid;
+                b.tgt_id       = tgt;
+                return b;
+            });
+
+    lan0_tx_resp = lan0_ij_rsp_q.deq;
+    lan0_ij_rsp_q.deq_rdy = lan0_tx_resp_rdy;
+    lan0_tx_data = lan0_ij_dat_q.deq;
+    lan0_ij_dat_q.deq_rdy = lan0_tx_data_rdy;
+    lan0_tx_snoop = lan0_ij_snp_q.deq;
+    lan0_ij_snp_q.deq_rdy = lan0_tx_snoop_rdy;
+    lan0_tx_erq = lan0_ij_erq_q.deq;
+    lan0_ij_erq_q.deq_rdy = lan0_tx_erq_rdy;
+    lan1_tx_resp = lan1_ij_rsp_q.deq;
+    lan1_ij_rsp_q.deq_rdy = lan1_tx_resp_rdy;
+    lan1_tx_data = lan1_ij_dat_q.deq;
+    lan1_ij_dat_q.deq_rdy = lan1_tx_data_rdy;
+    lan1_tx_snoop = lan1_ij_snp_q.deq;
+    lan1_ij_snp_q.deq_rdy = lan1_tx_snoop_rdy;
+    lan1_tx_erq = lan1_ij_erq_q.deq;
+    lan1_ij_erq_q.deq_rdy = lan1_tx_erq_rdy;
+}
 }  // namespace zj::home

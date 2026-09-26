@@ -37,6 +37,15 @@ inline constexpr uint32_t kPdcTokens = 5;  // PowerDomainCrossing.tokens
 template <class F>
 class PdcTx : public wolvicmod::Module {
 public:
+    IN(bool, clk);
+    IN(Dec<F>, enq);
+    OUT(bool, enq_rdy);
+    OUT(Dec<F>, pdc);
+    IN(bool, pdc_grant);
+
+    PdcTx();
+
+private:
     struct St {
         uint8_t tokens = kPdcTokens;  // RegInit(tokens.U(3b))
         bool    rxg    = false;       // RegNext(pdc.grant, false)
@@ -46,45 +55,9 @@ public:
         bool operator==(const St&) const = default;
     };
 
-    IN(bool, clk);
-    IN(Dec<F>, enq);
-    OUT(bool, enq_rdy);
-    OUT(Dec<F>, pdc);
-    IN(bool, pdc_grant);
-
     REG(St, st);
 
     WIRE(bool, w_enq_fire);
-
-    PdcTx() {
-        enq_rdy.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            return st.tokens != 0;  // tokens.orR
-        };
-        pdc.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            Dec<F> d;
-            d.valid = st.txv;
-            d.bits  = st.txd;
-            return d;
-        };
-        w_enq_fire.assign().reads(enq, st) = [](auto src) {
-            auto [enq, st] = src;
-            return enq.valid && st.tokens != 0;
-        };
-        st.update().on(posedge(clk)).reads(st, enq, pdc_grant, w_enq_fire) = [](auto src) {
-            auto [st, enq, pdc_grant, w_enq_fire] = src;
-            St next = st;
-            if (w_enq_fire && !st.rxg)
-                next.tokens = st.tokens - 1;  // RTL 断言 tokens 不越界
-            else if (!w_enq_fire && st.rxg)
-                next.tokens = st.tokens + 1;
-            next.txv = w_enq_fire;
-            if (w_enq_fire) next.txd = enq.bits;  // RegEnable 语义
-            next.rxg = pdc_grant;
-            return next;
-        };
-    }
 };
 
 // ---------------- PdcRx ----------------
@@ -92,6 +65,15 @@ public:
 template <class F>
 class PdcRx : public wolvicmod::Module {
 public:
+    IN(bool, clk);
+    IN(Dec<F>, pdc);
+    OUT(bool, pdc_grant);
+    OUT(Dec<F>, deq);
+    IN(bool, deq_rdy);
+
+    PdcRx();
+
+private:
     struct St {
         bool rxv = false;  // RegNext(pdc.valid, false)
         F    rxd{};        // RegEnable(pdc.bits, pdc.valid)，两态取 0
@@ -100,48 +82,74 @@ public:
         bool operator==(const St&) const = default;
     };
 
-    IN(bool, clk);
-    IN(Dec<F>, pdc);
-    OUT(bool, pdc_grant);
-    OUT(Dec<F>, deq);
-    IN(bool, deq_rdy);
-
     using RxQ = Queue<F, kPdcTokens, true>;  // Queue(gen, 5, flow=true)
     MOD(RxQ, rxq);
 
     REG(St, st);
 
     WIRE(bool, w_deq_fire);
-
-    PdcRx() {
-        rxq.clk = clk;
-        rxq.enq.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            Dec<F> d;
-            d.valid = st.rxv;
-            d.bits  = st.rxd;
-            return d;
-        };
-        // rxq.enq_rdy 悬空（RTL 中仅接 assert(rxq.io.enq.ready)）
-        deq = rxq.deq;
-        rxq.deq_rdy = deq_rdy;
-        pdc_grant.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            return st.txg;
-        };
-        w_deq_fire.assign().reads(rxq.deq, deq_rdy) = [](auto src) {
-            auto [rxq_deq, deq_rdy] = src;
-            return rxq_deq.valid && deq_rdy;
-        };
-        st.update().on(posedge(clk)).reads(st, pdc, w_deq_fire) = [](auto src) {
-            auto [st, pdc, w_deq_fire] = src;
-            St next = st;
-            next.rxv = pdc.valid;
-            if (pdc.valid) next.rxd = pdc.bits;  // RegEnable 语义
-            next.txg = w_deq_fire;
-            return next;
-        };
-    }
 };
+
+template <class F>
+PdcTx<F>::PdcTx() {
+    enq_rdy.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        return st.tokens != 0;  // tokens.orR
+    };
+    pdc.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        Dec<F> d;
+        d.valid = st.txv;
+        d.bits  = st.txd;
+        return d;
+    };
+    w_enq_fire.assign().reads(enq, st) = [](auto src) {
+        auto [enq, st] = src;
+        return enq.valid && st.tokens != 0;
+    };
+    st.update().on(posedge(clk)).reads(st, enq, pdc_grant, w_enq_fire) = [](auto src) {
+        auto [st, enq, pdc_grant, w_enq_fire] = src;
+        St next = st;
+        if (w_enq_fire && !st.rxg)
+            next.tokens = st.tokens - 1;  // RTL 断言 tokens 不越界
+        else if (!w_enq_fire && st.rxg)
+            next.tokens = st.tokens + 1;
+        next.txv = w_enq_fire;
+        if (w_enq_fire) next.txd = enq.bits;  // RegEnable 语义
+        next.rxg = pdc_grant;
+        return next;
+    };
+}
+
+template <class F>
+PdcRx<F>::PdcRx() {
+    rxq.clk = clk;
+    rxq.enq.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        Dec<F> d;
+        d.valid = st.rxv;
+        d.bits  = st.rxd;
+        return d;
+    };
+    // rxq.enq_rdy 悬空（RTL 中仅接 assert(rxq.io.enq.ready)）
+    deq = rxq.deq;
+    rxq.deq_rdy = deq_rdy;
+    pdc_grant.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        return st.txg;
+    };
+    w_deq_fire.assign().reads(rxq.deq, deq_rdy) = [](auto src) {
+        auto [rxq_deq, deq_rdy] = src;
+        return rxq_deq.valid && deq_rdy;
+    };
+    st.update().on(posedge(clk)).reads(st, pdc, w_deq_fire) = [](auto src) {
+        auto [st, pdc, w_deq_fire] = src;
+        St next = st;
+        next.rxv = pdc.valid;
+        if (pdc.valid) next.rxd = pdc.bits;  // RegEnable 语义
+        next.txg = w_deq_fire;
+        return next;
+    };
+}
 
 }  // namespace zj::sock

@@ -24,7 +24,6 @@
 
 #include "model/cc/pdc.h"
 #include "model/flit/zj_flit.h"
-#include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/dec.h"
 
@@ -68,6 +67,9 @@ public:
     IN(Dec<SnoopFlit>, ring_tx_snoop);
     OUT(bool, ring_tx_snoop_rdy);
 
+    CcSocket();
+
+private:
     // inject 通道（L2→环）：tx 在 dev 侧、rx 在 icn 侧
     MOD(PdcTx<RReqFlit>, ij_req_tx);
     MOD(PdcRx<RReqFlit>, ij_req_rx);
@@ -85,17 +87,6 @@ public:
     MOD(PdcTx<SnoopFlit>, ej_snp_tx);
     MOD(PdcRx<SnoopFlit>, ej_snp_rx);
 
-    CcSocket() {
-        buildChan(l2_rx_req, l2_rx_req_rdy, ring_rx_req, ring_rx_req_rdy, ij_req_tx, ij_req_rx);
-        buildChan(l2_rx_resp, l2_rx_resp_rdy, ring_rx_resp, ring_rx_resp_rdy, ij_rsp_tx, ij_rsp_rx);
-        buildChan(l2_rx_data, l2_rx_data_rdy, ring_rx_data, ring_rx_data_rdy, ij_dat_tx, ij_dat_rx);
-        buildChan(ring_tx_req, ring_tx_req_rdy, l2_tx_req, l2_tx_req_rdy, ej_req_tx, ej_req_rx);
-        buildChan(ring_tx_resp, ring_tx_resp_rdy, l2_tx_resp, l2_tx_resp_rdy, ej_rsp_tx, ej_rsp_rx);
-        buildChan(ring_tx_data, ring_tx_data_rdy, l2_tx_data, l2_tx_data_rdy, ej_dat_tx, ej_dat_rx);
-        buildChan(ring_tx_snoop, ring_tx_snoop_rdy, l2_tx_snoop, l2_tx_snoop_rdy, ej_snp_tx, ej_snp_rx);
-    }
-
-private:
     // 单通道（两个方向结构相同，形参序即数据流向）：
     // src(decoupled 输入) → PdcTx →（PDC 线）→ PdcRx → dst(decoupled 输出)
     template <class F>

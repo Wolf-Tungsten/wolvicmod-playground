@@ -13,6 +13,14 @@ endif()
 
 enable_testing()
 
+# 项目模型库：非模板模块的实现（构造函数体）收进 .cpp；模板模块与 flit 数据
+# 结构保持 header-only。WOLVICMOD_AUDIT 与测试套件一致编入读集对账插桩。
+file(GLOB_RECURSE ZJ_MODEL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/model/*.cpp)
+add_library(zjmodel STATIC ${ZJ_MODEL_SOURCES})
+target_include_directories(zjmodel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(zjmodel PRIVATE WOLVICMOD_AUDIT=1)
+target_link_libraries(zjmodel PUBLIC wolvicmod)
+
 # 项目侧预制菜单测：doctest 从 wolvicmod/third_party 引入；
 # 每个 test 源文件一个可执行 + 独立 ctest 条目（ctest -R <模块> 可单跑）。
 file(GLOB ZJ_PREFAB_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
@@ -26,7 +34,7 @@ foreach(src ${ZJ_PREFAB_TEST_SOURCES})
         ${CMAKE_CURRENT_SOURCE_DIR}/../wolvicmod/third_party)
     # 与 wolvicmod/tests 一致：测试套件编入读集对账插桩（运行时开关默认仍关）
     target_compile_definitions(${name} PRIVATE WOLVICMOD_AUDIT=1)
-    target_link_libraries(${name} PRIVATE wolvicmod)
+    target_link_libraries(${name} PRIVATE wolvicmod zjmodel)
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
 

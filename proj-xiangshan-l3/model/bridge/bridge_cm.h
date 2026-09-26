@@ -143,8 +143,12 @@ public:
     IN(bool, alloc_req_rdy);
     IN(bool, alloc_resp);
 
+    BridgeCm();
+
+    // ---- testbench 白盒：cosim harness 看门狗 dump ----
     REG(St, st);
 
+private:
     WIRE(bool, w_req_fire);
     WIRE(bool, w_resp_fire);
     WIRE(bool, w_aw_fire);
@@ -158,8 +162,10 @@ public:
     WIRE(bool, w_icn_dbid);
     WIRE(bool, w_icn_comp);
     WIRE(uint8_t, w_rsp_op);
+};
 
-    BridgeCm() {
+template <class Tr>
+BridgeCm<Tr>::BridgeCm() {
         rx_req_rdy.assign().reads(st) = [](auto src) {
             auto [st] = src;
             return !st.valid;
@@ -394,6 +400,5 @@ public:
                 return next;
             };
     }
-};
 
 }  // namespace zj::bridge

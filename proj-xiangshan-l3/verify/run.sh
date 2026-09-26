@@ -154,6 +154,17 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
   g++ -std=c++20 -O2 -I"$VR_ROOT/include" -c "$VR_ROOT/include/verilated.cpp" -o "$OUT/verilated.o"
   g++ -std=c++20 -O2 -I"$VR_ROOT/include" -c "$VR_ROOT/include/verilated_threads.cpp" -o "$OUT/verilated_threads.o"
 
+  # zjmodel：非模板模块实现（模板模块与数据结构为 header-only，随 harness 编译）
+  mkdir -p "$OUT/zjmodel"
+  zj_objs=()
+  while IFS= read -r src; do
+    obj="$OUT/zjmodel/$(echo "${src#$PROJ_DIR/}" | tr '/' '_').o"
+    g++ -std=c++20 -O2 -Wall -Wextra -I"$WOLVIC_DIR/include" -I"$PROJ_DIR" -c "$src" -o "$obj" \
+      || { echo "zjmodel 构建失败：$src"; exit 1; }
+    zj_objs+=("$obj")
+  done < <(find "$PROJ_DIR/model" -name '*.cpp' | sort)
+  ar rcs "$OUT/zjmodel/libzjmodel.a" "${zj_objs[@]}"
+
   echo "==> [3/4] 构建对拍 harness（${MODULES[*]}）"
   mkdir -p "$OUT/bin"
   for comp in "${MODULES[@]}"; do
@@ -187,7 +198,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       -I"$VR_ROOT/include" -I"$VR_ROOT/include/vltstd" \
       -I"$WOLVIC_DIR/include" -I"$PROJ_DIR" -I"$VERIFY_DIR/cosim" \
       "${incs[@]}" \
-      "$VERIFY_DIR/cosim/harness_$comp.cpp" "${libs[@]}" "$OUT/verilated.o" "$OUT/verilated_threads.o" \
+      "$VERIFY_DIR/cosim/harness_$comp.cpp" "${libs[@]}" "$OUT/zjmodel/libzjmodel.a" "$OUT/verilated.o" "$OUT/verilated_threads.o" \
       -o "$OUT/bin/$comp" || { echo "harness 构建失败：$comp"; exit 1; }
   done
 else
