@@ -19,12 +19,12 @@
 
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/queue.h"
 
 namespace zj::ring {
 
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::Queue;
 
 // ---------------- VipTable ----------------
@@ -81,12 +81,12 @@ class EjectBuffer : public wolvicmod::Module {
 public:
     static_assert(Size >= 3, "EjectBuffer.scala:81");
 
-    using DecT = Dec<FlitT>;
+    using ValidT = Valid<FlitT>;
 
     IN(bool, clk);
-    IN(DecT, enq);
+    IN(ValidT, enq);
     OUT(bool, enq_rdy);
-    OUT(DecT, deq);
+    OUT(ValidT, deq);
     IN(bool, deq_rdy);
 
     EjectBuffer();
@@ -203,7 +203,7 @@ EjectBuffer<FlitT, Size, IsDat>::EjectBuffer() {
 
     ipipe.enq.assign().reads(enq, w_allow_enq) = [](auto src) {
         auto [enq, w_allow_enq] = src;
-        DecT d;
+        ValidT d;
         d.valid = enq.valid && w_allow_enq;  // 注意：不被 empties 门控（源 RTL）
         d.bits  = enq.bits;
         return d;

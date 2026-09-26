@@ -25,7 +25,7 @@
 #include "model/cc/pdc.h"
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::sock {
 
@@ -36,35 +36,35 @@ public:
     IN(bool, clk);
 
     // ---- L2 侧（SocketDevSide io.icn）----
-    IN(Dec<RReqFlit>, l2_rx_req);
+    IN(Valid<RReqFlit>, l2_rx_req);
     OUT(bool, l2_rx_req_rdy);
-    IN(Dec<RespFlit>, l2_rx_resp);
+    IN(Valid<RespFlit>, l2_rx_resp);
     OUT(bool, l2_rx_resp_rdy);
-    IN(Dec<DataFlit>, l2_rx_data);
+    IN(Valid<DataFlit>, l2_rx_data);
     OUT(bool, l2_rx_data_rdy);
-    OUT(Dec<RReqFlit>, l2_tx_req);
+    OUT(Valid<RReqFlit>, l2_tx_req);
     IN(bool, l2_tx_req_rdy);
-    OUT(Dec<RespFlit>, l2_tx_resp);
+    OUT(Valid<RespFlit>, l2_tx_resp);
     IN(bool, l2_tx_resp_rdy);
-    OUT(Dec<DataFlit>, l2_tx_data);
+    OUT(Valid<DataFlit>, l2_tx_data);
     IN(bool, l2_tx_data_rdy);
-    OUT(Dec<SnoopFlit>, l2_tx_snoop);
+    OUT(Valid<SnoopFlit>, l2_tx_snoop);
     IN(bool, l2_tx_snoop_rdy);
 
     // ---- 环侧（SocketIcnSide io.dev）----
-    OUT(Dec<RReqFlit>, ring_rx_req);
+    OUT(Valid<RReqFlit>, ring_rx_req);
     IN(bool, ring_rx_req_rdy);
-    OUT(Dec<RespFlit>, ring_rx_resp);
+    OUT(Valid<RespFlit>, ring_rx_resp);
     IN(bool, ring_rx_resp_rdy);
-    OUT(Dec<DataFlit>, ring_rx_data);
+    OUT(Valid<DataFlit>, ring_rx_data);
     IN(bool, ring_rx_data_rdy);
-    IN(Dec<RReqFlit>, ring_tx_req);
+    IN(Valid<RReqFlit>, ring_tx_req);
     OUT(bool, ring_tx_req_rdy);
-    IN(Dec<RespFlit>, ring_tx_resp);
+    IN(Valid<RespFlit>, ring_tx_resp);
     OUT(bool, ring_tx_resp_rdy);
-    IN(Dec<DataFlit>, ring_tx_data);
+    IN(Valid<DataFlit>, ring_tx_data);
     OUT(bool, ring_tx_data_rdy);
-    IN(Dec<SnoopFlit>, ring_tx_snoop);
+    IN(Valid<SnoopFlit>, ring_tx_snoop);
     OUT(bool, ring_tx_snoop_rdy);
 
     CcSocket();
@@ -90,7 +90,7 @@ private:
     // 单通道（两个方向结构相同，形参序即数据流向）：
     // src(decoupled 输入) → PdcTx →（PDC 线）→ PdcRx → dst(decoupled 输出)
     template <class F>
-    void buildChan(In<Dec<F>>& src, Out<bool>& srcRdy, Out<Dec<F>>& dst, In<bool>& dstRdy,
+    void buildChan(In<Valid<F>>& src, Out<bool>& srcRdy, Out<Valid<F>>& dst, In<bool>& dstRdy,
                    PdcTx<F>& tx, PdcRx<F>& rx) {
         tx.clk = clk;
         rx.clk = clk;

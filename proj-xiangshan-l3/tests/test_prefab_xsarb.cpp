@@ -17,7 +17,7 @@ using namespace prefabtest;
 
 namespace {
 
-using InArr4 = std::array<Dec<uint32_t>, 4>;
+using InArr4 = std::array<Valid<uint32_t>, 4>;
 
 TEST_CASE("zj VipArb: 连续 fire 时指针正向轮转（跳过无效路）") {
     VipArb<uint32_t, 4> top;
@@ -117,7 +117,7 @@ struct QosBits {
     bool operator==(const QosBits&) const = default;
 };
 
-using QosArr4 = std::array<Dec<QosBits>, 4>;
+using QosArr4 = std::array<Valid<QosBits>, 4>;
 
 TEST_CASE("zj QosFixedArb: qos==0xf 高优先抢占") {
     QosFixedArb<QosBits, 4> top;

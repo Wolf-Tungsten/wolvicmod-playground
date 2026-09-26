@@ -14,32 +14,32 @@
 
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::home {
 
 using namespace zj::chi;
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 class HnfStub : public wolvicmod::Module {
 public:
     IN(bool, clk);
     // hnx 侧（接 HomeShell hnx_*：rx=eject 输入、tx=inject 输出）
-    IN(Dec<RReqFlit>, hnx_rx_req);
+    IN(Valid<RReqFlit>, hnx_rx_req);
     OUT(bool, hnx_rx_req_rdy);
-    IN(Dec<RespFlit>, hnx_rx_resp);
+    IN(Valid<RespFlit>, hnx_rx_resp);
     OUT(bool, hnx_rx_resp_rdy);
-    IN(Dec<DataFlit>, hnx_rx_data);
+    IN(Valid<DataFlit>, hnx_rx_data);
     OUT(bool, hnx_rx_data_rdy);
-    OUT(Dec<RespFlit>, hnx_tx_resp);
+    OUT(Valid<RespFlit>, hnx_tx_resp);
     IN(bool, hnx_tx_resp_rdy);
-    OUT(Dec<DataFlit>, hnx_tx_data);
+    OUT(Valid<DataFlit>, hnx_tx_data);
     IN(bool, hnx_tx_data_rdy);
-    OUT(Dec<SnoopFlit>, hnx_tx_snoop);
+    OUT(Valid<SnoopFlit>, hnx_tx_snoop);
     IN(bool, hnx_tx_snoop_rdy);
-    OUT(Dec<HReqFlit>, hnx_tx_erq);
+    OUT(Valid<HReqFlit>, hnx_tx_erq);
     IN(bool, hnx_tx_erq_rdy);
 
     HnfStub();

@@ -37,14 +37,14 @@
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/queue.h"
 
 namespace zj::ring {
 
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::Queue;
 using wolvicmod::prefab::RRArb;
 using namespace zj::chi;
@@ -164,25 +164,25 @@ inline std::array<bool, 2> tapSelOf(uint16_t tgt_id, const StopSpec& sp) {
 // 实体仍由模块持有、按 n<gid>_* 命名注册）。构建循环与父模块（ZjL3）共用。
 // rx_erq/tx_erq 即端口名 *_rx_req/*_tx_req 中载荷为 HReqFlit（ERQ）的那些。
 struct StopIO {
-    In<Dec<RReqFlit>>*   rx_req       = nullptr;
+    In<Valid<RReqFlit>>*   rx_req       = nullptr;
     Out<bool>*           rx_req_rdy   = nullptr;
-    Out<Dec<RReqFlit>>*  tx_req       = nullptr;
+    Out<Valid<RReqFlit>>*  tx_req       = nullptr;
     In<bool>*            tx_req_rdy   = nullptr;
-    In<Dec<HReqFlit>>*   rx_erq       = nullptr;
+    In<Valid<HReqFlit>>*   rx_erq       = nullptr;
     Out<bool>*           rx_erq_rdy   = nullptr;
-    Out<Dec<HReqFlit>>*  tx_erq       = nullptr;
+    Out<Valid<HReqFlit>>*  tx_erq       = nullptr;
     In<bool>*            tx_erq_rdy   = nullptr;
-    In<Dec<RespFlit>>*   rx_resp      = nullptr;
+    In<Valid<RespFlit>>*   rx_resp      = nullptr;
     Out<bool>*           rx_resp_rdy  = nullptr;
-    Out<Dec<RespFlit>>*  tx_resp      = nullptr;
+    Out<Valid<RespFlit>>*  tx_resp      = nullptr;
     In<bool>*            tx_resp_rdy  = nullptr;
-    In<Dec<DataFlit>>*   rx_data      = nullptr;
+    In<Valid<DataFlit>>*   rx_data      = nullptr;
     Out<bool>*           rx_data_rdy  = nullptr;
-    Out<Dec<DataFlit>>*  tx_data      = nullptr;
+    Out<Valid<DataFlit>>*  tx_data      = nullptr;
     In<bool>*            tx_data_rdy  = nullptr;
-    In<Dec<SnoopFlit>>*  rx_snoop     = nullptr;
+    In<Valid<SnoopFlit>>*  rx_snoop     = nullptr;
     Out<bool>*           rx_snoop_rdy = nullptr;
-    Out<Dec<SnoopFlit>>* tx_snoop     = nullptr;
+    Out<Valid<SnoopFlit>>* tx_snoop     = nullptr;
     In<bool>*            tx_snoop_rdy = nullptr;
 };
 
@@ -195,116 +195,116 @@ public:
 
     // ---- 边界端口（RTL ZRING 的 icn 端口；命名 <节点>_<rx|tx>_<通道>）----
     // n0/n2/n5/n7 HF：rx req(ERQ,HReqFlit)/resp/data/snoop；tx req(RReqFlit)/resp/data
-    IN(Dec<HReqFlit>, n0_rx_req);
+    IN(Valid<HReqFlit>, n0_rx_req);
     OUT(bool, n0_rx_req_rdy);
-    IN(Dec<RespFlit>, n0_rx_resp);
+    IN(Valid<RespFlit>, n0_rx_resp);
     OUT(bool, n0_rx_resp_rdy);
-    IN(Dec<DataFlit>, n0_rx_data);
+    IN(Valid<DataFlit>, n0_rx_data);
     OUT(bool, n0_rx_data_rdy);
-    IN(Dec<SnoopFlit>, n0_rx_snoop);
+    IN(Valid<SnoopFlit>, n0_rx_snoop);
     OUT(bool, n0_rx_snoop_rdy);
-    OUT(Dec<RReqFlit>, n0_tx_req);
+    OUT(Valid<RReqFlit>, n0_tx_req);
     IN(bool, n0_tx_req_rdy);
-    OUT(Dec<RespFlit>, n0_tx_resp);
+    OUT(Valid<RespFlit>, n0_tx_resp);
     IN(bool, n0_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n0_tx_data);
+    OUT(Valid<DataFlit>, n0_tx_data);
     IN(bool, n0_tx_data_rdy);
 
-    IN(Dec<HReqFlit>, n2_rx_req);
+    IN(Valid<HReqFlit>, n2_rx_req);
     OUT(bool, n2_rx_req_rdy);
-    IN(Dec<RespFlit>, n2_rx_resp);
+    IN(Valid<RespFlit>, n2_rx_resp);
     OUT(bool, n2_rx_resp_rdy);
-    IN(Dec<DataFlit>, n2_rx_data);
+    IN(Valid<DataFlit>, n2_rx_data);
     OUT(bool, n2_rx_data_rdy);
-    IN(Dec<SnoopFlit>, n2_rx_snoop);
+    IN(Valid<SnoopFlit>, n2_rx_snoop);
     OUT(bool, n2_rx_snoop_rdy);
-    OUT(Dec<RReqFlit>, n2_tx_req);
+    OUT(Valid<RReqFlit>, n2_tx_req);
     IN(bool, n2_tx_req_rdy);
-    OUT(Dec<RespFlit>, n2_tx_resp);
+    OUT(Valid<RespFlit>, n2_tx_resp);
     IN(bool, n2_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n2_tx_data);
+    OUT(Valid<DataFlit>, n2_tx_data);
     IN(bool, n2_tx_data_rdy);
 
-    IN(Dec<HReqFlit>, n5_rx_req);
+    IN(Valid<HReqFlit>, n5_rx_req);
     OUT(bool, n5_rx_req_rdy);
-    IN(Dec<RespFlit>, n5_rx_resp);
+    IN(Valid<RespFlit>, n5_rx_resp);
     OUT(bool, n5_rx_resp_rdy);
-    IN(Dec<DataFlit>, n5_rx_data);
+    IN(Valid<DataFlit>, n5_rx_data);
     OUT(bool, n5_rx_data_rdy);
-    IN(Dec<SnoopFlit>, n5_rx_snoop);
+    IN(Valid<SnoopFlit>, n5_rx_snoop);
     OUT(bool, n5_rx_snoop_rdy);
-    OUT(Dec<RReqFlit>, n5_tx_req);
+    OUT(Valid<RReqFlit>, n5_tx_req);
     IN(bool, n5_tx_req_rdy);
-    OUT(Dec<RespFlit>, n5_tx_resp);
+    OUT(Valid<RespFlit>, n5_tx_resp);
     IN(bool, n5_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n5_tx_data);
+    OUT(Valid<DataFlit>, n5_tx_data);
     IN(bool, n5_tx_data_rdy);
 
-    IN(Dec<HReqFlit>, n7_rx_req);
+    IN(Valid<HReqFlit>, n7_rx_req);
     OUT(bool, n7_rx_req_rdy);
-    IN(Dec<RespFlit>, n7_rx_resp);
+    IN(Valid<RespFlit>, n7_rx_resp);
     OUT(bool, n7_rx_resp_rdy);
-    IN(Dec<DataFlit>, n7_rx_data);
+    IN(Valid<DataFlit>, n7_rx_data);
     OUT(bool, n7_rx_data_rdy);
-    IN(Dec<SnoopFlit>, n7_rx_snoop);
+    IN(Valid<SnoopFlit>, n7_rx_snoop);
     OUT(bool, n7_rx_snoop_rdy);
-    OUT(Dec<RReqFlit>, n7_tx_req);
+    OUT(Valid<RReqFlit>, n7_tx_req);
     IN(bool, n7_tx_req_rdy);
-    OUT(Dec<RespFlit>, n7_tx_resp);
+    OUT(Valid<RespFlit>, n7_tx_resp);
     IN(bool, n7_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n7_tx_data);
+    OUT(Valid<DataFlit>, n7_tx_data);
     IN(bool, n7_tx_data_rdy);
 
     // n1 CC：rx req(RReqFlit)/resp/data；tx req/resp/data/snoop(SnoopFlit)
-    IN(Dec<RReqFlit>, n1_rx_req);
+    IN(Valid<RReqFlit>, n1_rx_req);
     OUT(bool, n1_rx_req_rdy);
-    IN(Dec<RespFlit>, n1_rx_resp);
+    IN(Valid<RespFlit>, n1_rx_resp);
     OUT(bool, n1_rx_resp_rdy);
-    IN(Dec<DataFlit>, n1_rx_data);
+    IN(Valid<DataFlit>, n1_rx_data);
     OUT(bool, n1_rx_data_rdy);
-    OUT(Dec<RReqFlit>, n1_tx_req);
+    OUT(Valid<RReqFlit>, n1_tx_req);
     IN(bool, n1_tx_req_rdy);
-    OUT(Dec<RespFlit>, n1_tx_resp);
+    OUT(Valid<RespFlit>, n1_tx_resp);
     IN(bool, n1_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n1_tx_data);
+    OUT(Valid<DataFlit>, n1_tx_data);
     IN(bool, n1_tx_data_rdy);
-    OUT(Dec<SnoopFlit>, n1_tx_snoop);
+    OUT(Valid<SnoopFlit>, n1_tx_snoop);
     IN(bool, n1_tx_snoop_rdy);
 
     // n3 RI：rx req(RReqFlit)/resp/data；tx resp/data
-    IN(Dec<RReqFlit>, n3_rx_req);
+    IN(Valid<RReqFlit>, n3_rx_req);
     OUT(bool, n3_rx_req_rdy);
-    IN(Dec<RespFlit>, n3_rx_resp);
+    IN(Valid<RespFlit>, n3_rx_resp);
     OUT(bool, n3_rx_resp_rdy);
-    IN(Dec<DataFlit>, n3_rx_data);
+    IN(Valid<DataFlit>, n3_rx_data);
     OUT(bool, n3_rx_data_rdy);
-    OUT(Dec<RespFlit>, n3_tx_resp);
+    OUT(Valid<RespFlit>, n3_tx_resp);
     IN(bool, n3_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n3_tx_data);
+    OUT(Valid<DataFlit>, n3_tx_data);
     IN(bool, n3_tx_data_rdy);
 
     // n4 HI：rx req(ERQ,HReqFlit)/resp/data；tx req(RReqFlit)/resp/data
-    IN(Dec<HReqFlit>, n4_rx_req);
+    IN(Valid<HReqFlit>, n4_rx_req);
     OUT(bool, n4_rx_req_rdy);
-    IN(Dec<RespFlit>, n4_rx_resp);
+    IN(Valid<RespFlit>, n4_rx_resp);
     OUT(bool, n4_rx_resp_rdy);
-    IN(Dec<DataFlit>, n4_rx_data);
+    IN(Valid<DataFlit>, n4_rx_data);
     OUT(bool, n4_rx_data_rdy);
-    OUT(Dec<RReqFlit>, n4_tx_req);
+    OUT(Valid<RReqFlit>, n4_tx_req);
     IN(bool, n4_tx_req_rdy);
-    OUT(Dec<RespFlit>, n4_tx_resp);
+    OUT(Valid<RespFlit>, n4_tx_resp);
     IN(bool, n4_tx_resp_rdy);
-    OUT(Dec<DataFlit>, n4_tx_data);
+    OUT(Valid<DataFlit>, n4_tx_data);
     IN(bool, n4_tx_data_rdy);
 
     // n6 S：rx resp/data；tx req(ERQ,HReqFlit)/data
-    IN(Dec<RespFlit>, n6_rx_resp);
+    IN(Valid<RespFlit>, n6_rx_resp);
     OUT(bool, n6_rx_resp_rdy);
-    IN(Dec<DataFlit>, n6_rx_data);
+    IN(Valid<DataFlit>, n6_rx_data);
     OUT(bool, n6_rx_data_rdy);
-    OUT(Dec<HReqFlit>, n6_tx_req);
+    OUT(Valid<HReqFlit>, n6_tx_req);
     IN(bool, n6_tx_req_rdy);
-    OUT(Dec<DataFlit>, n6_tx_data);
+    OUT(Valid<DataFlit>, n6_tx_data);
     IN(bool, n6_tx_data_rdy);
 
     // 站边界端口索引视图（构造期填充，见 ctor；nullptr = 该站无此端口）
@@ -356,7 +356,7 @@ private:
             const uint16_t nidBase = uint16_t(sp.gid << 3);
             tap.inject.assign().reads(q.deq) = [nidBase](auto src) {
                 auto [q_deq] = src;
-                Dec<F> d   = q_deq;
+                Valid<F> d   = q_deq;
                 d.bits.src_id = nidBase | (q_deq.bits.src_id & 0x7);
                 return d;
             };
@@ -371,7 +371,7 @@ private:
             };
             injqOut = &q;
         } else {
-            tap.inject     = Dec<F>{};
+            tap.inject     = Valid<F>{};
             tap.tap_sel_oh = std::array<bool, 2>{};
             injqOut        = nullptr;
         }
@@ -379,19 +379,19 @@ private:
     }
 
     // RnRouter 译码（CC/RI 的 REQ 注入）：按地址改 TgtID，其余字段直通
-    static Dec<RReqFlit> rnDecode(Dec<RReqFlit> in, uint8_t ci, const RnDec& dec);
+    static Valid<RReqFlit> rnDecode(Valid<RReqFlit> in, uint8_t ci, const RnDec& dec);
 
     // 四个通道的建站 helper（端口空指针 = 该方向不存在，与 STOP_TABLE 一致）
-    void buildReqChan(int i, In<Dec<RReqFlit>>* rx, Out<bool>* rxRdy, Out<Dec<RReqFlit>>* tx,
+    void buildReqChan(int i, In<Valid<RReqFlit>>* rx, Out<bool>* rxRdy, Out<Valid<RReqFlit>>* tx,
                       In<bool>* txRdy, LaneEnds<RReqFlit>& lane);
-    void buildRspChan(int i, In<Dec<RespFlit>>* rx, Out<bool>* rxRdy, Out<Dec<RespFlit>>* tx,
+    void buildRspChan(int i, In<Valid<RespFlit>>* rx, Out<bool>* rxRdy, Out<Valid<RespFlit>>* tx,
                       In<bool>* txRdy, LaneEnds<RespFlit>& lane);
-    void buildDatChan(int i, In<Dec<DataFlit>>* rx, Out<bool>* rxRdy, Out<Dec<DataFlit>>* tx,
+    void buildDatChan(int i, In<Valid<DataFlit>>* rx, Out<bool>* rxRdy, Out<Valid<DataFlit>>* tx,
                       In<bool>* txRdy, LaneEnds<DataFlit>& lane);
-    void buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>* erqIn,
-                      Out<bool>* erqInRdy, In<Dec<SnoopFlit>>* snpIn, Out<bool>* snpInRdy,
-                      Out<Dec<HReqFlit>>* erqOut, In<bool>* erqOutRdy,
-                      Out<Dec<SnoopFlit>>* snpOut, In<bool>* snpOutRdy);
+    void buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Valid<HReqFlit>>* erqIn,
+                      Out<bool>* erqInRdy, In<Valid<SnoopFlit>>* snpIn, Out<bool>* snpInRdy,
+                      Out<Valid<HReqFlit>>* erqOut, In<bool>* erqOutRdy,
+                      Out<Valid<SnoopFlit>>* snpOut, In<bool>* snpOutRdy);
 };
 
 

@@ -4,7 +4,7 @@
 
 namespace zj::ring {
 
-Dec<RReqFlit> Ring::rnDecode(Dec<RReqFlit> in, uint8_t ci, const RnDec& dec) {
+Valid<RReqFlit> Ring::rnDecode(Valid<RReqFlit> in, uint8_t ci, const RnDec& dec) {
     const bool     device = (in.bits.mem_attr >> 1) & 1;  // MemAttr.device
     const uint64_t a      = in.bits.addr;
     uint8_t        tgtGid = dec.defaultHniGid;
@@ -21,8 +21,8 @@ Dec<RReqFlit> Ring::rnDecode(Dec<RReqFlit> in, uint8_t ci, const RnDec& dec) {
     return in;
 }
 
-void Ring::buildReqChan(int i, In<Dec<RReqFlit>>* rx, Out<bool>* rxRdy,
-                        Out<Dec<RReqFlit>>* tx, In<bool>* txRdy,
+void Ring::buildReqChan(int i, In<Valid<RReqFlit>>* rx, Out<bool>* rxRdy,
+                        Out<Valid<RReqFlit>>* tx, In<bool>* txRdy,
                         LaneEnds<RReqFlit>& lane) {
     const StopSpec&                 sp = kStopTable[i];
     ChannelTap<RReqFlit, 5, false>* tap;
@@ -46,8 +46,8 @@ void Ring::buildReqChan(int i, In<Dec<RReqFlit>>* rx, Out<bool>* rxRdy,
     }
 }
 
-void Ring::buildRspChan(int i, In<Dec<RespFlit>>* rx, Out<bool>* rxRdy,
-                        Out<Dec<RespFlit>>* tx, In<bool>* txRdy,
+void Ring::buildRspChan(int i, In<Valid<RespFlit>>* rx, Out<bool>* rxRdy,
+                        Out<Valid<RespFlit>>* tx, In<bool>* txRdy,
                         LaneEnds<RespFlit>& lane) {
     const StopSpec&                sp = kStopTable[i];
     ChannelTap<RespFlit, 3, false>* tap;
@@ -63,8 +63,8 @@ void Ring::buildRspChan(int i, In<Dec<RespFlit>>* rx, Out<bool>* rxRdy,
     }
 }
 
-void Ring::buildDatChan(int i, In<Dec<DataFlit>>* rx, Out<bool>* rxRdy,
-                        Out<Dec<DataFlit>>* tx, In<bool>* txRdy,
+void Ring::buildDatChan(int i, In<Valid<DataFlit>>* rx, Out<bool>* rxRdy,
+                        Out<Valid<DataFlit>>* tx, In<bool>* txRdy,
                         LaneEnds<DataFlit>& lane) {
     const StopSpec&               sp = kStopTable[i];
     ChannelTap<DataFlit, 3, true>* tap;
@@ -80,10 +80,10 @@ void Ring::buildDatChan(int i, In<Dec<DataFlit>>* rx, Out<bool>* rxRdy,
     }
 }
 
-void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>* erqIn,
-                        Out<bool>* erqInRdy, In<Dec<SnoopFlit>>* snpIn,
-                        Out<bool>* snpInRdy, Out<Dec<HReqFlit>>* erqOut,
-                        In<bool>* erqOutRdy, Out<Dec<SnoopFlit>>* snpOut,
+void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Valid<HReqFlit>>* erqIn,
+                        Out<bool>* erqInRdy, In<Valid<SnoopFlit>>* snpIn,
+                        Out<bool>* snpInRdy, Out<Valid<HReqFlit>>* erqOut,
+                        In<bool>* erqOutRdy, Out<Valid<SnoopFlit>>* snpOut,
                         In<bool>* snpOutRdy) {
     const StopSpec&               sp = kStopTable[i];
     const std::string             pfx = "n" + std::to_string(i) + "_";
@@ -97,7 +97,7 @@ void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>* erqIn
             arb.clk = clk;
             arb.in.assign().reads(*erqIn, *snpIn) = [](auto src) {
                 auto [erq, snp] = src;
-                std::array<Dec<HrqFlit>, 2> arr;
+                std::array<Valid<HrqFlit>, 2> arr;
                 arr[0].valid = erq.valid;
                 arr[0].bits  = HrqFlit::fromHreq(erq.bits);
                 arr[1].valid = snp.valid;
@@ -112,7 +112,7 @@ void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>* erqIn
             // HI：仅 ERQ 直连（BaseRouter.scala:149-150）
             injq->enq.assign().reads(*erqIn) = [](auto src) {
                 auto [erq] = src;
-                Dec<HrqFlit> d;
+                Valid<HrqFlit> d;
                 d.valid = erq.valid;
                 d.bits  = HrqFlit::fromHreq(erq.bits);
                 return d;
@@ -125,7 +125,7 @@ void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>* erqIn
             // CC：HRQ 车道 → SnoopFlit（RingFlit(128) 截断为 113b，字段 LSB 对齐）
             snpOut->assign().reads(tap->eject) = [](auto src) {
                 auto [tap_eject] = src;
-                Dec<SnoopFlit> d;
+                Valid<SnoopFlit> d;
                 d.valid = tap_eject.valid;
                 d.bits  = tap_eject.bits.toSnp();
                 return d;
@@ -135,7 +135,7 @@ void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Dec<HReqFlit>>* erqIn
             // S：HRQ 车道 → HReqFlit（ERQ）
             erqOut->assign().reads(tap->eject) = [](auto src) {
                 auto [tap_eject] = src;
-                Dec<HReqFlit> d;
+                Valid<HReqFlit> d;
                 d.valid = tap_eject.valid;
                 d.bits  = tap_eject.bits.toHreq();
                 return d;

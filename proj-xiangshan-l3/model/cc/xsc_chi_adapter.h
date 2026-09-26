@@ -24,13 +24,13 @@
 #include "model/flit/xs_flit.h"
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::xs {
 
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 // ---------------- 映射函数（ZhuJiangBridge.scala:152-252 逐字段转写）----------------
 
@@ -48,31 +48,31 @@ CHISNP mapSnp(const chi::SnoopFlit& s);      // mapSnp（:240-252）：SnoopFlit
 class XscChiAdapter : public wolvicmod::Module {
 public:
     // ---- L2 侧（xscache flit）----
-    IN(Dec<CHIREQ>, chi_tx_req);
+    IN(Valid<CHIREQ>, chi_tx_req);
     OUT(bool, chi_tx_req_rdy);
-    IN(Dec<CHIRSP>, chi_tx_rsp);
+    IN(Valid<CHIRSP>, chi_tx_rsp);
     OUT(bool, chi_tx_rsp_rdy);
-    IN(Dec<CHIDAT>, chi_tx_dat);
+    IN(Valid<CHIDAT>, chi_tx_dat);
     OUT(bool, chi_tx_dat_rdy);
-    OUT(Dec<CHIRSP>, chi_rx_rsp);
+    OUT(Valid<CHIRSP>, chi_rx_rsp);
     IN(bool, chi_rx_rsp_rdy);
-    OUT(Dec<CHIDAT>, chi_rx_dat);
+    OUT(Valid<CHIDAT>, chi_rx_dat);
     IN(bool, chi_rx_dat_rdy);
-    OUT(Dec<CHISNP>, chi_rx_snp);
+    OUT(Valid<CHISNP>, chi_rx_snp);
     IN(bool, chi_rx_snp_rdy);
 
     // ---- socket 侧（zhujiang flit，接 CcSocket l2_*）----
-    OUT(Dec<chi::RReqFlit>, zj_rx_req);
+    OUT(Valid<chi::RReqFlit>, zj_rx_req);
     IN(bool, zj_rx_req_rdy);
-    OUT(Dec<chi::RespFlit>, zj_rx_rsp);
+    OUT(Valid<chi::RespFlit>, zj_rx_rsp);
     IN(bool, zj_rx_rsp_rdy);
-    OUT(Dec<chi::DataFlit>, zj_rx_dat);
+    OUT(Valid<chi::DataFlit>, zj_rx_dat);
     IN(bool, zj_rx_dat_rdy);
-    IN(Dec<chi::RespFlit>, zj_tx_rsp);
+    IN(Valid<chi::RespFlit>, zj_tx_rsp);
     OUT(bool, zj_tx_rsp_rdy);
-    IN(Dec<chi::DataFlit>, zj_tx_dat);
+    IN(Valid<chi::DataFlit>, zj_tx_dat);
     OUT(bool, zj_tx_dat_rdy);
-    IN(Dec<chi::SnoopFlit>, zj_tx_snp);
+    IN(Valid<chi::SnoopFlit>, zj_tx_snp);
     OUT(bool, zj_tx_snp_rdy);
 
     XscChiAdapter();

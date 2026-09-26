@@ -26,7 +26,7 @@
 #include "wolvicmod/core/collect.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/queue.h"
 
 namespace zj::bridge {
@@ -34,7 +34,7 @@ namespace zj::bridge {
 using namespace zj::chi;
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::Queue;
 using zj::prefab::CondVipArb;
 
@@ -151,26 +151,26 @@ public:
     IN(bool, clk);
     IN(uint16_t, node_id);  // RTL nodeId（= 0x20）
     // ---- 环侧（DeviceIcnBundle HI：rx=弹出输入、tx=注入输出）----
-    IN(Dec<RReqFlit>, rx_req);
+    IN(Valid<RReqFlit>, rx_req);
     OUT(bool, rx_req_rdy);
-    IN(Dec<RespFlit>, rx_resp);
+    IN(Valid<RespFlit>, rx_resp);
     OUT(bool, rx_resp_rdy);
-    IN(Dec<DataFlit>, rx_data);
+    IN(Valid<DataFlit>, rx_data);
     OUT(bool, rx_data_rdy);
-    OUT(Dec<RespFlit>, tx_resp);
+    OUT(Valid<RespFlit>, tx_resp);
     IN(bool, tx_resp_rdy);
-    OUT(Dec<DataFlit>, tx_data);
+    OUT(Valid<DataFlit>, tx_data);
     IN(bool, tx_data_rdy);
     // ---- AXI master（cfgAXI）----
-    OUT(Dec<axi::AWFlit>, axi_aw);
+    OUT(Valid<axi::AWFlit>, axi_aw);
     IN(bool, axi_aw_rdy);
-    OUT(Dec<axi::WFlit>, axi_w);
+    OUT(Valid<axi::WFlit>, axi_w);
     IN(bool, axi_w_rdy);
-    OUT(Dec<axi::ARFlit>, axi_ar);
+    OUT(Valid<axi::ARFlit>, axi_ar);
     IN(bool, axi_ar_rdy);
-    IN(Dec<axi::BFlit>, axi_b);
+    IN(Valid<axi::BFlit>, axi_b);
     OUT(bool, axi_b_rdy);
-    IN(Dec<axi::RFlit>, axi_r);
+    IN(Valid<axi::RFlit>, axi_r);
     OUT(bool, axi_r_rdy);
 
     HiNodeAxiLiteBridge();
@@ -192,9 +192,9 @@ private:
     using BoolArr = std::array<bool, kOutst>;
     using WkArr   = std::array<WkV, kOutst>;
     using InfoArr = std::array<InfoV, kOutst>;
-    using RspArr  = std::array<Dec<RespFlit>, kOutst>;
-    using AxArr   = std::array<Dec<axi::AxFlit>, kOutst>;
-    using WArr    = std::array<Dec<axi::WFlit>, kOutst>;
+    using RspArr  = std::array<Valid<RespFlit>, kOutst>;
+    using AxArr   = std::array<Valid<axi::AxFlit>, kOutst>;
+    using WArr    = std::array<Valid<axi::WFlit>, kOutst>;
 
     REG(BoolArr, tag_match);
 

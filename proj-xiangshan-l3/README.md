@@ -54,7 +54,7 @@ export NOOP_HOME=<绝对路径>/proj-xiangshan-l3/XiangShan   # 构建与运行 
 
 ### 1.4 项目侧时序原语库（prefab/）
 
-`prefab/` 是 ZhuJiang 建模的**项目侧时序原语库**（命名空间 `zj::prefab`，伞头 `prefab/prefab.h`）：语义来自 XiangShan 生态（xs-utils / dongjiang）的可复用元件——`FastQueue`（`fastq.h`）、`VipArb`/`QosRRArb`/`QosFixedArb`/`Alloc`（`xsarb.h`）、`SpSram`/`DpSram`（`sram.h`），全部与参考 RTL 拍级对齐。chisel3 标准库语义的通用元件（`Dec` 通道约定、`Queue`、`FixedArb`、`RRArb`、`ValidPipe`）收在 wolvicmod 框架仓的 `include/wolvicmod/prefab/`（收录边界详见 `../wolvicmod/README.md` §4 与 `docs/wolvicmod-zhujiang-hierarchy.md` §2.2），本库直接复用。仲裁器族（含 wolvicmod 侧 FixedArb/RRArb）统一为阵列端口形态：输入侧一路 `In<std::array<Dec<T>,N>> in` + 一路 `Out<std::array<bool,N>> in_rdy`（Alloc 反向：`Out<std::array<Dec<T>,N>> out` + `In<std::array<bool,N>> out_rdy`）。
+`prefab/` 是 ZhuJiang 建模的**项目侧时序原语库**（命名空间 `zj::prefab`，伞头 `prefab/prefab.h`）：语义来自 XiangShan 生态（xs-utils / dongjiang）的可复用元件——`FastQueue`（`fastq.h`）、`VipArb`/`QosRRArb`/`QosFixedArb`/`Alloc`（`xsarb.h`）、`SpSram`/`DpSram`（`sram.h`），全部与参考 RTL 拍级对齐。chisel3 标准库语义的通用元件（`Valid` 通道约定、`Queue`、`FixedArb`、`RRArb`、`ValidPipe`）收在 wolvicmod 框架仓的 `include/wolvicmod/prefab/`（收录边界详见 `../wolvicmod/README.md` §4 与 `docs/wolvicmod-zhujiang-hierarchy.md` §2.2），本库直接复用。仲裁器族（含 wolvicmod 侧 FixedArb/RRArb）统一为阵列端口形态：输入侧一路 `In<std::array<Valid<T>,N>> in` + 一路 `Out<std::array<bool,N>> in_rdy`（Alloc 反向：`Out<std::array<Valid<T>,N>> out` + `In<std::array<bool,N>> out_rdy`）。
 
 构建与单测（doctest，`-Wall -Wextra` 零警告）：
 

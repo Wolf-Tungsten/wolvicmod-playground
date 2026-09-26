@@ -4,10 +4,10 @@
 // （及其底层 SRAMTemplate + SramInstGen 的 SyncReadMem 行为模型）。
 //
 // 端口贴近源模板：
-//   单口 SpSram：In<Dec<SramReqBits>> req（valid/we/addr/wdata/mask 一体）+
-//                Out<bool> req_rdy；Out<Dec<SramRespBits>> resp（Valid，无 rdy）
-//   双口 DpSram：In<Dec<SramReqBits>> wreq + wreq_rdy；In<Dec<uint32_t>> rreq +
-//                rreq_rdy；Out<Dec<SramRespBits>> rresp（Valid，无 rdy）
+//   单口 SpSram：In<Valid<SramReqBits>> req（valid/we/addr/wdata/mask 一体）+
+//                Out<bool> req_rdy；Out<Valid<SramRespBits>> resp（Valid，无 rdy）
+//   双口 DpSram：In<Valid<SramReqBits>> wreq + wreq_rdy；In<Valid<uint32_t>> rreq +
+//                rreq_rdy；Out<Valid<SramRespBits>> rresp（Valid，无 rdy）
 // mask 为 way 粒度写掩码（bit w 置位写 way w）；Ways==1 时忽略（对应源模板
 // way==1 时 mask=None）。
 //
@@ -54,12 +54,12 @@
 
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/pipe.h"
 
 namespace zj::prefab {
 
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::ValidPipe;
 
 // 请求/响应载荷（贴近 SpSramReq / DpSramWrite / SpSramResp）
@@ -104,8 +104,8 @@ public:
     using WayRow = std::array<T, Ways>;
     using ReqBits = SramReqBits<T, Ways>;
     using RespBits = SramRespBits<T, Ways>;
-    using DecReq = Dec<ReqBits>;
-    using DecResp = Dec<RespBits>;
+    using ValidReq = Valid<ReqBits>;
+    using ValidResp = Valid<RespBits>;
 
     static constexpr uint32_t kIsc = ExtraHold ? Setup + 1 : Setup;
     static constexpr uint32_t kInterval = (Latency > kIsc) ? Latency : kIsc;
@@ -125,9 +125,9 @@ public:
     };
 
     IN(bool, clk);
-    IN(DecReq, req);
+    IN(ValidReq, req);
     OUT(bool, req_rdy);
-    OUT(DecResp, resp);  // Valid 通道（无 rdy）
+    OUT(ValidResp, resp);  // Valid 通道（无 rdy）
 
     MEM(WayRow, Sets, ram);
     REG(uint32_t, intv);
@@ -215,7 +215,7 @@ private:
     void registerWritePiped(WrPipe& wrpipe) {  // kIsc>1：请求位寄存，推迟 kIsc-1 拍提交
         wrpipe.enq.assign().reads(w_write_fire, req) = [](auto src) {
             auto [w_write_fire, req] = src;
-            DecReq d;
+            ValidReq d;
             d.valid = w_write_fire;
             d.bits = req.bits;
             return d;
@@ -239,7 +239,7 @@ private:
     void registerReadDirect() {  // kCapDelay==0：fire 拍组合采样
         holdpipe.enq.assign().reads(w_read_fire, ram, w_addr) = [](auto src) {
             auto [w_read_fire, ram, w_addr] = src;
-            DecResp d;
+            ValidResp d;
             d.valid = w_read_fire;
             d.bits.data = w_read_fire ? ram[w_addr] : WayRow{};
             return d;
@@ -249,14 +249,14 @@ private:
     void registerReadPiped(CapPipe& cappipe) {  // kCapDelay>0：第 kIsc 拍组合采样
         cappipe.enq.assign().reads(w_read_fire, w_addr) = [](auto src) {
             auto [w_read_fire, w_addr] = src;
-            Dec<uint32_t> d;
+            Valid<uint32_t> d;
             d.valid = w_read_fire;
             d.bits = w_addr;
             return d;
         };
         holdpipe.enq.assign().reads(cappipe.deq, ram) = [](auto src) {
             auto [cappipe_deq, ram] = src;
-            DecResp d;
+            ValidResp d;
             d.valid = cappipe_deq.valid;
             d.bits.data = cappipe_deq.valid ? ram[cappipe_deq.bits] : WayRow{};
             return d;
@@ -275,9 +275,9 @@ public:
     using WayRow = std::array<T, Ways>;
     using WrBits = SramReqBits<T, Ways>;  // write 字段忽略（wreq 恒为写）
     using RespBits = SramRespBits<T, Ways>;
-    using DecWr = Dec<WrBits>;
-    using DecRd = Dec<uint32_t>;
-    using DecResp = Dec<RespBits>;
+    using ValidWr = Valid<WrBits>;
+    using ValidRd = Valid<uint32_t>;
+    using ValidResp = Valid<RespBits>;
 
     static constexpr uint32_t kIsc = ExtraHold ? Setup + 1 : Setup;
     static constexpr uint32_t kInterval = (Latency > kIsc) ? Latency : kIsc;
@@ -310,11 +310,11 @@ public:
     };
 
     IN(bool, clk);
-    IN(DecWr, wreq);
+    IN(ValidWr, wreq);
     OUT(bool, wreq_rdy);
-    IN(DecRd, rreq);
+    IN(ValidRd, rreq);
     OUT(bool, rreq_rdy);
-    OUT(DecResp, rresp);  // Valid 通道（无 rdy）
+    OUT(ValidResp, rresp);  // Valid 通道（无 rdy）
 
     MEM(WayRow, Sets, ram);
     REG(uint32_t, r_intv);
@@ -427,7 +427,7 @@ private:
     void registerWritePiped(WrPipe& wrpipe) {
         wrpipe.enq.assign().reads(w_w_fire, wreq) = [](auto src) {
             auto [w_w_fire, wreq] = src;
-            DecWr d;
+            ValidWr d;
             d.valid = w_w_fire;
             d.bits = wreq.bits;
             return d;
@@ -460,7 +460,7 @@ private:
     void registerReadPath(CapPipe& cappipe) {
         cappipe.enq.assign().reads(w_r_fire, w_raddr, w_bmask, wreq) = [](auto src) {
             auto [w_r_fire, w_raddr, w_bmask, wreq] = src;
-            Dec<CapInfo> d;
+            Valid<CapInfo> d;
             d.valid = w_r_fire;
             d.bits.addr = w_raddr;
             d.bits.bmask = w_bmask;
@@ -473,7 +473,7 @@ private:
     void registerHoldPipe(CapPipe& cappipe, HoldPipe& holdpipe) {
         holdpipe.enq.assign().reads(cappipe.deq, ram) = [](auto src) {
             auto [cappipe_deq, ram] = src;
-            DecResp d;
+            ValidResp d;
             d.valid = cappipe_deq.valid;
             d.bits = cappipe_deq.valid
                          ? mergeRead(ram[cappipe_deq.bits.addr], cappipe_deq.bits.bmask,
@@ -487,7 +487,7 @@ private:
     void registerRespDirect(CapPipe& cappipe) {
         rresp.assign().reads(cappipe.deq, ram) = [](auto src) {
             auto [cappipe_deq, ram] = src;
-            DecResp d;
+            ValidResp d;
             d.valid = cappipe_deq.valid;
             d.bits = cappipe_deq.valid
                          ? mergeRead(ram[cappipe_deq.bits.addr], cappipe_deq.bits.bmask,

@@ -24,26 +24,26 @@ namespace {
 void tieOff(ZjL3& top) {
     top.ci.set(0);
     // 未建模站点：无注入、不消费
-    top.n3_rx_req.set(Dec<RReqFlit>{});
-    top.n3_rx_resp.set(Dec<RespFlit>{});
-    top.n3_rx_data.set(Dec<DataFlit>{});
+    top.n3_rx_req.set(Valid<RReqFlit>{});
+    top.n3_rx_resp.set(Valid<RespFlit>{});
+    top.n3_rx_data.set(Valid<DataFlit>{});
     top.n3_tx_resp_rdy.set(false);
     top.n3_tx_data_rdy.set(false);
     // AXI 边界：地址/数据通道全收，b/r 无流量
     top.mem_aw_rdy.set(true);
     top.mem_w_rdy.set(true);
     top.mem_ar_rdy.set(true);
-    top.mem_b.set(Dec<BFlit>{});
-    top.mem_r.set(Dec<RFlit>{});
+    top.mem_b.set(Valid<BFlit>{});
+    top.mem_r.set(Valid<RFlit>{});
     top.cfg_aw_rdy.set(true);
     top.cfg_w_rdy.set(true);
     top.cfg_ar_rdy.set(true);
-    top.cfg_b.set(Dec<BFlit>{});
-    top.cfg_r.set(Dec<RFlit>{});
+    top.cfg_b.set(Valid<BFlit>{});
+    top.cfg_r.set(Valid<RFlit>{});
     // L2 侧默认：无 tx 流量、rx 全收
-    top.chi_tx_req.set(Dec<CHIREQ>{});
-    top.chi_tx_rsp.set(Dec<CHIRSP>{});
-    top.chi_tx_dat.set(Dec<CHIDAT>{});
+    top.chi_tx_req.set(Valid<CHIREQ>{});
+    top.chi_tx_rsp.set(Valid<CHIRSP>{});
+    top.chi_tx_dat.set(Valid<CHIDAT>{});
     top.chi_rx_rsp_rdy.set(true);
     top.chi_rx_dat_rdy.set(true);
     top.chi_rx_snp_rdy.set(true);
@@ -65,7 +65,7 @@ TEST_CASE("ZjL3 通路：ReadOnce 到 bank0 HNF 桩并收回 Comp/CompData") {
     top.elaborate();
     tieOff(top);
 
-    Dec<CHIREQ> req;
+    Valid<CHIREQ> req;
     req.valid            = true;
     req.bits.opcode      = 0x03;          // ReadOnce
     req.bits.addr        = 0x80000000ULL; // addr[12]=0 → bank0 → gid0
@@ -83,7 +83,7 @@ TEST_CASE("ZjL3 通路：ReadOnce 到 bank0 HNF 桩并收回 Comp/CompData") {
     CHECK(top.chi_tx_req_rdy.get());
     bool consumed = runUntil(top, 20, [&] { return top.chi_tx_req_rdy.get(); });
     CHECK(consumed);
-    top.chi_tx_req.set(Dec<CHIREQ>{});
+    top.chi_tx_req.set(Valid<CHIREQ>{});
 
     // 收回 RSP(Comp) 与 DAT(CompData)
     bool got_rsp = runUntil(top, 200, [&] { return top.chi_rx_rsp.get().valid; });
@@ -109,7 +109,7 @@ TEST_CASE("ZjL3 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 
     top.elaborate();
     tieOff(top);
 
-    Dec<CHIREQ> req;
+    Valid<CHIREQ> req;
     req.valid            = true;
     req.bits.opcode      = 0x04;              // ReadNoSnp（HI 桥只收 ReadNoSnp/WriteNoSnpPtl）
     req.bits.addr        = 0x38000008ULL;     // addr[43:20]≠0 → 非 CC device 窗口
@@ -123,7 +123,7 @@ TEST_CASE("ZjL3 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 
     comb(top);
     bool consumed = runUntil(top, 20, [&] { return top.chi_tx_req_rdy.get(); });
     CHECK(consumed);
-    top.chi_tx_req.set(Dec<CHIREQ>{});
+    top.chi_tx_req.set(Valid<CHIREQ>{});
 
     // HI 桥应发出 cfgAXI AR（defaultHni gid4 → 桥内 CM → AR）
     bool got_ar = runUntil(top, 200, [&] { return top.cfg_ar.get().valid; });
@@ -134,7 +134,7 @@ TEST_CASE("ZjL3 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 
     edge(top);  // AR fire（tieOff 中 cfg_ar_rdy 恒 true）
 
     // 给 R：CompData 经桥 → 环 → CC socket → adapter 回到 L2
-    Dec<RFlit> r;
+    Valid<RFlit> r;
     r.valid        = true;
     r.bits.id      = arid;
     r.bits.last    = true;
@@ -142,7 +142,7 @@ TEST_CASE("ZjL3 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 
     top.cfg_r.set(r);
     comb(top);
     edge(top);
-    top.cfg_r.set(Dec<RFlit>{});
+    top.cfg_r.set(Valid<RFlit>{});
 
     bool got_dat = runUntil(top, 200, [&] { return top.chi_rx_dat.get().valid; });
     CHECK(got_dat);

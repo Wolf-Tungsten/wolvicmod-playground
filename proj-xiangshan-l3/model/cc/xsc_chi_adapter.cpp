@@ -116,7 +116,7 @@ XscChiAdapter::XscChiAdapter() {
     // L2 → ZJ（mapReq/mapRsp/mapDat）+ ready 直通
     zj_rx_req.assign().reads(chi_tx_req) = [](auto src) {
         auto [chi_tx_req] = src;
-        Dec<chi::RReqFlit> d;
+        Valid<chi::RReqFlit> d;
         d.valid = chi_tx_req.valid;
         d.bits  = mapReq(chi_tx_req.bits);
         return d;
@@ -124,7 +124,7 @@ XscChiAdapter::XscChiAdapter() {
     chi_tx_req_rdy = zj_rx_req_rdy;
     zj_rx_rsp.assign().reads(chi_tx_rsp) = [](auto src) {
         auto [chi_tx_rsp] = src;
-        Dec<chi::RespFlit> d;
+        Valid<chi::RespFlit> d;
         d.valid = chi_tx_rsp.valid;
         d.bits  = mapRspZj(chi_tx_rsp.bits);
         return d;
@@ -132,7 +132,7 @@ XscChiAdapter::XscChiAdapter() {
     chi_tx_rsp_rdy = zj_rx_rsp_rdy;
     zj_rx_dat.assign().reads(chi_tx_dat) = [](auto src) {
         auto [chi_tx_dat] = src;
-        Dec<chi::DataFlit> d;
+        Valid<chi::DataFlit> d;
         d.valid = chi_tx_dat.valid;
         d.bits  = mapDatZj(chi_tx_dat.bits);
         return d;
@@ -141,7 +141,7 @@ XscChiAdapter::XscChiAdapter() {
     // ZJ → L2（mapRsp/mapDat/mapSnp）+ ready 直通
     chi_rx_rsp.assign().reads(zj_tx_rsp) = [](auto src) {
         auto [zj_tx_rsp] = src;
-        Dec<CHIRSP> d;
+        Valid<CHIRSP> d;
         d.valid = zj_tx_rsp.valid;
         d.bits  = mapRspXs(zj_tx_rsp.bits);
         return d;
@@ -149,7 +149,7 @@ XscChiAdapter::XscChiAdapter() {
     zj_tx_rsp_rdy = chi_rx_rsp_rdy;
     chi_rx_dat.assign().reads(zj_tx_dat) = [](auto src) {
         auto [zj_tx_dat] = src;
-        Dec<CHIDAT> d;
+        Valid<CHIDAT> d;
         d.valid = zj_tx_dat.valid;
         d.bits  = mapDatXs(zj_tx_dat.bits);
         return d;
@@ -157,7 +157,7 @@ XscChiAdapter::XscChiAdapter() {
     zj_tx_dat_rdy = chi_rx_dat_rdy;
     chi_rx_snp.assign().reads(zj_tx_snp) = [](auto src) {
         auto [zj_tx_snp] = src;
-        Dec<CHISNP> d;
+        Valid<CHISNP> d;
         d.valid = zj_tx_snp.valid;
         d.bits  = mapSnp(zj_tx_snp.bits);
         return d;

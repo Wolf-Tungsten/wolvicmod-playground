@@ -34,7 +34,7 @@
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/queue.h"
 
 namespace zj::home {
@@ -42,7 +42,7 @@ namespace zj::home {
 using namespace zj::chi;
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::Queue;
 using wolvicmod::prefab::RRArb;
 
@@ -69,19 +69,19 @@ inline constexpr HomeShellCfg kHomeBank1 = {1, {0x10, 0x28},
 // lan 端口索引视图：对称的 lan0/lan1 端口的指针视图（实体仍由模块持有，
 // 经 createIn/createOut 按名注册），供父模块（ZjL3）按 lanIdx 接线。
 struct LanIO {
-    In<Dec<RReqFlit>>*   rx_req       = nullptr;
+    In<Valid<RReqFlit>>*   rx_req       = nullptr;
     Out<bool>*           rx_req_rdy   = nullptr;
-    In<Dec<RespFlit>>*   rx_resp      = nullptr;
+    In<Valid<RespFlit>>*   rx_resp      = nullptr;
     Out<bool>*           rx_resp_rdy  = nullptr;
-    In<Dec<DataFlit>>*   rx_data      = nullptr;
+    In<Valid<DataFlit>>*   rx_data      = nullptr;
     Out<bool>*           rx_data_rdy  = nullptr;
-    Out<Dec<RespFlit>>*  tx_resp      = nullptr;
+    Out<Valid<RespFlit>>*  tx_resp      = nullptr;
     In<bool>*            tx_resp_rdy  = nullptr;
-    Out<Dec<DataFlit>>*  tx_data      = nullptr;
+    Out<Valid<DataFlit>>*  tx_data      = nullptr;
     In<bool>*            tx_data_rdy  = nullptr;
-    Out<Dec<SnoopFlit>>* tx_snoop     = nullptr;
+    Out<Valid<SnoopFlit>>* tx_snoop     = nullptr;
     In<bool>*            tx_snoop_rdy = nullptr;
-    Out<Dec<HReqFlit>>*  tx_erq       = nullptr;
+    Out<Valid<HReqFlit>>*  tx_erq       = nullptr;
     In<bool>*            tx_erq_rdy   = nullptr;
 };
 
@@ -92,50 +92,50 @@ public:
     IN(uint8_t, ci);  // io.ci（4b，单核恒 0）
 
     // ---- 环侧（io.lans，DeviceIcnBundle：rx=eject 输入、tx=inject 输出）----
-    IN(Dec<RReqFlit>, lan0_rx_req);
+    IN(Valid<RReqFlit>, lan0_rx_req);
     OUT(bool, lan0_rx_req_rdy);
-    IN(Dec<RespFlit>, lan0_rx_resp);
+    IN(Valid<RespFlit>, lan0_rx_resp);
     OUT(bool, lan0_rx_resp_rdy);
-    IN(Dec<DataFlit>, lan0_rx_data);
+    IN(Valid<DataFlit>, lan0_rx_data);
     OUT(bool, lan0_rx_data_rdy);
-    OUT(Dec<RespFlit>, lan0_tx_resp);
+    OUT(Valid<RespFlit>, lan0_tx_resp);
     IN(bool, lan0_tx_resp_rdy);
-    OUT(Dec<DataFlit>, lan0_tx_data);
+    OUT(Valid<DataFlit>, lan0_tx_data);
     IN(bool, lan0_tx_data_rdy);
-    OUT(Dec<SnoopFlit>, lan0_tx_snoop);
+    OUT(Valid<SnoopFlit>, lan0_tx_snoop);
     IN(bool, lan0_tx_snoop_rdy);
-    OUT(Dec<HReqFlit>, lan0_tx_erq);
+    OUT(Valid<HReqFlit>, lan0_tx_erq);
     IN(bool, lan0_tx_erq_rdy);
 
-    IN(Dec<RReqFlit>, lan1_rx_req);
+    IN(Valid<RReqFlit>, lan1_rx_req);
     OUT(bool, lan1_rx_req_rdy);
-    IN(Dec<RespFlit>, lan1_rx_resp);
+    IN(Valid<RespFlit>, lan1_rx_resp);
     OUT(bool, lan1_rx_resp_rdy);
-    IN(Dec<DataFlit>, lan1_rx_data);
+    IN(Valid<DataFlit>, lan1_rx_data);
     OUT(bool, lan1_rx_data_rdy);
-    OUT(Dec<RespFlit>, lan1_tx_resp);
+    OUT(Valid<RespFlit>, lan1_tx_resp);
     IN(bool, lan1_tx_resp_rdy);
-    OUT(Dec<DataFlit>, lan1_tx_data);
+    OUT(Valid<DataFlit>, lan1_tx_data);
     IN(bool, lan1_tx_data_rdy);
-    OUT(Dec<SnoopFlit>, lan1_tx_snoop);
+    OUT(Valid<SnoopFlit>, lan1_tx_snoop);
     IN(bool, lan1_tx_snoop_rdy);
-    OUT(Dec<HReqFlit>, lan1_tx_erq);
+    OUT(Valid<HReqFlit>, lan1_tx_erq);
     IN(bool, lan1_tx_erq_rdy);
 
     // ---- hnx 侧（DongJiang io.lan：rx=eject 输出、tx=inject 输入）----
-    OUT(Dec<RReqFlit>, hnx_rx_req);
+    OUT(Valid<RReqFlit>, hnx_rx_req);
     IN(bool, hnx_rx_req_rdy);
-    OUT(Dec<RespFlit>, hnx_rx_resp);
+    OUT(Valid<RespFlit>, hnx_rx_resp);
     IN(bool, hnx_rx_resp_rdy);
-    OUT(Dec<DataFlit>, hnx_rx_data);
+    OUT(Valid<DataFlit>, hnx_rx_data);
     IN(bool, hnx_rx_data_rdy);
-    IN(Dec<RespFlit>, hnx_tx_resp);
+    IN(Valid<RespFlit>, hnx_tx_resp);
     OUT(bool, hnx_tx_resp_rdy);
-    IN(Dec<DataFlit>, hnx_tx_data);
+    IN(Valid<DataFlit>, hnx_tx_data);
     OUT(bool, hnx_tx_data_rdy);
-    IN(Dec<SnoopFlit>, hnx_tx_snoop);
+    IN(Valid<SnoopFlit>, hnx_tx_snoop);
     OUT(bool, hnx_tx_snoop_rdy);
-    IN(Dec<HReqFlit>, hnx_tx_erq);
+    IN(Valid<HReqFlit>, hnx_tx_erq);
     OUT(bool, hnx_tx_erq_rdy);
 
     // lan 端口索引视图（构造期填充，见 ctor 开头）
@@ -189,13 +189,13 @@ private:
     void buildEjArb(RRArb<F, 2>& arb, Queue<F, 2>& q0, Queue<F, 2>& q1) {
         arb.in.assign().reads(q0.deq, q1.deq) = [](auto src) {
             auto [q0_deq, q1_deq] = src;
-            return std::array<Dec<F>, 2>{q0_deq, q1_deq};
+            return std::array<Valid<F>, 2>{q0_deq, q1_deq};
         };
     }
 
     // eject 单 lan：lan_rx → q.enq；q.deq_rdy ← arb.in_rdy[idx]
     template <class F>
-    void buildEjLan(In<Dec<F>>& lanRx, Out<bool>& lanRxRdy, Queue<F, 2>& q, RRArb<F, 2>& arb,
+    void buildEjLan(In<Valid<F>>& lanRx, Out<bool>& lanRxRdy, Queue<F, 2>& q, RRArb<F, 2>& arb,
                     uint32_t idx) {
         q.enq = lanRx;
         lanRxRdy = q.enq_rdy;
@@ -208,12 +208,12 @@ private:
     // inject 单通道：hnx_tx →（tgt/命中/改写，组合）→ q0/q1.enq。
     // tgt/命中/srcId 在三个 lambda 内各自重算（纯组合，无共享线网语义差异）。
     template <class F, class TgtOf, class Fix>
-    void buildIj(In<Dec<F>>& hnxTx, Out<bool>& hnxTxRdy, Queue<F, 2>& q0, Queue<F, 2>& q1,
+    void buildIj(In<Valid<F>>& hnxTx, Out<bool>& hnxTxRdy, Queue<F, 2>& q0, Queue<F, 2>& q1,
                  TgtOf tgtOf, Fix fix) {
         q0.enq.assign().reads(hnxTx, ci) = [tgtOf, fix](auto src) {
             auto [hnxTx, ci] = src;
             const uint16_t tgt = tgtOf(hnxTx.bits, ci);
-            Dec<F> d;
+            Valid<F> d;
             d.valid = hnxTx.valid && friendsHit(tgt, 0);
             d.bits  = fix(hnxTx.bits, tgt, srcIdOf(tgt));
             return d;
@@ -221,7 +221,7 @@ private:
         q1.enq.assign().reads(hnxTx, ci) = [tgtOf, fix](auto src) {
             auto [hnxTx, ci] = src;
             const uint16_t tgt = tgtOf(hnxTx.bits, ci);
-            Dec<F> d;
+            Valid<F> d;
             d.valid = hnxTx.valid && friendsHit(tgt, 1);
             d.bits  = fix(hnxTx.bits, tgt, srcIdOf(tgt));
             return d;

@@ -33,7 +33,7 @@
 
 using namespace zj;
 using namespace zj::chi;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 namespace {
 
@@ -43,33 +43,33 @@ public:
     IN(bool, clk);
 
     // L2 侧（xscache flit）
-    IN(Dec<xs::CHIREQ>, chi_tx_req);
+    IN(Valid<xs::CHIREQ>, chi_tx_req);
     OUT(bool, chi_tx_req_rdy);
-    IN(Dec<xs::CHIRSP>, chi_tx_rsp);
+    IN(Valid<xs::CHIRSP>, chi_tx_rsp);
     OUT(bool, chi_tx_rsp_rdy);
-    IN(Dec<xs::CHIDAT>, chi_tx_dat);
+    IN(Valid<xs::CHIDAT>, chi_tx_dat);
     OUT(bool, chi_tx_dat_rdy);
-    OUT(Dec<xs::CHIRSP>, chi_rx_rsp);
+    OUT(Valid<xs::CHIRSP>, chi_rx_rsp);
     IN(bool, chi_rx_rsp_rdy);
-    OUT(Dec<xs::CHIDAT>, chi_rx_dat);
+    OUT(Valid<xs::CHIDAT>, chi_rx_dat);
     IN(bool, chi_rx_dat_rdy);
-    OUT(Dec<xs::CHISNP>, chi_rx_snp);
+    OUT(Valid<xs::CHISNP>, chi_rx_snp);
     IN(bool, chi_rx_snp_rdy);
 
     // 环侧（zhujiang flit；rx=inject 输出、tx=eject 输入，对齐 SocketIcnSide io.dev）
-    OUT(Dec<RReqFlit>, ring_rx_req);
+    OUT(Valid<RReqFlit>, ring_rx_req);
     IN(bool, ring_rx_req_rdy);
-    OUT(Dec<RespFlit>, ring_rx_resp);
+    OUT(Valid<RespFlit>, ring_rx_resp);
     IN(bool, ring_rx_resp_rdy);
-    OUT(Dec<DataFlit>, ring_rx_data);
+    OUT(Valid<DataFlit>, ring_rx_data);
     IN(bool, ring_rx_data_rdy);
-    IN(Dec<RReqFlit>, ring_tx_req);
+    IN(Valid<RReqFlit>, ring_tx_req);
     OUT(bool, ring_tx_req_rdy);
-    IN(Dec<RespFlit>, ring_tx_resp);
+    IN(Valid<RespFlit>, ring_tx_resp);
     OUT(bool, ring_tx_resp_rdy);
-    IN(Dec<DataFlit>, ring_tx_data);
+    IN(Valid<DataFlit>, ring_tx_data);
     OUT(bool, ring_tx_data_rdy);
-    IN(Dec<SnoopFlit>, ring_tx_snoop);
+    IN(Valid<SnoopFlit>, ring_tx_snoop);
     OUT(bool, ring_tx_snoop_rdy);
 
     MOD(xs::XscChiAdapter, adapter);
@@ -219,7 +219,7 @@ void cmp(const char* port, const char* field, uint64_t ref, uint64_t dut) {
 }
 
 // ---------------- 驱动（trace → DUT 输入） ----------------
-void drvChiReq(wolvicmod::In<Dec<xs::CHIREQ>>& p, size_t r) {
+void drvChiReq(wolvicmod::In<Valid<xs::CHIREQ>>& p, size_t r) {
     xs::CHIREQ f;
     f.qos                = g_tr.get("l2.tx_req.bits_qos", r);
     f.tgt_id             = g_tr.get("l2.tx_req.bits_tgtID", r);
@@ -238,10 +238,10 @@ void drvChiReq(wolvicmod::In<Dec<xs::CHIREQ>>& p, size_t r) {
     f.exp_comp_ack       = g_tr.get("l2.tx_req.bits_expCompAck", r);
     f.mpam_part_id       = g_tr.get("l2.tx_req.bits_mpam_partID", r);
     f.rsvdc              = g_tr.get("l2.tx_req.bits_rsvdc", r);
-    p.set(Dec<xs::CHIREQ>{g_tr.get("l2.tx_req.valid", r) != 0, f});
+    p.set(Valid<xs::CHIREQ>{g_tr.get("l2.tx_req.valid", r) != 0, f});
 }
 
-void drvChiRsp(wolvicmod::In<Dec<xs::CHIRSP>>& p, size_t r) {
+void drvChiRsp(wolvicmod::In<Valid<xs::CHIRSP>>& p, size_t r) {
     xs::CHIRSP f;
     f.qos       = g_tr.get("l2.tx_rsp.bits_qos", r);
     f.tgt_id    = g_tr.get("l2.tx_rsp.bits_tgtID", r);
@@ -253,10 +253,10 @@ void drvChiRsp(wolvicmod::In<Dec<xs::CHIRSP>>& p, size_t r) {
     f.fwd_state = g_tr.get("l2.tx_rsp.bits_fwdState", r);
     f.c_busy    = g_tr.get("l2.tx_rsp.bits_cBusy", r);
     f.dbid      = g_tr.get("l2.tx_rsp.bits_dbID", r);
-    p.set(Dec<xs::CHIRSP>{g_tr.get("l2.tx_rsp.valid", r) != 0, f});
+    p.set(Valid<xs::CHIRSP>{g_tr.get("l2.tx_rsp.valid", r) != 0, f});
 }
 
-void drvChiDat(wolvicmod::In<Dec<xs::CHIDAT>>& p, size_t r) {
+void drvChiDat(wolvicmod::In<Valid<xs::CHIDAT>>& p, size_t r) {
     xs::CHIDAT f;
     f.qos         = g_tr.get("l2.tx_dat.bits_qos", r);
     f.tgt_id      = g_tr.get("l2.tx_dat.bits_tgtID", r);
@@ -274,10 +274,10 @@ void drvChiDat(wolvicmod::In<Dec<xs::CHIDAT>>& p, size_t r) {
     uint64_t d[4];
     g_tr.getWide("l2.tx_dat.bits_data", r, d);
     for (int i = 0; i < 4; ++i) f.data[i] = d[i];
-    p.set(Dec<xs::CHIDAT>{g_tr.get("l2.tx_dat.valid", r) != 0, f});
+    p.set(Valid<xs::CHIDAT>{g_tr.get("l2.tx_dat.valid", r) != 0, f});
 }
 
-void drvZjReq(wolvicmod::In<Dec<RReqFlit>>& p, size_t r) {
+void drvZjReq(wolvicmod::In<Valid<RReqFlit>>& p, size_t r) {
     RReqFlit f;
     f.qos          = g_tr.get("ring.rx_req.bits_QoS", r);
     f.tgt_id       = g_tr.get("ring.rx_req.bits_TgtID", r);
@@ -291,10 +291,10 @@ void drvZjReq(wolvicmod::In<Dec<RReqFlit>>& p, size_t r) {
     f.snp_attr     = g_tr.get("ring.rx_req.bits_SnpAttr", r);
     f.excl         = g_tr.get("ring.rx_req.bits_Excl", r);
     f.exp_comp_ack = g_tr.get("ring.rx_req.bits_ExpCompAck", r);
-    p.set(Dec<RReqFlit>{g_tr.get("ring.rx_req.valid", r) != 0, f});
+    p.set(Valid<RReqFlit>{g_tr.get("ring.rx_req.valid", r) != 0, f});
 }
 
-void drvZjResp(wolvicmod::In<Dec<RespFlit>>& p, size_t r) {
+void drvZjResp(wolvicmod::In<Valid<RespFlit>>& p, size_t r) {
     RespFlit f;
     f.qos       = g_tr.get("ring.rx_resp.bits_QoS", r);
     f.tgt_id    = g_tr.get("ring.rx_resp.bits_TgtID", r);
@@ -306,10 +306,10 @@ void drvZjResp(wolvicmod::In<Dec<RespFlit>>& p, size_t r) {
     f.fwd_state = g_tr.get("ring.rx_resp.bits_FwdState", r);
     f.c_busy    = g_tr.get("ring.rx_resp.bits_CBusy", r);
     f.dbid      = g_tr.get("ring.rx_resp.bits_DBID", r);
-    p.set(Dec<RespFlit>{g_tr.get("ring.rx_resp.valid", r) != 0, f});
+    p.set(Valid<RespFlit>{g_tr.get("ring.rx_resp.valid", r) != 0, f});
 }
 
-void drvZjData(wolvicmod::In<Dec<DataFlit>>& p, size_t r) {
+void drvZjData(wolvicmod::In<Valid<DataFlit>>& p, size_t r) {
     DataFlit f;
     f.qos         = g_tr.get("ring.rx_data.bits_QoS", r);
     f.tgt_id      = g_tr.get("ring.rx_data.bits_TgtID", r);
@@ -327,10 +327,10 @@ void drvZjData(wolvicmod::In<Dec<DataFlit>>& p, size_t r) {
     uint64_t d[4];
     g_tr.getWide("ring.rx_data.bits_Data", r, d);
     for (int i = 0; i < 4; ++i) f.data[i] = d[i];
-    p.set(Dec<DataFlit>{g_tr.get("ring.rx_data.valid", r) != 0, f});
+    p.set(Valid<DataFlit>{g_tr.get("ring.rx_data.valid", r) != 0, f});
 }
 
-void drvZjSnp(wolvicmod::In<Dec<SnoopFlit>>& p, size_t r) {
+void drvZjSnp(wolvicmod::In<Valid<SnoopFlit>>& p, size_t r) {
     SnoopFlit f;
     f.qos             = g_tr.get("ring.rx_snoop.bits_QoS", r);
     f.tgt_id          = g_tr.get("ring.rx_snoop.bits_TgtID", r);
@@ -342,7 +342,7 @@ void drvZjSnp(wolvicmod::In<Dec<SnoopFlit>>& p, size_t r) {
     f.addr            = g_tr.get("ring.rx_snoop.bits_Addr", r);
     f.do_not_go_to_sd = g_tr.get("ring.rx_snoop.bits_DoNotGoToSD", r);
     f.ret_to_src      = g_tr.get("ring.rx_snoop.bits_RetToSrc", r);
-    p.set(Dec<SnoopFlit>{g_tr.get("ring.rx_snoop.valid", r) != 0, f});
+    p.set(Valid<SnoopFlit>{g_tr.get("ring.rx_snoop.valid", r) != 0, f});
 }
 
 // ---------------- 比对（DUT 输出 vs trace） ----------------
@@ -350,7 +350,7 @@ void cmpRdy(const char* port, bool dut, const char* col, size_t r) {
     cmp(port, "ready", g_tr.get(col, r), dut ? 1 : 0);
 }
 
-void cmpChiRsp(const char* port, const Dec<xs::CHIRSP>& p, size_t r) {
+void cmpChiRsp(const char* port, const Valid<xs::CHIRSP>& p, size_t r) {
     cmp(port, "valid", g_tr.get("l2.rx_rsp.valid", r), p.valid ? 1 : 0);
     if (!g_tr.get("l2.rx_rsp.valid", r)) return;  // valid=0 时 bits 为 don't-care（RTL 寄存器随机初始化）
     cmp(port, "qos", g_tr.get("l2.rx_rsp.bits_qos", r), p.bits.qos);
@@ -366,7 +366,7 @@ void cmpChiRsp(const char* port, const Dec<xs::CHIRSP>& p, size_t r) {
 }
 
 
-void cmpChiDat(const char* port, const Dec<xs::CHIDAT>& p, size_t r) {
+void cmpChiDat(const char* port, const Valid<xs::CHIDAT>& p, size_t r) {
     cmp(port, "valid", g_tr.get("l2.rx_dat.valid", r), p.valid ? 1 : 0);
     if (!g_tr.get("l2.rx_dat.valid", r)) return;  // valid=0 时 bits 为 don't-care（RTL 寄存器随机初始化）
     cmp(port, "qos", g_tr.get("l2.rx_dat.bits_qos", r), p.bits.qos);
@@ -387,7 +387,7 @@ void cmpChiDat(const char* port, const Dec<xs::CHIDAT>& p, size_t r) {
     for (int i = 0; i < 4; ++i) cmp(port, "data", d[i], p.bits.data[i]);
 }
 
-void cmpChiSnp(const char* port, const Dec<xs::CHISNP>& p, size_t r) {
+void cmpChiSnp(const char* port, const Valid<xs::CHISNP>& p, size_t r) {
     cmp(port, "valid", g_tr.get("l2.rx_snp.valid", r), p.valid ? 1 : 0);
     if (!g_tr.get("l2.rx_snp.valid", r)) return;  // valid=0 时 bits 为 don't-care（RTL 寄存器随机初始化）
     cmp(port, "qos", g_tr.get("l2.rx_snp.bits_qos", r), p.bits.qos);
@@ -402,7 +402,7 @@ void cmpChiSnp(const char* port, const Dec<xs::CHISNP>& p, size_t r) {
     cmp(port, "retToSrc", g_tr.get("l2.rx_snp.bits_retToSrc", r), p.bits.ret_to_src ? 1 : 0);
 }
 
-void cmpZjReq(const char* port, const Dec<RReqFlit>& p, size_t r) {
+void cmpZjReq(const char* port, const Valid<RReqFlit>& p, size_t r) {
     cmp(port, "valid", g_tr.get("ring.tx_req.valid", r), p.valid ? 1 : 0);
     if (!g_tr.get("ring.tx_req.valid", r)) return;  // valid=0 时 bits 为 don't-care（RTL 寄存器随机初始化）
     cmp(port, "QoS", g_tr.get("ring.tx_req.bits_QoS", r), p.bits.qos);
@@ -420,7 +420,7 @@ void cmpZjReq(const char* port, const Dec<RReqFlit>& p, size_t r) {
         p.bits.exp_comp_ack ? 1 : 0);
 }
 
-void cmpZjResp(const char* port, const Dec<RespFlit>& p, size_t r) {
+void cmpZjResp(const char* port, const Valid<RespFlit>& p, size_t r) {
     cmp(port, "valid", g_tr.get("ring.tx_resp.valid", r), p.valid ? 1 : 0);
     if (!g_tr.get("ring.tx_resp.valid", r)) return;  // valid=0 时 bits 为 don't-care（RTL 寄存器随机初始化）
     cmp(port, "QoS", g_tr.get("ring.tx_resp.bits_QoS", r), p.bits.qos);
@@ -435,7 +435,7 @@ void cmpZjResp(const char* port, const Dec<RespFlit>& p, size_t r) {
     cmp(port, "DBID", g_tr.get("ring.tx_resp.bits_DBID", r), p.bits.dbid);
 }
 
-void cmpZjData(const char* port, const Dec<DataFlit>& p, size_t r) {
+void cmpZjData(const char* port, const Valid<DataFlit>& p, size_t r) {
     cmp(port, "valid", g_tr.get("ring.tx_data.valid", r), p.valid ? 1 : 0);
     if (!g_tr.get("ring.tx_data.valid", r)) return;  // valid=0 时 bits 为 don't-care（RTL 寄存器随机初始化）
     cmp(port, "QoS", g_tr.get("ring.tx_data.bits_QoS", r), p.bits.qos);

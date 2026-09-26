@@ -54,19 +54,19 @@
 
 ### 2.2 时序原语库（P0 里程碑，先于一切业务模块） ✅ 已完成
 
-全部对齐参考 RTL 的拍级语义，各自带 doctest 单元测试（逐拍驱动 + 显式期望序列比对 + 随机反压保序对拍）。按"语义来源"严格分两侧收录——**wolvicmod 侧只收 chisel3 标准库语义的通用元件，XiangShan 生态（xs-utils / dongjiang）特有元件收项目侧**。两侧共用同一通道约定 `Dec<T>{valid,bits}` + 独立 `xxx_rdy` 端口（`wolvicmod/include/wolvicmod/prefab/dec.h`）：
+全部对齐参考 RTL 的拍级语义，各自带 doctest 单元测试（逐拍驱动 + 显式期望序列比对 + 随机反压保序对拍）。按"语义来源"严格分两侧收录——**wolvicmod 侧只收 chisel3 标准库语义的通用元件，XiangShan 生态（xs-utils / dongjiang）特有元件收项目侧**。两侧共用同一通道约定 `Valid<T>{valid,bits}` + 独立 `xxx_rdy` 端口（`wolvicmod/include/wolvicmod/prefab/valid.h`）：
 
 **wolvicmod 预制菜（chisel3 通用）**——`wolvicmod/include/wolvicmod/prefab/`，命名空间 `wolvicmod::prefab`，伞头 `prefab.h`，测试 `wolvicmod/tests/test_prefab_*.cpp`：
 
 | 原语（头文件） | 对齐对象 | 要点 |
 |---|---|---|
-| `Dec<T>`（`prefab/dec.h`） | —（通道约定） | valid+bits 合体载荷 + 独立 rdy 端口，fire=valid&&rdy |
+| `Valid<T>`（`prefab/valid.h`） | —（通道约定） | valid+bits 合体载荷 + 独立 rdy 端口，fire=valid&&rdy |
 | `Queue<T,N,Flow,Pipe>`（`prefab/queue.h`） | `chisel3.util.Queue` | Mem 存储 + 模 N 指针 + maybe_full；flow 空直通（被消费拍 do_enq/do_deq 均 false，**无幻影拷贝**）；pipe 满时 deq_rdy 放行 enq、同址读写见旧值；带 count |
 | `FixedArb<T,N>`（`prefab/arb.h`） | `chisel3 Arbiter` | in0 最高优先级，全组合 |
 | `RRArb<T,N>`（`prefab/arb.h`） | `chisel3 RRArbiter` | last_grant Reg（初值 0，RegEnable 无复位按两态取 0）；两遍优先级；fire 时推进 |
 | `ValidPipe<T,N>`（`prefab/pipe.h`） | `chisel3.util.Pipe` | valid 每级 RegNext、bits 每级 RegEnable（上级 valid 门控）；N 拍精确延迟。dongjiang `Shift`（目录 4 拍/DS 5 拍的位移标记）= 本元件的 valid 链，不单设 |
 
-**项目侧原语（XiangShan 特有）**——`proj-xiangshan-l3/prefab/`，命名空间 `zj::prefab`，伞头 `prefab.h`，测试 `proj-xiangshan-l3/tests/test_prefab_*.cpp`（构建 `proj-xiangshan-l3/build/`）；复用 wolvicmod 侧的 `Dec`/`FixedArb`/`ValidPipe`：
+**项目侧原语（XiangShan 特有）**——`proj-xiangshan-l3/prefab/`，命名空间 `zj::prefab`，伞头 `prefab.h`，测试 `proj-xiangshan-l3/tests/test_prefab_*.cpp`（构建 `proj-xiangshan-l3/build/`）；复用 wolvicmod 侧的 `Valid`/`FixedArb`/`ValidPipe`：
 
 | 原语（头文件） | 对齐对象 | 要点 |
 |---|---|---|

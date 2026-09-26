@@ -74,7 +74,7 @@ TEST_CASE("SingleChannelTap：空环注入 1 拍到 tx；环流量优先；弹�
     tap.match_tag.set(uint16_t(0));  // 本节点 gid0
     tap.tap_idx.set(uint8_t(0));
     tap.rx.set(RingSlot<RReqFlit>{});
-    tap.inject.set(Dec<RReqFlit>{});
+    tap.inject.set(Valid<RReqFlit>{});
     tap.eject_rdy.set(true);
 
     // 空环：inject_rdy 组合即真
@@ -83,7 +83,7 @@ TEST_CASE("SingleChannelTap：空环注入 1 拍到 tx；环流量优先；弹�
     CHECK(!tap.tx.get().valid);
 
     // 注入（tgt gid=2，非本节点 → 不弹出）
-    Dec<RReqFlit> inj;
+    Valid<RReqFlit> inj;
     inj.valid = true;
     inj.bits  = mkReq(2);
     tap.inject.set(inj);
@@ -91,7 +91,7 @@ TEST_CASE("SingleChannelTap：空环注入 1 拍到 tx；环流量优先；弹�
     CHECK(tap.inject_rdy.get());     // fire
     CHECK(!tap.eject.get().valid);
     edge(tap);
-    tap.inject.set(Dec<RReqFlit>{});
+    tap.inject.set(Valid<RReqFlit>{});
     comb(tap);
     CHECK(tap.tx.get().valid);       // 1 拍后上环
     CHECK(tap.tx.get().flit.txn_id == 0x12);
@@ -119,7 +119,7 @@ TEST_CASE("SingleChannelTap：空环注入 1 拍到 tx；环流量优先；弹�
     CHECK(tap.inject_rdy.get());     // ejectFire → emptySlot
     edge(tap);
     tap.rx.set(RingSlot<RReqFlit>{});
-    tap.inject.set(Dec<RReqFlit>{});
+    tap.inject.set(Valid<RReqFlit>{});
     comb(tap);
     CHECK(tap.tx.get().valid);       // 注入的 flit 上环（弹出的已被消费）
     CHECK(tap.tx.get().flit.txn_id == 0x12);
@@ -131,14 +131,14 @@ TEST_CASE("SingleChannelTap：防饿死——阻塞 8 拍盖令牌，令牌回�
     tap.match_tag.set(uint16_t(3 << 3));  // 本节点 gid3
     tap.tap_idx.set(uint8_t(1));
     tap.eject_rdy.set(false);             // 弹出端永不接收（制造阻塞）
-    tap.inject.set(Dec<RReqFlit>{});
+    tap.inject.set(Valid<RReqFlit>{});
     tap.rx.set(RingSlot<RReqFlit>{});
 
     // 持续环流量（tgt 其它节点，不弹出）+ 持续注入请求
     RingSlot<RReqFlit> rin{};
     rin.valid = true;
     rin.flit  = mkReq(5);
-    Dec<RReqFlit> inj;
+    Valid<RReqFlit> inj;
     inj.valid = true;
     inj.bits  = mkReq(6);
     tap.rx.set(rin);
@@ -222,7 +222,7 @@ TEST_CASE("VipTable：alloc/rel/指针轮转") {
 TEST_CASE("EjectBuffer：占用反压 + VIP 末槽只放行命中 tag") {
     EjectBuffer<RReqFlit, 3, false> eb;  // RSP/DAT 配置深度 3
     eb.elaborate();
-    eb.enq.set(Dec<RReqFlit>{});
+    eb.enq.set(Valid<RReqFlit>{});
     eb.deq_rdy.set(false);
 
     auto flitWith = [](uint16_t src, uint16_t txn) {
@@ -238,7 +238,7 @@ TEST_CASE("EjectBuffer：占用反压 + VIP 末槽只放行命中 tag") {
 
     // 填满到 empties==1（A、B 进，deq 不开）。注意：末槽（empties==1）是 VIP
     // 保留槽——未登记的 tag 直接进不了第 3 项。
-    Dec<RReqFlit> d;
+    Valid<RReqFlit> d;
     d.valid = true;
     for (int k = 0; k < 2; ++k) {
         d.bits = flitWith(0x10 + k, 0x20 + k);
@@ -295,19 +295,19 @@ TEST_CASE("Ring e2e：CC REQ 译码到 HF0 + SrcID 盖章 + 弹出") {
     ring.n1_tx_data_rdy.set(true);
     ring.n1_tx_snoop_rdy.set(true);
 
-    ring.n1_rx_req.set(Dec<RReqFlit>{});
+    ring.n1_rx_req.set(Valid<RReqFlit>{});
     comb(ring);
     CHECK(ring.n1_rx_req_rdy.get());  // InjQueue 空
 
     // CC 注入：非 device（memAttr=0）、addr[12]=0 → bank0 → tgt HF0(nodeId 0x00)
-    Dec<RReqFlit> d;
+    Valid<RReqFlit> d;
     d.valid = true;
     d.bits  = mkReq(0, 0x80000000, /*memAttr=*/0, /*srcId=*/0x03);
     ring.n1_rx_req.set(d);
     comb(ring);
     CHECK(ring.n1_rx_req_rdy.get());
     edge(ring);
-    ring.n1_rx_req.set(Dec<RReqFlit>{});
+    ring.n1_rx_req.set(Valid<RReqFlit>{});
 
     // 等弹出（注入→译码→injq→tap→1 跳→EjectBuffer→RR：上限放宽）
     bool got = false;
@@ -330,15 +330,15 @@ TEST_CASE("Ring e2e：device REQ 未命中窗口 → defaultHni(HI)；命中 CC 
     ring.ci.set(0);
     ring.n4_tx_req_rdy.set(true);
     ring.n1_tx_req_rdy.set(true);
-    ring.n1_rx_req.set(Dec<RReqFlit>{});
+    ring.n1_rx_req.set(Valid<RReqFlit>{});
 
     // device=1（memAttr bit1）、addr[43:20]!=0 → 不属 CC 窗口 → HI（gid4，nodeId 0x20）
-    Dec<RReqFlit> d;
+    Valid<RReqFlit> d;
     d.valid = true;
     d.bits  = mkReq(0, 0x100000, /*memAttr=*/0b0010);
     ring.n1_rx_req.set(d);
     edge(ring);
-    ring.n1_rx_req.set(Dec<RReqFlit>{});
+    ring.n1_rx_req.set(Valid<RReqFlit>{});
     bool got = false;
     for (int t = 0; t < 12 && !got; ++t) {
         comb(ring);
@@ -353,13 +353,13 @@ TEST_CASE("Ring e2e：device REQ 未命中窗口 → defaultHni(HI)；命中 CC 
     // device=1、addr[43:20]==0（CC 本地设备窗口）：由 RI 注入（CC 自注自身在
     // 环上不可路由——tgt 不在本站的 left/right 方向表内，RTL 触发断言），
     // 译码到 CC（gid1）→ CC 弹出
-    ring.n3_rx_req.set(Dec<RReqFlit>{});
+    ring.n3_rx_req.set(Valid<RReqFlit>{});
     comb(ring);
     CHECK(ring.n3_rx_req_rdy.get());
     d.bits = mkReq(0, 0x00040, /*memAttr=*/0b0010);
     ring.n3_rx_req.set(d);
     edge(ring);
-    ring.n3_rx_req.set(Dec<RReqFlit>{});
+    ring.n3_rx_req.set(Valid<RReqFlit>{});
     got = false;
     for (int t = 0; t < 16 && !got; ++t) {
         comb(ring);
@@ -379,11 +379,11 @@ TEST_CASE("Ring e2e：HRQ 通道——HF 注入 SNP 经仲裁到 CC；HF ERQ 到
     ring.ci.set(0);
     ring.n1_tx_snoop_rdy.set(true);
     ring.n6_tx_req_rdy.set(true);
-    ring.n0_rx_req.set(Dec<HReqFlit>{});
-    ring.n0_rx_snoop.set(Dec<SnoopFlit>{});
+    ring.n0_rx_req.set(Valid<HReqFlit>{});
+    ring.n0_rx_snoop.set(Valid<SnoopFlit>{});
 
     // HF0 注入 Snoop：tgt CC（gid1，nodeId 0x08）
-    Dec<SnoopFlit> snp;
+    Valid<SnoopFlit> snp;
     snp.valid       = true;
     snp.bits.tgt_id = 0x08;
     snp.bits.src_id = 0x05;  // aid 待盖章
@@ -395,7 +395,7 @@ TEST_CASE("Ring e2e：HRQ 通道——HF 注入 SNP 经仲裁到 CC；HF ERQ 到
     comb(ring);
     CHECK(ring.n0_rx_snoop_rdy.get());
     edge(ring);
-    ring.n0_rx_snoop.set(Dec<SnoopFlit>{});
+    ring.n0_rx_snoop.set(Valid<SnoopFlit>{});
     bool got = false;
     for (int t = 0; t < 12 && !got; ++t) {
         comb(ring);
@@ -414,7 +414,7 @@ TEST_CASE("Ring e2e：HRQ 通道——HF 注入 SNP 经仲裁到 CC；HF ERQ 到
     CHECK(got);
 
     // HF0 注入 ERQ（HReqFlit）：tgt S（gid6，nodeId 0x30）
-    Dec<HReqFlit> erq;
+    Valid<HReqFlit> erq;
     erq.valid       = true;
     erq.bits.tgt_id = 0x30;
     erq.bits.src_id = 0x02;
@@ -426,7 +426,7 @@ TEST_CASE("Ring e2e：HRQ 通道——HF 注入 SNP 经仲裁到 CC；HF ERQ 到
     comb(ring);
     CHECK(ring.n0_rx_req_rdy.get());
     edge(ring);
-    ring.n0_rx_req.set(Dec<HReqFlit>{});
+    ring.n0_rx_req.set(Valid<HReqFlit>{});
     got = false;
     for (int t = 0; t < 16 && !got; ++t) {
         comb(ring);

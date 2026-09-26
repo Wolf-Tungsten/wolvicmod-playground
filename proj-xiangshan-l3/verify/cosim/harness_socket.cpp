@@ -22,7 +22,7 @@
 using namespace zj;
 using namespace zj::chi;
 using namespace zj::sock;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 namespace {
 
@@ -363,13 +363,13 @@ int main(int argc, char** argv) {
             ref.ring_rx_resp_ready = rdy[4];
             ref.ring_rx_data_ready = rdy[5];
 
-            dut.l2_rx_req.set(Dec<RReqFlit>{pendIReq, fIReq});
-            dut.l2_rx_resp.set(Dec<RespFlit>{pendIRsp, fIRsp});
-            dut.l2_rx_data.set(Dec<DataFlit>{pendIDat, fIDat});
-            dut.ring_tx_req.set(Dec<RReqFlit>{pendEReq, fEReq});
-            dut.ring_tx_resp.set(Dec<RespFlit>{pendERsp, fERsp});
-            dut.ring_tx_data.set(Dec<DataFlit>{pendEDat, fEDat});
-            dut.ring_tx_snoop.set(Dec<SnoopFlit>{pendESnp, fESnp});
+            dut.l2_rx_req.set(Valid<RReqFlit>{pendIReq, fIReq});
+            dut.l2_rx_resp.set(Valid<RespFlit>{pendIRsp, fIRsp});
+            dut.l2_rx_data.set(Valid<DataFlit>{pendIDat, fIDat});
+            dut.ring_tx_req.set(Valid<RReqFlit>{pendEReq, fEReq});
+            dut.ring_tx_resp.set(Valid<RespFlit>{pendERsp, fERsp});
+            dut.ring_tx_data.set(Valid<DataFlit>{pendEDat, fEDat});
+            dut.ring_tx_snoop.set(Valid<SnoopFlit>{pendESnp, fESnp});
             dut.l2_tx_resp_rdy.set(rdy[0]);
             dut.l2_tx_data_rdy.set(rdy[1]);
             dut.l2_tx_snoop_rdy.set(rdy[2]);

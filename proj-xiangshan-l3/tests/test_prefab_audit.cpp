@@ -40,7 +40,7 @@ TEST_CASE("zj prefab: auditOn + assertUpdateMutexOn 全元件巡查") {
         top.elaborate();
         top.auditOn();
         top.assertUpdateMutexOn();
-        std::array<Dec<uint32_t>, 4> ins{};
+        std::array<Valid<uint32_t>, 4> ins{};
         for (uint32_t c = 0; c < 24; ++c) {
             for (uint32_t i = 0; i < 4; ++i) ins[i] = {((c >> i) & 1u) != 0, c * 10 + i};
             top.in.set(ins);
@@ -53,7 +53,7 @@ TEST_CASE("zj prefab: auditOn + assertUpdateMutexOn 全元件巡查") {
         top.elaborate();
         top.auditOn();
         top.assertUpdateMutexOn();
-        std::array<Dec<QosBits>, 4> ins{};
+        std::array<Valid<QosBits>, 4> ins{};
         for (uint32_t c = 0; c < 24; ++c) {
             for (uint32_t i = 0; i < 4; ++i)
                 ins[i] = {((c >> i) & 1u) != 0, {(i == c % 4) ? 0xfu : i, c * 10 + i}};

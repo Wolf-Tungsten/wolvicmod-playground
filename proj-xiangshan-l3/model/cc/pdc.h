@@ -20,14 +20,14 @@
 
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/queue.h"
 
 namespace zj::sock {
 
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::Queue;
 
 inline constexpr uint32_t kPdcTokens = 5;  // PowerDomainCrossing.tokens
@@ -38,9 +38,9 @@ template <class F>
 class PdcTx : public wolvicmod::Module {
 public:
     IN(bool, clk);
-    IN(Dec<F>, enq);
+    IN(Valid<F>, enq);
     OUT(bool, enq_rdy);
-    OUT(Dec<F>, pdc);
+    OUT(Valid<F>, pdc);
     IN(bool, pdc_grant);
 
     PdcTx();
@@ -66,9 +66,9 @@ template <class F>
 class PdcRx : public wolvicmod::Module {
 public:
     IN(bool, clk);
-    IN(Dec<F>, pdc);
+    IN(Valid<F>, pdc);
     OUT(bool, pdc_grant);
-    OUT(Dec<F>, deq);
+    OUT(Valid<F>, deq);
     IN(bool, deq_rdy);
 
     PdcRx();
@@ -98,7 +98,7 @@ PdcTx<F>::PdcTx() {
     };
     pdc.assign().reads(st) = [](auto src) {
         auto [st] = src;
-        Dec<F> d;
+        Valid<F> d;
         d.valid = st.txv;
         d.bits  = st.txd;
         return d;
@@ -126,7 +126,7 @@ PdcRx<F>::PdcRx() {
     rxq.clk = clk;
     rxq.enq.assign().reads(st) = [](auto src) {
         auto [st] = src;
-        Dec<F> d;
+        Valid<F> d;
         d.valid = st.rxv;
         d.bits  = st.rxd;
         return d;

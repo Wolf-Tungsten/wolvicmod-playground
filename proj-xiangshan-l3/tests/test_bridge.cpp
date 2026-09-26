@@ -23,16 +23,16 @@ namespace {
 
 void tieOffHi(HiNodeAxiLiteBridge& b) {
     b.node_id.set(0x20);
-    b.rx_req.set(Dec<RReqFlit>{});
-    b.rx_resp.set(Dec<RespFlit>{});
-    b.rx_data.set(Dec<DataFlit>{});
+    b.rx_req.set(Valid<RReqFlit>{});
+    b.rx_resp.set(Valid<RespFlit>{});
+    b.rx_data.set(Valid<DataFlit>{});
     b.tx_resp_rdy.set(false);
     b.tx_data_rdy.set(false);
     b.axi_aw_rdy.set(false);
     b.axi_w_rdy.set(false);
     b.axi_ar_rdy.set(false);
-    b.axi_b.set(Dec<BFlit>{});
-    b.axi_r.set(Dec<RFlit>{});
+    b.axi_b.set(Valid<BFlit>{});
+    b.axi_r.set(Valid<RFlit>{});
 }
 
 RReqFlit mkReq(uint8_t opcode, uint64_t addr, uint8_t size, uint16_t txn, uint8_t order,
@@ -58,7 +58,7 @@ TEST_CASE("HiBridge 读：ReadNoSnp → ReadReceipt + AR → R → CompData") {
     b.axi_ar_rdy.set(true);
 
     // 拍 0：请求入队（order=1 → 需要 ReadReceipt）
-    Dec<RReqFlit> q;
+    Valid<RReqFlit> q;
     q.valid = true;
     q.bits  = mkReq(req_op::kReadNoSnp, 0x1000'0040, 3, 0x11, 1);
     b.rx_req.set(q);
@@ -66,7 +66,7 @@ TEST_CASE("HiBridge 读：ReadNoSnp → ReadReceipt + AR → R → CompData") {
     CHECK(b.rx_req_rdy.get());
     CHECK(!b.axi_ar.get().valid);  // waiting 全 1，未发 AR
     edge(b);
-    b.rx_req.set(Dec<RReqFlit>{});
+    b.rx_req.set(Valid<RReqFlit>{});
 
     // ReadReceipt（经 CondVipArb 一拍注册延迟，轮询）
     bool sawReceipt = false;
@@ -98,7 +98,7 @@ TEST_CASE("HiBridge 读：ReadNoSnp → ReadReceipt + AR → R → CompData") {
     CHECK(sawAr);
 
     // R 到达 → CompData（DataID = addr(5)<<1 = 0）
-    Dec<RFlit> r;
+    Valid<RFlit> r;
     r.valid      = true;
     r.bits.id    = 0;
     r.bits.last  = true;
@@ -108,7 +108,7 @@ TEST_CASE("HiBridge 读：ReadNoSnp → ReadReceipt + AR → R → CompData") {
     comb(b);
     CHECK(b.axi_r_rdy.get());  // readDataPipe 空
     edge(b);
-    b.axi_r.set(Dec<RFlit>{});
+    b.axi_r.set(Valid<RFlit>{});
 
     comb(b);
     CHECK(b.tx_data.get().valid);
@@ -134,14 +134,14 @@ TEST_CASE("HiBridge 写：WriteNoSnpPtl → DBIDResp → 数据 → AW/W → B �
     b.axi_w_rdy.set(true);
 
     // 拍 0：写请求（ewa=0 → Comp 等 B；expCompAck=0 → 不等 CompAck）
-    Dec<RReqFlit> q;
+    Valid<RReqFlit> q;
     q.valid = true;
     q.bits  = mkReq(req_op::kWriteNoSnpPtl, 0x1000'0048, 3, 0x22, 0);
     b.rx_req.set(q);
     comb(b);
     CHECK(b.rx_req_rdy.get());
     edge(b);
-    b.rx_req.set(Dec<RReqFlit>{});
+    b.rx_req.set(Valid<RReqFlit>{});
 
     // DBIDResp（DBID=CM idx=0）
     bool sawDbid = false;
@@ -158,7 +158,7 @@ TEST_CASE("HiBridge 写：WriteNoSnpPtl → DBIDResp → 数据 → AW/W → B �
     CHECK(sawDbid);
 
     // 写数据（NCBWrData，TxnID=DBID=0，8B @ addr[4:3]=1 → data[1]）
-    Dec<DataFlit> wd;
+    Valid<DataFlit> wd;
     wd.valid          = true;
     wd.bits.opcode    = dat_op::kNonCopyBackWriteData;
     wd.bits.txn_id    = 0;
@@ -169,7 +169,7 @@ TEST_CASE("HiBridge 写：WriteNoSnpPtl → DBIDResp → 数据 → AW/W → B �
     comb(b);
     CHECK(b.rx_data_rdy.get());  // 恒 true
     edge(b);
-    b.rx_data.set(Dec<DataFlit>{});
+    b.rx_data.set(Valid<DataFlit>{});
 
     // AW（u.wdata 后；仲裁延迟）
     bool sawAw = false;
@@ -200,14 +200,14 @@ TEST_CASE("HiBridge 写：WriteNoSnpPtl → DBIDResp → 数据 → AW/W → B �
     CHECK(sawW);
 
     // B → Comp
-    Dec<BFlit> br;
+    Valid<BFlit> br;
     br.valid   = true;
     br.bits.id = 0;
     b.axi_b.set(br);
     comb(b);
     CHECK(b.axi_b_rdy.get());
     edge(b);
-    b.axi_b.set(Dec<BFlit>{});
+    b.axi_b.set(Valid<BFlit>{});
 
     bool sawComp = false;
     for (uint32_t t = 0; t < 6 && !sawComp; ++t) {
@@ -227,15 +227,15 @@ TEST_CASE("HiBridge 写：WriteNoSnpPtl → DBIDResp → 数据 → AW/W → B �
 // ---------------- S 桥 ----------------
 
 void tieOffS(SNodeAxiBridge& b) {
-    b.rx_req.set(Dec<HReqFlit>{});
-    b.rx_data.set(Dec<DataFlit>{});
+    b.rx_req.set(Valid<HReqFlit>{});
+    b.rx_data.set(Valid<DataFlit>{});
     b.tx_resp_rdy.set(false);
     b.tx_data_rdy.set(false);
     b.axi_aw_rdy.set(false);
     b.axi_w_rdy.set(false);
     b.axi_ar_rdy.set(false);
-    b.axi_b.set(Dec<BFlit>{});
-    b.axi_r.set(Dec<RFlit>{});
+    b.axi_b.set(Valid<BFlit>{});
+    b.axi_r.set(Valid<RFlit>{});
 }
 
 HReqFlit mkEReq(uint8_t opcode, uint64_t addr, uint8_t size, uint16_t txn, uint8_t order,
@@ -262,14 +262,14 @@ TEST_CASE("SBridge 读 64B：AR(len=1) → R×2 → CompData×2（DataID 0/2）"
     b.axi_ar_rdy.set(true);
 
     // order=0 → 无 ReadReceipt；mem_attr=0xE（非 device）→ cache=0b010|ewa
-    Dec<HReqFlit> q;
+    Valid<HReqFlit> q;
     q.valid = true;
     q.bits  = mkEReq(req_op::kReadNoSnp, 0x2000'0000, 6, 0x33, 0, 0xE);
     b.rx_req.set(q);
     comb(b);
     CHECK(b.rx_req_rdy.get());
     edge(b);
-    b.rx_req.set(Dec<HReqFlit>{});
+    b.rx_req.set(Valid<HReqFlit>{});
 
     // AR（len=1, size=5）——经 CondVipArb 的 selReg 有一拍注册延迟，轮询等待
     bool sawAr = false;
@@ -288,7 +288,7 @@ TEST_CASE("SBridge 读 64B：AR(len=1) → R×2 → CompData×2（DataID 0/2）"
 
     // 拍 2/3：R 两拍 → CompData×2（readCnt 驱动 DataID）
     for (uint32_t k = 0; k < 2; ++k) {
-        Dec<RFlit> r;
+        Valid<RFlit> r;
         r.valid          = true;
         r.bits.id        = 0;
         r.bits.last      = k == 1;
@@ -297,7 +297,7 @@ TEST_CASE("SBridge 读 64B：AR(len=1) → R×2 → CompData×2（DataID 0/2）"
         comb(b);
         CHECK(b.axi_r_rdy.get());
         edge(b);
-        b.axi_r.set(Dec<RFlit>{});
+        b.axi_r.set(Valid<RFlit>{});
         comb(b);
         CHECK(b.tx_data.get().valid);
         CHECK(b.tx_data.get().bits.opcode == dat_op::kCompData);
@@ -323,14 +323,14 @@ TEST_CASE("SBridge 写 64B：alloc→DBIDResp→数据×2→AW→W×2→B→Comp
     b.axi_w_rdy.set(true);
 
     // 拍 0：WriteNoSnpFull 64B（ewa=0 → Comp 等 B）
-    Dec<HReqFlit> q;
+    Valid<HReqFlit> q;
     q.valid = true;
     q.bits  = mkEReq(req_op::kWriteNoSnpFull, 0x2000'0000, 6, 0x44, 0, 0xC);
     b.rx_req.set(q);
     comb(b);
     CHECK(b.rx_req_rdy.get());
     edge(b);
-    b.rx_req.set(Dec<HReqFlit>{});
+    b.rx_req.set(Valid<HReqFlit>{});
 
     // alloc →（allocSel+Queue(2)+freelist）→ DBIDResp；逐拍等到其出现
     bool gotDbid = false;
@@ -348,7 +348,7 @@ TEST_CASE("SBridge 写 64B：alloc→DBIDResp→数据×2→AW→W×2→B→Comp
 
     // 写数据两拍（DataID=0/2 → buf 槽 0/1；TxnID=DBID=0）
     for (uint32_t k = 0; k < 2; ++k) {
-        Dec<DataFlit> wd;
+        Valid<DataFlit> wd;
         wd.valid        = true;
         wd.bits.opcode  = dat_op::kNonCopyBackWriteData;
         wd.bits.txn_id  = 0;
@@ -358,7 +358,7 @@ TEST_CASE("SBridge 写 64B：alloc→DBIDResp→数据×2→AW→W×2→B→Comp
         b.rx_data.set(wd);
         comb(b);
         edge(b);
-        b.rx_data.set(Dec<DataFlit>{});
+        b.rx_data.set(Valid<DataFlit>{});
     }
 
     // AW（u.wdata 到齐后；len=1）
@@ -388,13 +388,13 @@ TEST_CASE("SBridge 写 64B：alloc→DBIDResp→数据×2→AW→W×2→B→Comp
     CHECK(wBeats == 2);
 
     // B → Comp
-    Dec<BFlit> br;
+    Valid<BFlit> br;
     br.valid   = true;
     br.bits.id = 0;
     b.axi_b.set(br);
     comb(b);
     edge(b);
-    b.axi_b.set(Dec<BFlit>{});
+    b.axi_b.set(Valid<BFlit>{});
 
     bool sawComp = false;
     for (uint32_t t = 0; t < 8 && !sawComp; ++t) {
@@ -420,13 +420,13 @@ TEST_CASE("SBridge 同 tag 保序：写未完成时同 32KB 读被阻塞") {
     b.axi_ar_rdy.set(true);
 
     // 写 @0x2000'0000 先行（挂起：不给 B）
-    Dec<HReqFlit> qw;
+    Valid<HReqFlit> qw;
     qw.valid = true;
     qw.bits  = mkEReq(req_op::kWriteNoSnpFull, 0x2000'0000, 6, 0x50, 0, 0xC);
     b.rx_req.set(qw);
     comb(b);
     edge(b);
-    b.rx_req.set(Dec<HReqFlit>{});
+    b.rx_req.set(Valid<HReqFlit>{});
 
     // 等 DBIDResp（协议时序：数据必须在 DBIDResp 之后给）
     for (uint32_t t = 0; t < 10; ++t) {
@@ -438,7 +438,7 @@ TEST_CASE("SBridge 同 tag 保序：写未完成时同 32KB 读被阻塞") {
 
     // 写数据两拍
     for (uint32_t k = 0; k < 2; ++k) {
-        Dec<DataFlit> wd;
+        Valid<DataFlit> wd;
         wd.valid        = true;
         wd.bits.opcode  = dat_op::kNonCopyBackWriteData;
         wd.bits.txn_id  = 0;
@@ -447,18 +447,18 @@ TEST_CASE("SBridge 同 tag 保序：写未完成时同 32KB 读被阻塞") {
         b.rx_data.set(wd);
         comb(b);
         edge(b);
-        b.rx_data.set(Dec<DataFlit>{});
+        b.rx_data.set(Valid<DataFlit>{});
     }
 
     // 同 tag 读入队（addr[37:6] 相同 = 同 64B 块：写 @0x2000'0000、读 @0x2000'0008）
-    Dec<HReqFlit> qr;
+    Valid<HReqFlit> qr;
     qr.valid = true;
     qr.bits  = mkEReq(req_op::kReadNoSnp, 0x2000'0008, 2, 0x51, 0, 0xE);
     b.rx_req.set(qr);
     comb(b);
     CHECK(b.rx_req_rdy.get());  // CM 有空闲，入队不受阻
     edge(b);
-    b.rx_req.set(Dec<HReqFlit>{});
+    b.rx_req.set(Valid<HReqFlit>{});
 
     // 推进若干拍：写的 AW/W 走完（不给 B）；读的 AR 必须一直压着
     for (uint32_t t = 0; t < 20; ++t) {
@@ -467,13 +467,13 @@ TEST_CASE("SBridge 同 tag 保序：写未完成时同 32KB 读被阻塞") {
         edge(b);
     }
     // 给 B：写完成 → wakeup → 读的 waiting 递减到 0 → AR 发出
-    Dec<BFlit> br;
+    Valid<BFlit> br;
     br.valid   = true;
     br.bits.id = 0;
     b.axi_b.set(br);
     comb(b);
     edge(b);
-    b.axi_b.set(Dec<BFlit>{});
+    b.axi_b.set(Valid<BFlit>{});
 
     bool sawAr = false;
     for (uint32_t t = 0; t < 10 && !sawAr; ++t) {

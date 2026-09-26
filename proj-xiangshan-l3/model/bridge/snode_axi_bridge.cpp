@@ -17,19 +17,19 @@ SNodeAxiBridge::SNodeAxiBridge() {
         Cm& cm     = cms[i];
         cm.clk     = clk;
         cm.idx     = i;
-        cm.rx_resp = Dec<RespFlit>{};  // S 无 rx.resp（tie invalid）
+        cm.rx_resp = Valid<RespFlit>{};  // S 无 rx.resp（tie invalid）
     }
 
     // ---- 汇聚 ----
     wolvicmod::combine(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
     wolvicmod::combine(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
-    wolvicmod::combine(rsp_in, cms, [](Cm& cm) -> Out<Dec<RespFlit>>& { return cm.tx_resp; });
-    wolvicmod::combine(aw_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_aw; });
-    wolvicmod::combine(ar_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_ar; });
+    wolvicmod::combine(rsp_in, cms, [](Cm& cm) -> Out<Valid<RespFlit>>& { return cm.tx_resp; });
+    wolvicmod::combine(aw_in, cms, [](Cm& cm) -> Out<Valid<axi::AxFlit>>& { return cm.axi_aw; });
+    wolvicmod::combine(ar_in, cms, [](Cm& cm) -> Out<Valid<axi::AxFlit>>& { return cm.axi_ar; });
     wolvicmod::combine(alloc_in, cms,
-                       [](Cm& cm) -> Out<Dec<AllocReqBits>>& { return cm.alloc_req; });
+                       [](Cm& cm) -> Out<Valid<AllocReqBits>>& { return cm.alloc_req; });
     wolvicmod::combine(w_all, cms,
-                       [](Cm& cm) -> Out<Dec<axi::WFlit>>& { return cm.axi_w; });
+                       [](Cm& cm) -> Out<Valid<axi::WFlit>>& { return cm.axi_w; });
 
     // ---- 仲裁合流 ----
     rsp_arb.in = rsp_in;
@@ -90,7 +90,7 @@ SNodeAxiBridge::SNodeAxiBridge() {
         Cm& cm = cms[i];
         cm.rx_req.assign().reads(rx_req, free_lo) = [i](auto src) {
             auto [rx_req, free_lo] = src;
-            Dec<HReqFlit> d;
+            Valid<HReqFlit> d;
             d.valid = rx_req.valid && free_lo[i];
             d.bits  = rx_req.bits;
             return d;
@@ -140,7 +140,7 @@ SNodeAxiBridge::SNodeAxiBridge() {
     };
     aw_q.enq.assign().reads(aw_arb.chosen, w_aw_out_fire) = [](auto src) {
         auto [aw_arb_chosen, w_aw_out_fire] = src;
-        Dec<uint64_t> d;
+        Valid<uint64_t> d;
         d.valid = w_aw_out_fire;  // RTL 断言 awQueue 不满（每 CM 至多一笔 AW）
         d.bits  = uint64_t{1} << aw_arb_chosen;
         return d;
@@ -153,7 +153,7 @@ SNodeAxiBridge::SNodeAxiBridge() {
     };
     data_buf.from_cm.assign().reads(aw_q.deq, w_wsel_vld) = [](auto src) {
         auto [aw_q_deq, w_wsel_vld] = src;
-        Dec<uint64_t> d;
+        Valid<uint64_t> d;
         d.valid = aw_q_deq.valid && w_wsel_vld;
         d.bits  = aw_q_deq.bits;
         return d;
@@ -181,14 +181,14 @@ SNodeAxiBridge::SNodeAxiBridge() {
         Cm& cm = cms[i];
         cm.axi_b.assign().reads(axi_b) = [i](auto src) {
             auto [axi_b] = src;
-            Dec<axi::BFlit> d;
+            Valid<axi::BFlit> d;
             d.valid = axi_b.valid && axi_b.bits.id == i;
             d.bits  = axi_b.bits;
             return d;
         };
         cm.rx_data.assign().reads(data_buf.to_cm) = [i](auto src) {
             auto [data_buf_to_cm] = src;
-            Dec<DataFlit> d;
+            Valid<DataFlit> d;
             d.valid = data_buf_to_cm.valid &&
                       (data_buf_to_cm.bits.txn_id & (kOutst - 1)) == i;
             d.bits  = data_buf_to_cm.bits;
@@ -200,7 +200,7 @@ SNodeAxiBridge::SNodeAxiBridge() {
     rd_pipe.enq.assign().reads(axi_r, info_all) = [](auto src) {
         auto [axi_r, info_all] = src;
         const auto& cs = info_all[axi_r.bits.id & (kOutst - 1)].info;  // ctrlSel
-        Dec<DataFlit> d;
+        Valid<DataFlit> d;
         d.valid           = axi_r.valid;
         d.bits            = DataFlit{};
         d.bits.data       = axi_r.bits.data;

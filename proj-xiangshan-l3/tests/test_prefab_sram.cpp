@@ -16,17 +16,17 @@ using namespace prefabtest;
 namespace {
 
 template <class T, uint32_t Ways>
-Dec<SramReqBits<T, Ways>> wrReq(uint32_t addr, uint32_t mask, std::array<T, Ways> data) {
+Valid<SramReqBits<T, Ways>> wrReq(uint32_t addr, uint32_t mask, std::array<T, Ways> data) {
     return {true, {true, addr, mask, data}};
 }
 
 template <class T, uint32_t Ways>
-Dec<SramReqBits<T, Ways>> rdReq(uint32_t addr) {
+Valid<SramReqBits<T, Ways>> rdReq(uint32_t addr) {
     return {true, {false, addr, 0, {}}};
 }
 
 template <class T, uint32_t Ways>
-Dec<SramReqBits<T, Ways>> idleReq() {
+Valid<SramReqBits<T, Ways>> idleReq() {
     return {false, {}};
 }
 

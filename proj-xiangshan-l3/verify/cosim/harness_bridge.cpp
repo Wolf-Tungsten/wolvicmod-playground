@@ -122,15 +122,15 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
         ref.axi_r_valid = 0;
     };
     cosim::resetRef(ref, zeroInputs);
-    dut.rx_req.set(Dec<HReqFlit>{});
-    dut.rx_data.set(Dec<DataFlit>{});
+    dut.rx_req.set(Valid<HReqFlit>{});
+    dut.rx_data.set(Valid<DataFlit>{});
     dut.tx_resp_rdy.set(false);
     dut.tx_data_rdy.set(false);
     dut.axi_aw_rdy.set(false);
     dut.axi_ar_rdy.set(false);
     dut.axi_w_rdy.set(false);
-    dut.axi_b.set(Dec<BFlit>{});
-    dut.axi_r.set(Dec<RFlit>{});
+    dut.axi_b.set(Valid<BFlit>{});
+    dut.axi_r.set(Valid<RFlit>{});
 
     // 地址池：4 条 64B 行 + 行内偏移（同块 tag 冲突）
     const uint64_t lineBase[4] = {0x8000'0000, 0x8000'0040, 0x8001'0000, 0x8001'0040};
@@ -281,13 +281,13 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
             ref.icn_rx_req_bits_SrcID      = reqBits.src_id;
             ref.icn_rx_req_bits_TgtID      = reqBits.tgt_id;
             ref.icn_rx_req_bits_QoS        = reqBits.qos;
-            Dec<HReqFlit> dq;
+            Valid<HReqFlit> dq;
             dq.valid = true;
             dq.bits  = reqBits;
             dut.rx_req.set(dq);
         } else {
             ref.icn_rx_req_valid = 0;
-            dut.rx_req.set(Dec<HReqFlit>{});
+            dut.rx_req.set(Valid<HReqFlit>{});
         }
         if (datPend) {
             ref.icn_rx_data_valid = 1;
@@ -305,13 +305,13 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
             ref.icn_rx_data_bits_SrcID      = datBits.src_id;
             ref.icn_rx_data_bits_TgtID      = datBits.tgt_id;
             ref.icn_rx_data_bits_QoS        = datBits.qos;
-            Dec<DataFlit> dd;
+            Valid<DataFlit> dd;
             dd.valid = true;
             dd.bits  = datBits;
             dut.rx_data.set(dd);
         } else {
             ref.icn_rx_data_valid = 0;
-            dut.rx_data.set(Dec<DataFlit>{});
+            dut.rx_data.set(Valid<DataFlit>{});
         }
 
         // ---- rdy 反压（排空期全撤）----
@@ -347,7 +347,7 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
         ref.axi_b_bits_id = bDrive ? awQ.front().id : 0;
         ref.axi_b_bits_resp = 0;
         {
-            Dec<BFlit> db;
+            Valid<BFlit> db;
             db.valid      = bDrive;
             db.bits.id    = bDrive ? awQ.front().id : 0;
             db.bits.resp  = 0;
@@ -378,7 +378,7 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
         ref.axi_r_bits_resp = rBits.resp;
         ref.axi_r_bits_last = rBits.last;
         {
-            Dec<RFlit> dr;
+            Valid<RFlit> dr;
             dr.valid = rPend;
             dr.bits  = rBits;
             dut.axi_r.set(dr);
@@ -718,16 +718,16 @@ uint64_t cosimHiBridge(uint32_t seed, uint64_t cycles) {
     };
     cosim::resetRef(ref, zeroInputs);
     dut.node_id.set(0x20);
-    dut.rx_req.set(Dec<RReqFlit>{});
-    dut.rx_resp.set(Dec<RespFlit>{});
-    dut.rx_data.set(Dec<DataFlit>{});
+    dut.rx_req.set(Valid<RReqFlit>{});
+    dut.rx_resp.set(Valid<RespFlit>{});
+    dut.rx_data.set(Valid<DataFlit>{});
     dut.tx_resp_rdy.set(false);
     dut.tx_data_rdy.set(false);
     dut.axi_aw_rdy.set(false);
     dut.axi_ar_rdy.set(false);
     dut.axi_w_rdy.set(false);
-    dut.axi_b.set(Dec<BFlit>{});
-    dut.axi_r.set(Dec<RFlit>{});
+    dut.axi_b.set(Valid<BFlit>{});
+    dut.axi_r.set(Valid<RFlit>{});
 
     // 地址池：两个 tag（addr[18:3]）各 4 项——同 tag 冲突与并行并存（全池同
     // tag 时保序链过长会触发 RTL 的 5 万拍 timer 调试断言）
@@ -828,38 +828,38 @@ uint64_t cosimHiBridge(uint32_t seed, uint64_t cycles) {
             ref.icn_rx_req_bits_TxnID      = reqBits.txn_id;
             ref.icn_rx_req_bits_SrcID      = reqBits.src_id;
             ref.icn_rx_req_bits_QoS        = reqBits.qos;
-            Dec<RReqFlit> dq;
+            Valid<RReqFlit> dq;
             dq.valid = true;
             dq.bits  = reqBits;
             dut.rx_req.set(dq);
         } else {
             ref.icn_rx_req_valid = 0;
-            dut.rx_req.set(Dec<RReqFlit>{});
+            dut.rx_req.set(Valid<RReqFlit>{});
         }
         if (ackPend) {
             ref.icn_rx_resp_valid        = 1;
             ref.icn_rx_resp_bits_Opcode  = ackBits.opcode;
             ref.icn_rx_resp_bits_TxnID   = ackBits.txn_id;
-            Dec<RespFlit> da;
+            Valid<RespFlit> da;
             da.valid = true;
             da.bits  = ackBits;
             dut.rx_resp.set(da);
         } else {
             ref.icn_rx_resp_valid = 0;
-            dut.rx_resp.set(Dec<RespFlit>{});
+            dut.rx_resp.set(Valid<RespFlit>{});
         }
         if (datPend) {
             ref.icn_rx_data_valid = 1;
             setWide(ref.icn_rx_data_bits_Data, datBits.data);
             ref.icn_rx_data_bits_Opcode = datBits.opcode;
             ref.icn_rx_data_bits_TxnID  = datBits.txn_id;
-            Dec<DataFlit> dd;
+            Valid<DataFlit> dd;
             dd.valid = true;
             dd.bits  = datBits;
             dut.rx_data.set(dd);
         } else {
             ref.icn_rx_data_valid = 0;
-            dut.rx_data.set(Dec<DataFlit>{});
+            dut.rx_data.set(Valid<DataFlit>{});
         }
 
         // rdy 反压（排空期全撤）
@@ -888,7 +888,7 @@ uint64_t cosimHiBridge(uint32_t seed, uint64_t cycles) {
         ref.axi_b_valid   = bDrive;
         ref.axi_b_bits_id = bDrive ? awQ.front().id : 0;
         {
-            Dec<BFlit> db;
+            Valid<BFlit> db;
             db.valid     = bDrive;
             db.bits.id   = bDrive ? awQ.front().id : 0;
             db.bits.resp = 0;
@@ -918,7 +918,7 @@ uint64_t cosimHiBridge(uint32_t seed, uint64_t cycles) {
         ref.axi_r_bits_resp = rBits.resp;
         ref.axi_r_bits_last = rBits.last;
         {
-            Dec<RFlit> dr;
+            Valid<RFlit> dr;
             dr.valid = rPend;
             dr.bits  = rBits;
             dut.axi_r.set(dr);

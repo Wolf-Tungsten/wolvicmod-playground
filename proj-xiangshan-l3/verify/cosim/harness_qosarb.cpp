@@ -41,7 +41,7 @@ uint64_t cosimQosArb(const char* cfg, uint32_t seed, uint64_t cycles) {
     cosim::Stats st;
     cosim::Replay rp;
     constexpr uint32_t N = 4;
-    using InArr = std::array<Dec<QosBitsC>, N>;
+    using InArr = std::array<Valid<QosBitsC>, N>;
 
     cosim::resetRef(ref, [&] {
         ref.in_valid = 0;

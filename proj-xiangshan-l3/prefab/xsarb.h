@@ -5,10 +5,10 @@
 // Alloc）。chisel3 标准库的 FixedArb/RRArb 在 wolvicmod 侧（prefab/arb.h），
 // 本文件的 QosFixedArb 直接复用之。
 //
-// 统一端口形态（阵列端口）：输入侧一路 In<std::array<Dec<T>,N>> in + 一路
-// Out<std::array<bool,N>> in_rdy；输出侧 Out<Dec<T>> out + In<bool> out_rdy；
+// 统一端口形态（阵列端口）：输入侧一路 In<std::array<Valid<T>,N>> in + 一路
+// Out<std::array<bool,N>> in_rdy；输出侧 Out<Valid<T>> out + In<bool> out_rdy；
 // 另有 Out<uint32_t> chosen（当前授权索引）。clk 端口仅为接口统一；纯组合
-// 元件（Alloc）不采样它。Alloc 方向相反的部分对应为：Out<std::array<Dec<T>,N>>
+// 元件（Alloc）不采样它。Alloc 方向相反的部分对应为：Out<std::array<Valid<T>,N>>
 // out（N 路分发）+ In<std::array<bool,N>> out_rdy。
 
 #include <array>
@@ -17,11 +17,11 @@
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::prefab {
 
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::FixedArb;
 
 // ---------------- VipArb：xs-utils VipArbiter ----------------
@@ -37,14 +37,14 @@ template <class T, uint32_t N>
 class VipArb : public wolvicmod::Module {
 public:
     static_assert(N >= 1);
-    using DecT = Dec<T>;
-    using InArr = std::array<DecT, N>;  // 宏参数含逗号，先取别名
+    using ValidT = Valid<T>;
+    using InArr = std::array<ValidT, N>;  // 宏参数含逗号，先取别名
     using RdyArr = std::array<bool, N>;
 
     IN(bool, clk);
     IN(InArr, in);
     OUT(RdyArr, in_rdy);
-    OUT(DecT, out);
+    OUT(ValidT, out);
     IN(bool, out_rdy);
     OUT(uint32_t, chosen);
 
@@ -65,7 +65,7 @@ public:
         };
         out.assign().reads(in, chosen) = [](auto src) {
             auto [in, chosen] = src;
-            DecT o;
+            ValidT o;
             for (uint32_t i = 0; i < N; ++i) o.valid = o.valid || in[i].valid;
             // chisel Mux1H(selPtrOH)：无授权时输出零值
             o.bits = o.valid ? in[chosen].bits : T{};
@@ -127,14 +127,14 @@ template <class T, uint32_t N, class Sub = VipArb<T, N>>
 class QosArb : public wolvicmod::Module {
 public:
     static_assert(N >= 1);
-    using DecT = Dec<T>;
-    using InArr = std::array<DecT, N>;  // 宏参数含逗号，先取别名
+    using ValidT = Valid<T>;
+    using InArr = std::array<ValidT, N>;  // 宏参数含逗号，先取别名
     using RdyArr = std::array<bool, N>;
 
     IN(bool, clk);
     IN(InArr, in);
     OUT(RdyArr, in_rdy);
-    OUT(DecT, out);
+    OUT(ValidT, out);
     IN(bool, out_rdy);
     OUT(uint32_t, chosen);
 
@@ -202,12 +202,12 @@ template <class T, uint32_t N>
 class Alloc : public wolvicmod::Module {
 public:
     static_assert(N >= 1);
-    using DecT = Dec<T>;
-    using OutArr = std::array<DecT, N>;  // 宏参数含逗号，先取别名
+    using ValidT = Valid<T>;
+    using OutArr = std::array<ValidT, N>;  // 宏参数含逗号，先取别名
     using RdyArr = std::array<bool, N>;
 
     IN(bool, clk);  // 纯组合元件，clk 仅为接口统一保留
-    IN(DecT, in);
+    IN(ValidT, in);
     OUT(bool, in_rdy);
     OUT(uint32_t, free_id);
     OUT(OutArr, out);
@@ -251,14 +251,14 @@ template <class T, uint32_t N>
 class CondVipArb : public wolvicmod::Module {
 public:
     static_assert(N >= 1);
-    using DecT = Dec<T>;
-    using InArr = std::array<DecT, N>;  // 宏参数含逗号，先取别名
+    using ValidT = Valid<T>;
+    using InArr = std::array<ValidT, N>;  // 宏参数含逗号，先取别名
     using RdyArr = std::array<bool, N>;
 
     IN(bool, clk);
     IN(InArr, in);
     OUT(RdyArr, in_rdy);
-    OUT(DecT, out);
+    OUT(ValidT, out);
     IN(bool, out_rdy);
     OUT(uint32_t, chosen);
 

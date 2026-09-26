@@ -30,7 +30,7 @@
 #include "model/bridge/bridge_cm.h"
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 #include "wolvicmod/prefab/queue.h"
 
 namespace zj::bridge {
@@ -38,25 +38,25 @@ namespace zj::bridge {
 using namespace zj::chi;
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::Queue;
 
 class AxiDataBuffer : public wolvicmod::Module {
 public:
     IN(bool, clk);
     // 分配（来自 allocSel Queue(2) deq）
-    IN(Dec<AllocReqBits>, alloc);
+    IN(Valid<AllocReqBits>, alloc);
     OUT(bool, alloc_rdy);
     // 环侧写数据
-    IN(Dec<DataFlit>, icn);
+    IN(Valid<DataFlit>, icn);
     OUT(bool, icn_rdy);
     // CM 通知（valid-only，CM 恒 ready）
-    OUT(Dec<DataFlit>, to_cm);
+    OUT(Valid<DataFlit>, to_cm);
     // W 选择（awQueue 保序一位热）
-    IN(Dec<uint64_t>, from_cm);
+    IN(Valid<uint64_t>, from_cm);
     OUT(bool, from_cm_rdy);
     // AXI W
-    OUT(Dec<axi::WFlit>, axi_w);
+    OUT(Valid<axi::WFlit>, axi_w);
     IN(bool, axi_w_rdy);
 
     AxiDataBuffer();

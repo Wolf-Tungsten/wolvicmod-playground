@@ -32,7 +32,7 @@ TEST_CASE("PdcTx：enq 打拍到 pdc；token 计数随 fire/grant 增减") {
     tx.elaborate();
     tx.pdc_grant.set(false);
 
-    Dec<RReqFlit> in;
+    Valid<RReqFlit> in;
     in.valid = true;
     in.bits  = mkFlit(0x11);
     tx.enq.set(in);
@@ -40,7 +40,7 @@ TEST_CASE("PdcTx：enq 打拍到 pdc；token 计数随 fire/grant 增减") {
     CHECK(tx.enq_rdy.get());       // tokens=5
     CHECK(!tx.pdc.get().valid);    // 当拍不出（打 1 拍）
     edge(tx);
-    tx.enq.set(Dec<RReqFlit>{});
+    tx.enq.set(Valid<RReqFlit>{});
     comb(tx);
     CHECK(tx.pdc.get().valid);     // 1 拍后可见
     CHECK(tx.pdc.get().bits.txn_id == 0x11);
@@ -60,7 +60,7 @@ TEST_CASE("PdcTx：enq 打拍到 pdc；token 计数随 fire/grant 增减") {
     CHECK(tx.pdc.get().valid);     // 最后一个仍在 pdc
 
     // grant 来一拍 → rxg 打拍 → 下一拍 token+1 → 又能收
-    tx.enq.set(Dec<RReqFlit>{});
+    tx.enq.set(Valid<RReqFlit>{});
     tx.pdc_grant.set(true);
     cycle(tx);                 // rxg<=1
     tx.pdc_grant.set(false);
@@ -74,7 +74,7 @@ TEST_CASE("PdcRx：pdc 打拍 + flow 直通 1 拍到 deq；grant 为 deq.fire �
     rx.elaborate();
     rx.deq_rdy.set(true);
 
-    Dec<RReqFlit> p;
+    Valid<RReqFlit> p;
     p.valid = true;
     p.bits  = mkFlit(0x33);
     rx.pdc.set(p);
@@ -82,7 +82,7 @@ TEST_CASE("PdcRx：pdc 打拍 + flow 直通 1 拍到 deq；grant 为 deq.fire �
     CHECK(!rx.deq.get().valid);    // 当拍不出（rxv 打拍）
     CHECK(!rx.pdc_grant.get());
     edge(rx);
-    rx.pdc.set(Dec<RReqFlit>{});
+    rx.pdc.set(Valid<RReqFlit>{});
     comb(rx);
     CHECK(rx.deq.get().valid);     // rxv=1 + flow 直通
     CHECK(rx.deq.get().bits.txn_id == 0x33);
@@ -101,7 +101,7 @@ TEST_CASE("PdcRx：pdc 打拍 + flow 直通 1 拍到 deq；grant 为 deq.fire �
     p.bits = mkFlit(0x44);
     rx.pdc.set(p);
     cycle(rx);
-    rx.pdc.set(Dec<RReqFlit>{});
+    rx.pdc.set(Valid<RReqFlit>{});
     comb(rx);
     CHECK(rx.deq.get().valid);     // flow 直通（不 fire）
     CHECK(rx.deq.get().bits.txn_id == 0x44);
@@ -128,14 +128,14 @@ TEST_CASE("PdcTx→PdcRx 链路：enq 到 deq 固定 2 拍；grant 回路还 tok
         tx.pdc_grant.set(rx.pdc_grant.get());
     };
 
-    Dec<RReqFlit> in;
+    Valid<RReqFlit> in;
     in.valid = true;
     in.bits  = mkFlit(0x77);
     tx.enq.set(in);
     comb(tx);
     CHECK(tx.enq_rdy.get());
     edge(tx);                      // T0 fire（恰好 1 个）
-    tx.enq.set(Dec<RReqFlit>{});
+    tx.enq.set(Valid<RReqFlit>{});
     link(); comb(tx); comb(rx);    // T1：pdc.valid=1，rx 尚无输出
     CHECK(!rx.deq.get().valid);
     edge(tx); edge(rx);            // rxv<=1
@@ -164,7 +164,7 @@ TEST_CASE("PdcTx→PdcRx 链路：enq 到 deq 固定 2 拍；grant 回路还 tok
     }
     comb(tx);
     CHECK(!tx.enq_rdy.get());      // 恰好耗尽
-    tx.enq.set(Dec<RReqFlit>{});
+    tx.enq.set(Valid<RReqFlit>{});
 }
 
 }  // namespace

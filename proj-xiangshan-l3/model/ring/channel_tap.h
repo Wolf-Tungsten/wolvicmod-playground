@@ -26,11 +26,11 @@
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::ring {
 
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 using wolvicmod::prefab::RRArb;
 
 // ---------------- SingleChannelTap ----------------
@@ -38,15 +38,15 @@ using wolvicmod::prefab::RRArb;
 template <class FlitT>
 class SingleChannelTap : public wolvicmod::Module {
 public:
-    using DecT = Dec<FlitT>;
+    using ValidT = Valid<FlitT>;
     using Slot = RingSlot<FlitT>;
 
     IN(bool, clk);
     IN(Slot, rx);
     OUT(Slot, tx);
-    IN(DecT, inject);
+    IN(ValidT, inject);
     OUT(bool, inject_rdy);
-    OUT(DecT, eject);
+    OUT(ValidT, eject);
     IN(bool, eject_rdy);
     IN(uint16_t, match_tag);  // 本节点 nodeId（nid<<3，aid=0）
     IN(uint8_t, tap_idx);     // 方向 idx（0/1）
@@ -107,7 +107,7 @@ private:
 template <class FlitT, uint32_t EjDepth, bool IsDat>
 class ChannelTap : public wolvicmod::Module {
 public:
-    using DecT  = Dec<FlitT>;
+    using ValidT  = Valid<FlitT>;
     using Slot  = RingSlot<FlitT>;
     using SelArr = std::array<bool, 2>;
 
@@ -116,10 +116,10 @@ public:
     IN(Slot, rx1);
     OUT(Slot, tx0);
     OUT(Slot, tx1);
-    IN(DecT, inject);
+    IN(ValidT, inject);
     OUT(bool, inject_rdy);
     IN(SelArr, tap_sel_oh);
-    OUT(DecT, eject);
+    OUT(ValidT, eject);
     IN(bool, eject_rdy);
     IN(uint16_t, match_tag);
 
@@ -146,7 +146,7 @@ SingleChannelTap<FlitT>::SingleChannelTap() {
     };
     eject.assign().reads(rx, w_eject_vld) = [](auto src) {
         auto [rx, w_eject_vld] = src;
-        DecT d;
+        ValidT d;
         d.valid = w_eject_vld;
         d.bits  = rx.flit;
         return d;
@@ -259,14 +259,14 @@ ChannelTap<FlitT, EjDepth, IsDat>::ChannelTap() {
     // 注入分发（ChannelTap.scala:174-175, 191）
     tap0.inject.assign().reads(inject, tap_sel_oh) = [](auto src) {
         auto [inject, tap_sel_oh] = src;
-        DecT d;
+        ValidT d;
         d.valid = inject.valid && tap_sel_oh[0];
         d.bits  = inject.bits;
         return d;
     };
     tap1.inject.assign().reads(inject, tap_sel_oh) = [](auto src) {
         auto [inject, tap_sel_oh] = src;
-        DecT d;
+        ValidT d;
         d.valid = inject.valid && tap_sel_oh[1];
         d.bits  = inject.bits;
         return d;
@@ -296,7 +296,7 @@ ChannelTap<FlitT, EjDepth, IsDat>::ChannelTap() {
     };
     earb.in.assign().reads(eb0.deq, eb1.deq) = [](auto src) {
         auto [eb0_deq, eb1_deq] = src;
-        return std::array<DecT, 2>{eb0_deq, eb1_deq};
+        return std::array<ValidT, 2>{eb0_deq, eb1_deq};
     };
     eb0.deq_rdy.assign().reads(earb.in_rdy) = [](auto src) {
         auto [earb_in_rdy] = src;

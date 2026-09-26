@@ -33,7 +33,7 @@ AxiDataBuffer::AxiDataBuffer() {
         auto [st] = src;
         const uint32_t  txn = st.rx_bits_reg.txn_id & (kSize - 1);
         const CtrlEntry& ce  = st.ctrl[txn];
-        Dec<DataFlit> d;
+        Valid<DataFlit> d;
         d.valid = st.rx_vld_reg &&
                   (ce.recv_cnt == ce.recv_max + 1 ||
                    st.rx_bits_reg.opcode == dat_op::kWriteDataCancel);
@@ -54,7 +54,7 @@ AxiDataBuffer::AxiDataBuffer() {
     // readDataReq：valid=txReqValid（不经 ready 门控），fire 受 stage1 反压
     stage1.enq.assign().reads(st) = [](auto src) {
         auto [st] = src;
-        Dec<S1Bits> d;
+        Valid<S1Bits> d;
         d.valid     = st.tx_req_vld;
         d.bits.set  = st.tx_ctrl.buf[st.tx_cnt & 1];
         d.bits.last = st.tx_cnt == st.tx_ctrl.recv_max;
@@ -76,7 +76,7 @@ AxiDataBuffer::AxiDataBuffer() {
     stage1.deq_rdy = stage2.enq_rdy;
     stage2.enq.assign().reads(stage1.deq, st) = [](auto src) {
         auto [stage1_deq, st] = src;
-        Dec<axi::WFlit> d;
+        Valid<axi::WFlit> d;
         d.valid      = stage1_deq.valid;
         d.bits.data  = st.data_ram[stage1_deq.bits.set];
         d.bits.strb  = st.mask_ram[stage1_deq.bits.set];

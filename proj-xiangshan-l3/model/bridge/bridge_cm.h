@@ -27,14 +27,14 @@
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::bridge {
 
 using namespace zj::chi;
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 // wakeup 广播载荷（Valid(addr)）
 struct WkV {
@@ -117,20 +117,20 @@ public:
     IN(bool, clk);
     IN(uint32_t, idx);
     // CHI 侧
-    IN(Dec<ReqT>, rx_req);
+    IN(Valid<ReqT>, rx_req);
     OUT(bool, rx_req_rdy);
-    IN(Dec<RespFlit>, rx_resp);  // 仅 HI 消费（CompAck）；S 桥顶 tie invalid
-    IN(Dec<DataFlit>, rx_data);  // rdy 恒 true（RTL 直连，不出口）
-    OUT(Dec<RespFlit>, tx_resp);
+    IN(Valid<RespFlit>, rx_resp);  // 仅 HI 消费（CompAck）；S 桥顶 tie invalid
+    IN(Valid<DataFlit>, rx_data);  // rdy 恒 true（RTL 直连，不出口）
+    OUT(Valid<RespFlit>, tx_resp);
     IN(bool, tx_resp_rdy);
     // AXI 侧
-    OUT(Dec<axi::AWFlit>, axi_aw);
+    OUT(Valid<axi::AWFlit>, axi_aw);
     IN(bool, axi_aw_rdy);
-    OUT(Dec<axi::ARFlit>, axi_ar);
+    OUT(Valid<axi::ARFlit>, axi_ar);
     IN(bool, axi_ar_rdy);
-    OUT(Dec<axi::WFlit>, axi_w);
+    OUT(Valid<axi::WFlit>, axi_w);
     IN(bool, axi_w_rdy);
-    IN(Dec<axi::BFlit>, axi_b);  // rdy 恒 true
+    IN(Valid<axi::BFlit>, axi_b);  // rdy 恒 true
     // 桥顶广播
     IN(bool, rd_fire);  // io.readDataFire = axi.r.fire && id===idx
     IN(bool, rd_last);
@@ -139,7 +139,7 @@ public:
     OUT(WkV, wakeup_out);
     OUT(InfoV, info_out);
     // S：dataBufferAlloc（HI 不消费，CM 内 tie invalid）
-    OUT(Dec<AllocReqBits>, alloc_req);
+    OUT(Valid<AllocReqBits>, alloc_req);
     IN(bool, alloc_req_rdy);
     IN(bool, alloc_resp);
 
@@ -230,7 +230,7 @@ BridgeCm<Tr>::BridgeCm() {
         tx_resp.assign().reads(st, idx, w_icn_receipt, w_icn_dbid, w_icn_comp, w_rsp_op) =
             [](auto src) {
                 auto [st, idx, w_icn_receipt, w_icn_dbid, w_icn_comp, w_rsp_op] = src;
-                Dec<RespFlit> d;
+                Valid<RespFlit> d;
                 d.valid = st.valid && (w_icn_receipt || w_icn_dbid || w_icn_comp);
                 auto& b = d.bits;
                 b.opcode  = w_rsp_op;
@@ -251,21 +251,21 @@ BridgeCm<Tr>::BridgeCm() {
         // ---- AXI 发出（*CtrlMachine.scala；waiting==0 门控）----
         axi_aw.assign().reads(st, idx) = [](auto src) {
             auto [st, idx] = src;
-            Dec<axi::AWFlit> d;
+            Valid<axi::AWFlit> d;
             d.valid = st.valid && !st.d.waddr && st.u.wdata && st.waiting == 0;
             d.bits  = Tr::mkAx(st.info, idx);
             return d;
         };
         axi_ar.assign().reads(st, idx) = [](auto src) {
             auto [st, idx] = src;
-            Dec<axi::ARFlit> d;
+            Valid<axi::ARFlit> d;
             d.valid = st.valid && !st.d.raddr && st.waiting == 0;
             d.bits  = Tr::mkAx(st.info, idx);
             return d;
         };
         axi_w.assign().reads(st, idx) = [](auto src) {
             auto [st, idx] = src;
-            Dec<axi::WFlit> d;
+            Valid<axi::WFlit> d;
             d.valid = st.valid && st.d.waddr && !st.d.wdata && st.u.wdata &&
                       st.waiting == 0;
             d.bits  = Tr::mkW(st.info);
@@ -288,7 +288,7 @@ BridgeCm<Tr>::BridgeCm() {
         if constexpr (Tr::kSn) {
             alloc_req.assign().reads(st, idx) = [](auto src) {
                 auto [st, idx] = src;
-                Dec<AllocReqBits> d;
+                Valid<AllocReqBits> d;
                 d.valid = st.valid && !st.alloc_issued && !st.buffer_allocated &&
                           st.waiting == 0;
                 d.bits.idx_oh         = uint64_t{1} << idx;
@@ -302,7 +302,7 @@ BridgeCm<Tr>::BridgeCm() {
                 return alloc_req.valid && alloc_req_rdy;
             };
         } else {
-            alloc_req   = Dec<AllocReqBits>{};
+            alloc_req   = Valid<AllocReqBits>{};
             w_alloc_fire = false;
         }
 

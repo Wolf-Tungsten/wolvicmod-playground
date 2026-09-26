@@ -20,7 +20,7 @@ HnfStub::HnfStub() {
     };
     hnx_tx_resp.assign().reads(st, w_head_due) = [](auto src) {
         auto [st, w_head_due] = src;
-        Dec<RespFlit> d;
+        Valid<RespFlit> d;
         d.valid = w_head_due && !st.entries[0].sent_rsp;
         d.bits  = RespFlit{};
         if (d.valid) {
@@ -32,7 +32,7 @@ HnfStub::HnfStub() {
     };
     hnx_tx_data.assign().reads(st, w_head_due) = [](auto src) {
         auto [st, w_head_due] = src;
-        Dec<DataFlit> d;
+        Valid<DataFlit> d;
         d.valid = w_head_due && st.entries[0].sent_rsp;
         d.bits  = DataFlit{};
         if (d.valid) {
@@ -42,8 +42,8 @@ HnfStub::HnfStub() {
         }
         return d;
     };
-    hnx_tx_snoop = Dec<SnoopFlit>{};
-    hnx_tx_erq   = Dec<HReqFlit>{};
+    hnx_tx_snoop = Valid<SnoopFlit>{};
+    hnx_tx_erq   = Valid<HReqFlit>{};
 
     w_rsp_fire.assign().reads(hnx_tx_resp, hnx_tx_resp_rdy) = [](auto src) {
         auto [hnx_tx_resp, hnx_tx_resp_rdy] = src;

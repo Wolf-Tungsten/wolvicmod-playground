@@ -21,11 +21,11 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
 
     wolvicmod::combine(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
     wolvicmod::combine(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
-    wolvicmod::combine(rsp_in, cms, [](Cm& cm) -> Out<Dec<RespFlit>>& { return cm.tx_resp; });
-    wolvicmod::combine(aw_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_aw; });
-    wolvicmod::combine(ar_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_ar; });
+    wolvicmod::combine(rsp_in, cms, [](Cm& cm) -> Out<Valid<RespFlit>>& { return cm.tx_resp; });
+    wolvicmod::combine(aw_in, cms, [](Cm& cm) -> Out<Valid<axi::AxFlit>>& { return cm.axi_aw; });
+    wolvicmod::combine(ar_in, cms, [](Cm& cm) -> Out<Valid<axi::AxFlit>>& { return cm.axi_ar; });
     wolvicmod::combine(w_all, cms,
-                       [](Cm& cm) -> Out<Dec<axi::WFlit>>& { return cm.axi_w; });
+                       [](Cm& cm) -> Out<Valid<axi::WFlit>>& { return cm.axi_w; });
 
     rsp_arb.in = rsp_in;
     aw_arb.in = aw_in;
@@ -80,7 +80,7 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
         Cm& cm = cms[i];
         cm.rx_req.assign().reads(rx_req, free_lo) = [i](auto src) {
             auto [rx_req, free_lo] = src;
-            Dec<RReqFlit> d;
+            Valid<RReqFlit> d;
             d.valid = rx_req.valid && free_lo[i];
             d.bits  = rx_req.bits;
             return d;
@@ -115,7 +115,7 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
     };
     aw_q.enq.assign().reads(aw_arb.chosen, w_aw_out_fire) = [](auto src) {
         auto [aw_arb_chosen, w_aw_out_fire] = src;
-        Dec<uint8_t> d;
+        Valid<uint8_t> d;
         d.valid = w_aw_out_fire;
         d.bits  = uint8_t(uint8_t{1} << aw_arb_chosen);
         return d;
@@ -128,7 +128,7 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
     };
     axi_w.assign().reads(aw_q.deq, w_all, w_wsel_vld) = [](auto src) {
         auto [aw_q_deq, w_all, w_wsel_vld] = src;
-        Dec<axi::WFlit> d;
+        Valid<axi::WFlit> d;
         d.valid = aw_q_deq.valid && w_wsel_vld;
         for (uint32_t i = 0; i < kOutst; ++i)
             if ((aw_q_deq.bits >> i) & 1) d.bits = w_all[i].bits;  // Mux1H
@@ -154,21 +154,21 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
         Cm& cm = cms[i];
         cm.rx_resp.assign().reads(rx_resp) = [i](auto src) {
             auto [rx_resp] = src;
-            Dec<RespFlit> d;
+            Valid<RespFlit> d;
             d.valid = rx_resp.valid && (rx_resp.bits.txn_id & (kOutst - 1)) == i;
             d.bits  = rx_resp.bits;
             return d;
         };
         cm.rx_data.assign().reads(rx_data) = [i](auto src) {
             auto [rx_data] = src;
-            Dec<DataFlit> d;
+            Valid<DataFlit> d;
             d.valid = rx_data.valid && (rx_data.bits.txn_id & (kOutst - 1)) == i;
             d.bits  = rx_data.bits;
             return d;
         };
         cm.axi_b.assign().reads(axi_b) = [i](auto src) {
             auto [axi_b] = src;
-            Dec<axi::BFlit> d;
+            Valid<axi::BFlit> d;
             d.valid = axi_b.valid && (axi_b.bits.id & (kOutst - 1)) == i;
             d.bits  = axi_b.bits;
             return d;
@@ -179,7 +179,7 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
     rd_pipe.enq.assign().reads(axi_r, info_all, node_id) = [](auto src) {
         auto [axi_r, info_all, node_id] = src;
         const auto& cs = info_all[axi_r.bits.id & (kOutst - 1)].info;  // ctrlSel
-        Dec<DataFlit> d;
+        Valid<DataFlit> d;
         d.valid           = axi_r.valid;
         d.bits            = DataFlit{};
         d.bits.data       = axi_r.bits.data;  // Fill(dw/busDataBits=1, data)

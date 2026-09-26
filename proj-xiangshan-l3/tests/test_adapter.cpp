@@ -148,7 +148,7 @@ TEST_CASE("XscChiAdapter 模块：六通道组合直通（valid/bits/ready）") 
     ad.elaborate();
 
     // L2→ZJ 三通道：valid/bits 映射 + ready 直通
-    Dec<CHIREQ> q;
+    Valid<CHIREQ> q;
     q.valid      = true;
     q.bits.qos   = 0x9;
     q.bits.txn_id = 0x321;
@@ -167,7 +167,7 @@ TEST_CASE("XscChiAdapter 模块：六通道组合直通（valid/bits/ready）") 
     CHECK(!ad.chi_tx_req_rdy.get());
 
     // ZJ→L2 三通道
-    Dec<SnoopFlit> snp;
+    Valid<SnoopFlit> snp;
     snp.valid       = true;
     snp.bits.opcode = 0x15;
     snp.bits.src_id = 0x0DD;
@@ -180,7 +180,7 @@ TEST_CASE("XscChiAdapter 模块：六通道组合直通（valid/bits/ready）") 
     CHECK(ad.zj_tx_snp_rdy.get());
 
     // valid=0 时 bits 仍在映射（无所谓但确认纯组合无锁存）
-    ad.chi_tx_req.set(Dec<CHIREQ>{});
+    ad.chi_tx_req.set(Valid<CHIREQ>{});
     ad.eval();
     CHECK(!ad.zj_rx_req.get().valid);
 }

@@ -31,7 +31,7 @@ uint64_t cosimVipArb(const char* cfg, uint32_t seed, uint64_t cycles) {
     std::mt19937 rng(seed);
     cosim::Stats st;
     cosim::Replay rp;
-    using InArr = std::array<Dec<uint32_t>, N>;
+    using InArr = std::array<Valid<uint32_t>, N>;
 
     cosim::resetRef(ref, [&] {
         ref.in_valid = 0;

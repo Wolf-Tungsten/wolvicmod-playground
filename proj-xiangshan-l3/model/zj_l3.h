@@ -24,13 +24,13 @@
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj {
 
 using wolvicmod::In;
 using wolvicmod::Out;
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 class ZjL3 : public wolvicmod::Module {
 public:
@@ -38,56 +38,56 @@ public:
     IN(uint8_t, ci);  // 单核恒 0
 
     // ---- L2 CHI 边界（xscache flit，DecoupledPortIO 六通道）----
-    IN(Dec<xs::CHIREQ>, chi_tx_req);
+    IN(Valid<xs::CHIREQ>, chi_tx_req);
     OUT(bool, chi_tx_req_rdy);
-    IN(Dec<xs::CHIRSP>, chi_tx_rsp);
+    IN(Valid<xs::CHIRSP>, chi_tx_rsp);
     OUT(bool, chi_tx_rsp_rdy);
-    IN(Dec<xs::CHIDAT>, chi_tx_dat);
+    IN(Valid<xs::CHIDAT>, chi_tx_dat);
     OUT(bool, chi_tx_dat_rdy);
-    OUT(Dec<xs::CHIRSP>, chi_rx_rsp);
+    OUT(Valid<xs::CHIRSP>, chi_rx_rsp);
     IN(bool, chi_rx_rsp_rdy);
-    OUT(Dec<xs::CHIDAT>, chi_rx_dat);
+    OUT(Valid<xs::CHIDAT>, chi_rx_dat);
     IN(bool, chi_rx_dat_rdy);
-    OUT(Dec<xs::CHISNP>, chi_rx_snp);
+    OUT(Valid<xs::CHISNP>, chi_rx_snp);
     IN(bool, chi_rx_snp_rdy);
 
     // eject REQ 观察口（rdy 内部恒 false）
-    OUT(Dec<chi::RReqFlit>, cc_tx_req);
+    OUT(Valid<chi::RReqFlit>, cc_tx_req);
 
     // ---- 未建模站点的环边界直通（RI n3 / HI n4 / S n6）----
-    IN(Dec<chi::RReqFlit>, n3_rx_req);
+    IN(Valid<chi::RReqFlit>, n3_rx_req);
     OUT(bool, n3_rx_req_rdy);
-    IN(Dec<chi::RespFlit>, n3_rx_resp);
+    IN(Valid<chi::RespFlit>, n3_rx_resp);
     OUT(bool, n3_rx_resp_rdy);
-    IN(Dec<chi::DataFlit>, n3_rx_data);
+    IN(Valid<chi::DataFlit>, n3_rx_data);
     OUT(bool, n3_rx_data_rdy);
-    OUT(Dec<chi::RespFlit>, n3_tx_resp);
+    OUT(Valid<chi::RespFlit>, n3_tx_resp);
     IN(bool, n3_tx_resp_rdy);
-    OUT(Dec<chi::DataFlit>, n3_tx_data);
+    OUT(Valid<chi::DataFlit>, n3_tx_data);
     IN(bool, n3_tx_data_rdy);
 
     // ---- memAXI（SNode 桥，id 6b/addr 48b/data 256b）----
-    OUT(Dec<axi::AWFlit>, mem_aw);
+    OUT(Valid<axi::AWFlit>, mem_aw);
     IN(bool, mem_aw_rdy);
-    OUT(Dec<axi::WFlit>, mem_w);
+    OUT(Valid<axi::WFlit>, mem_w);
     IN(bool, mem_w_rdy);
-    OUT(Dec<axi::ARFlit>, mem_ar);
+    OUT(Valid<axi::ARFlit>, mem_ar);
     IN(bool, mem_ar_rdy);
-    IN(Dec<axi::BFlit>, mem_b);
+    IN(Valid<axi::BFlit>, mem_b);
     OUT(bool, mem_b_rdy);
-    IN(Dec<axi::RFlit>, mem_r);
+    IN(Valid<axi::RFlit>, mem_r);
     OUT(bool, mem_r_rdy);
 
     // ---- cfgAXI（HiNode 桥，id 3b/addr 48b/data 256b）----
-    OUT(Dec<axi::AWFlit>, cfg_aw);
+    OUT(Valid<axi::AWFlit>, cfg_aw);
     IN(bool, cfg_aw_rdy);
-    OUT(Dec<axi::WFlit>, cfg_w);
+    OUT(Valid<axi::WFlit>, cfg_w);
     IN(bool, cfg_w_rdy);
-    OUT(Dec<axi::ARFlit>, cfg_ar);
+    OUT(Valid<axi::ARFlit>, cfg_ar);
     IN(bool, cfg_ar_rdy);
-    IN(Dec<axi::BFlit>, cfg_b);
+    IN(Valid<axi::BFlit>, cfg_b);
     OUT(bool, cfg_b_rdy);
-    IN(Dec<axi::RFlit>, cfg_r);
+    IN(Valid<axi::RFlit>, cfg_r);
     OUT(bool, cfg_r_rdy);
 
     using HomeShellB0 = home::HomeShell<home::kHomeBank0>;

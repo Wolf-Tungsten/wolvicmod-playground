@@ -20,17 +20,17 @@
 
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/dec.h"
+#include "wolvicmod/prefab/valid.h"
 
 namespace zj::prefab {
 
-using wolvicmod::prefab::Dec;
+using wolvicmod::prefab::Valid;
 
 template <class T, uint32_t N, bool NoX = false>
 class FastQueue : public wolvicmod::Module {
 public:
     static_assert(N >= 2, "FastQueue requires N >= 2");
-    using DecT = Dec<T>;
+    using ValidT = Valid<T>;
 
     struct FqState {
         std::array<T, N> array{};
@@ -41,9 +41,9 @@ public:
     };
 
     IN(bool, clk);
-    IN(DecT, enq);
+    IN(ValidT, enq);
     OUT(bool, enq_rdy);
-    OUT(DecT, deq);
+    OUT(ValidT, deq);
     IN(bool, deq_rdy);
     OUT(uint32_t, count);
     OUT(uint32_t, free_num);
@@ -64,7 +64,7 @@ public:
 
         deq.assign().reads(st) = [](auto src) {
             auto [st] = src;
-            DecT o;
+            ValidT o;
             o.valid = st.count > 0;
             if constexpr (NoX) {
                 o.bits = st.count > 0 ? st.array[0] : T{};

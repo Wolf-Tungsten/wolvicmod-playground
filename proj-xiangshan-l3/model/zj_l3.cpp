@@ -84,7 +84,7 @@ ZjL3::ZjL3() {
     hinode.tx_resp_rdy = *ring.stops[4].rx_resp_rdy;
     *ring.stops[4].rx_data = hinode.tx_data;
     hinode.tx_data_rdy = *ring.stops[4].rx_data_rdy;
-    *ring.stops[4].rx_erq = Dec<chi::HReqFlit>{};  // AxiLiteBridge.scala:33
+    *ring.stops[4].rx_erq = Valid<chi::HReqFlit>{};  // AxiLiteBridge.scala:33
     // cfgAXI 外露
     cfg_aw = hinode.axi_aw;
     hinode.axi_aw_rdy = cfg_aw_rdy;
