@@ -493,6 +493,24 @@ GetDecResProbe/SecDecProbe 探针裁决译码语义争议。
 对拍结果：`run.sh frontend` 3 seed × 15 万拍 = **766 万比对零失配**；
 dj_decode.h 无匹配语义修正后 `run.sh backend` 回归仍零失配。
 
-## 8. 待办提炼（后续子步骤开工前补）
+## 8. 5.5 ChiXbar 语义（dongjiang/ChiXbar.scala，纯组合分发）
 
-- 5.5 ChiXbar：组合分发 + cBusy
+本配置（nrIcn=1、nrDirBank=2、hasHPR=false、hasBBN=false）下形态：
+
+- **rxReq 重定向**：唯一一路输入按 getDirBank = useAddr[0] = addr[6] 分发到两个
+  dirBank。每 bank 一个 fastQosRRArb（N=1 退化为直通）。**QoS==0xf 的请求不进
+  rxReq.out，而是改道 rxHpr.out**——Frontend 的 HPR 优先通道由此合成；
+  其余进 rxReq.out。非选中分支 bits 为 DontCare（对拍仅 valid 时比对 bits）。
+- **in.ready 与 valid 相关**（生成 SV 实证）：`in.ready = in.valid & 选中 bank 的
+  (qosF ? hpr_rdy : req_rdy)`——VipArbiter(1) 的 `in(i).ready = selPtrOH(i) &
+  out.ready`，selPtrOH 仅在本路 valid 时置位。
+- **tx 四通道**（txReq/txSnp/txRsp/txDat）：nrIcn==1 直通，统一 `SrcID:=0`，
+  txRsp/txDat 另 `CBusy:=io.cBusy`（DongJiang 顶层以 RegNext(posBusy) 驱动）。
+- 对拍 `run.sh chixbar`：随机 5 路 flit + 随机 ready + cBusy，
+  3 seed × 10 万拍 = **466 万比对零失配**。
+
+## 9. 待办提炼（后续子步骤开工前补）
+
+- P3 收口：model/home/dongjiang.h 组装（2×Frontend + Backend + Directory +
+  DataBlock + ChiXbar），替换 hnf_stub；cBusy = RegNext(posBusy) 的顶层连接。
+
