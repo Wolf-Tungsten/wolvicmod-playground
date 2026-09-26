@@ -24,6 +24,10 @@ ReplaceEntry::ReplaceEntry() {
         auto [reg] = src;
         return reg.state == replst::kFree;
     };
+    hn_txn_id_out.assign().reads(reg) = [](auto src) {
+        auto [reg] = src;
+        return reg.hnTxnID;
+    };
 
     // ---- reqPoS / posResp ----
     req_pos.assign().reads(reg) = [](auto src) {
@@ -390,31 +394,30 @@ ReplaceCM::ReplaceCM() {
     // Alloc 池化
     alloc_arb.in = task;
     task_rdy = alloc_arb.in_rdy;
+    combine(w_alloc_rdy_all, entries,
+            [](ReplaceEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
+    alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
         entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
             auto [out] = src;
             return out[i];
-        };
-        entries[i].alloc_rdy.assign().reads(alloc_arb.out_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
         };
     }
 
     // reqPoS 矩阵
     combine(w_req_pos_in, entries,
             [](ReplaceEntry& e) -> wolvicmod::Out<Valid<ReplReqPos>>& { return e.req_pos; });
+    combine(w_hn_txn_ids, entries,
+            [](ReplaceEntry& e) -> wolvicmod::Out<uint8_t>& { return e.hn_txn_id_out; });
     for (uint32_t b = 0; b < 2; ++b) {
         for (uint32_t s = 0; s < 4; ++s) {
             const uint32_t m = b * 4 + s;
             auto& arb = req_pos_arbs[m];
-            arb.in.assign().reads(w_req_pos_in, entries[0].reg) = [this, b, s](auto src) {
-                auto [in, reg0] = src;
-                (void)reg0;
+            arb.in.assign().reads(w_req_pos_in, w_hn_txn_ids) = [b, s](auto src) {
+                auto [in, ids] = src;
                 ReqPosInArr a;
                 for (uint32_t i = 0; i < kEntries; ++i) {
-                    const auto& r = entries[i].reg.get();
-                    const bool hit = hnIdxDirBank(r.hnTxnID) == b && hnIdxPosSet(r.hnTxnID) == s;
+                    const bool hit = hnIdxDirBank(ids[i]) == b && hnIdxPosSet(ids[i]) == s;
                     a[i].valid = in[i].valid && hit;
                     a[i].bits = in[i].bits;
                 }
@@ -433,12 +436,11 @@ ReplaceCM::ReplaceCM() {
         return r;
     };
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].req_pos_rdy.assign().reads(
-            req_pos_arbs[0].in_rdy, entries[i].reg) =
+        entries[i].req_pos_rdy.assign().reads(w_hn_txn_ids, req_pos_arbs[0].in_rdy) =
             [this, i](auto src) {
-                auto [rdy0, r] = src;
-                const uint32_t b = hnIdxDirBank(r.hnTxnID);
-                const uint32_t s = hnIdxPosSet(r.hnTxnID);
+                auto [ids, rdy0] = src;
+                const uint32_t b = hnIdxDirBank(ids[i]);
+                const uint32_t s = hnIdxPosSet(ids[i]);
                 return req_pos_arbs[b * 4 + s].in_rdy.get()[i];
             };
     }

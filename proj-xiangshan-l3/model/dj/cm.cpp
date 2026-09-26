@@ -197,14 +197,13 @@ SnoopCM::SnoopCM() {
     }
     alloc_arb.in = alloc;
     alloc_rdy = alloc_arb.in_rdy;
+    combine(w_alloc_rdy_all, entries,
+            [](SnoopEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
+    alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
         entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
             auto [out] = src;
             return out[i];
-        };
-        entries[i].alloc_rdy.assign().reads(alloc_arb.out_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
         };
     }
     combine(w_tx_snp_in, entries,
@@ -341,14 +340,13 @@ ReadCM::ReadCM() {
     }
     alloc_arb.in = alloc;
     alloc_rdy = alloc_arb.in_rdy;
+    combine(w_alloc_rdy_all, entries,
+            [](ReadEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
+    alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
         entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
             auto [out] = src;
             return out[i];
-        };
-        entries[i].alloc_rdy.assign().reads(alloc_arb.out_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
         };
     }
     combine(w_tx_req_in, entries,
@@ -504,14 +502,13 @@ WriteCM::WriteCM() {
     }
     alloc_arb.in = alloc;
     alloc_rdy = alloc_arb.in_rdy;
+    combine(w_alloc_rdy_all, entries,
+            [](WriteEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
+    alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
         entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
             auto [out] = src;
             return out[i];
-        };
-        entries[i].alloc_rdy.assign().reads(alloc_arb.out_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
         };
     }
     combine(w_tx_req_in, entries,

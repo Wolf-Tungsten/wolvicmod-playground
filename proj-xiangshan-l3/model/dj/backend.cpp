@@ -127,6 +127,12 @@ Backend::Backend() {
     commit.rx_dat = rx_dat;
     commit.repl_resp = repl_cm.resp;
     commit.data_resp = data_resp;
+    // CM 池的 rx 广播
+    snoop_cm.rx_rsp = rx_rsp;
+    snoop_cm.rx_dat = rx_dat;
+    read_cm.rx_dat = rx_dat;
+    write_cm.rx_rsp = rx_rsp;
+    write_cm.data_resp = data_resp;
 
     // ---- reqPosVec2 / updPosTag / updHnTxnID 直连 ----
     req_pos_vec = repl_cm.req_pos_vec;
@@ -200,7 +206,6 @@ Backend::Backend() {
     };
 
     // ---- reqDB：repl 固定优先 ----
-    req_db_arb.clk = clk;
     req_db_arb.in.assign().reads(repl_cm.req_db, commit.req_db) = [](auto src) {
         auto [r, c] = src;
         std::array<Valid<ReqDB>, 2> a;

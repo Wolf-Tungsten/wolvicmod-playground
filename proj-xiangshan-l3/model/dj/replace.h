@@ -85,6 +85,7 @@ public:
     IN(Valid<uint8_t>, data_resp);
 
     REG(ReplReg, reg);
+    OUT(uint8_t, hn_txn_id_out);  // 矩阵命中测试用（reg.hnTxnID 的端口投影）
     WIRE(ReplReg, w_next);
     WIRE(bool, w_set);
     WIRE(bool, w_pos_resp_hit);
@@ -177,8 +178,12 @@ public:
     WIRE(CmTaskInArr, w_wri_in);
     WIRE(ReqDbInArr, w_req_db_in);
     WIRE(ReqPosInArr, w_req_pos_in);
+    using RdyArrN = std::array<bool, kEntries>;
+    WIRE(RdyArrN, w_alloc_rdy_all);
     using ReqPosOutArr = std::array<Valid<ReplReqPos>, 8>;
+    using TxnIdArr = std::array<uint8_t, kEntries>;
     WIRE(ReqPosOutArr, w_req_pos_out);
+    WIRE(TxnIdArr, w_hn_txn_ids);
 
     ReplaceCM();
 };

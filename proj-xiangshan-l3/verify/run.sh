@@ -41,8 +41,8 @@ for arg in "$@"; do
     --skip-build)  SKIP_BUILD=1 ;;
     --skip-verilate) SKIP_VERILATE=1 ;;  # 参考 RTL 已 verilate 过时跳过（harness 照构）
     -j*)           JOBS="${arg#-j}" ;;
-    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|dir|db|all) MODULE="$arg" ;;
-    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|dir|db|all）" >&2; exit 2 ;;
+    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|dir|db|backend|all) MODULE="$arg" ;;
+    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|dir|db|backend|all）" >&2; exit 2 ;;
   esac
 done
 
@@ -70,6 +70,7 @@ case "$MODULE" in
   bridge) MODULES=(bridge) ;; # 免 refgen：直接用 XS_RTL 的 AxiBridge/AxiLiteBridge
   dir)    MODULES=(dir) ;;    # refgenDj：dongjiang 真实源码生成 Directory RTL
   db)     MODULES=(db) ;;     # refgenDj：dongjiang 真实源码生成 DataBlock RTL
+  backend) MODULES=(backend) ;; # refgenDj：dongjiang 真实源码生成 Backend RTL
   all)    MODULES=(fastq viparb qosarb alloc spsram dpsram)
           ALL_CFGS=("${FASTQ_CFGS[@]}" "${VIPARB_CFGS[@]}" "${QOSARB_CFGS[@]}"
                     "${ALLOC_CFGS[@]}" "${SPSRAM_CFGS[@]}" "${DPSRAM_CFGS[@]}") ;;
@@ -86,9 +87,9 @@ ln -sfn "$OUT/mill" "$VERIFY_DIR/refgen/out"
 # ---------- 1. refgen：逐配置生成 SV（ring/socket/bridge 免；dir 走 refgenDj）----------
 if [[ "$MODULE" == "ring" || "$MODULE" == "socket" || "$MODULE" == "bridge" ]]; then
   echo "==> [1/4] refgen 不适用（$MODULE 直接用 $XS_RTL 的构建产物）"
-elif [[ "$MODULE" == "dir" || "$MODULE" == "db" ]]; then
+elif [[ "$MODULE" == "dir" || "$MODULE" == "db" || "$MODULE" == "backend" ]]; then
   if [[ "$SKIP_REFGEN" == 0 ]]; then
-    DJ_TOP=$([[ "$MODULE" == "dir" ]] && echo Directory || echo DataBlock)
+    DJ_TOP=$(case "$MODULE" in dir) echo Directory;; db) echo DataBlock;; backend) echo Backend;; esac)
     echo "==> [1/4] refgenDj: 生成 dongjiang $DJ_TOP SystemVerilog"
     mkdir -p "$OUT/sv-dj/$DJ_TOP"
     (cd "$VERIFY_DIR/refgen" && "$MILL" -i refgenDj.run "$OUT/sv-dj/$DJ_TOP" "$DJ_TOP") \
@@ -155,8 +156,8 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       make -C "$obj" -f "V$br.mk" -j"$JOBS" > "$obj.make.log" 2>&1 || {
         echo "verilated make FAILED for $br"; tail -10 "$obj.make.log"; exit 1; }
     done
-  elif [[ "$MODULE" == "dir" || "$MODULE" == "db" ]]; then
-    DJ_TOP=$([[ "$MODULE" == "dir" ]] && echo Directory || echo DataBlock)
+  elif [[ "$MODULE" == "dir" || "$MODULE" == "db" || "$MODULE" == "backend" ]]; then
+    DJ_TOP=$(case "$MODULE" in dir) echo Directory;; db) echo DataBlock;; backend) echo Backend;; esac)
     obj="$OUT/obj/$(echo "$DJ_TOP" | tr 'A-Z' 'a-z')"
     mkdir -p "$obj"
     # 顶层 $DJ_TOP.sv 显式传入；子模块闭包由同目录 -y 解析（refgenDj 单目录取名=模块名）
@@ -209,6 +210,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       bridge) cfgs=(axibridge axilitebridge) ;;
       dir)    cfgs=(directory) ;;
       db)     cfgs=(datablock) ;;
+      backend) cfgs=(backend) ;;
     esac
     incs=() libs=()
     for cfg in "${cfgs[@]}"; do
@@ -225,6 +227,8 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
         libs+=("$OUT/obj/$cfg/VDirectory__ALL.a")
       elif [[ "$cfg" == "datablock" ]]; then
         libs+=("$OUT/obj/$cfg/VDataBlock__ALL.a")
+      elif [[ "$cfg" == "backend" ]]; then
+        libs+=("$OUT/obj/$cfg/VBackend__ALL.a")
       else
         libs+=("$OUT/obj/$cfg/V$cfg"__ALL.a)
       fi

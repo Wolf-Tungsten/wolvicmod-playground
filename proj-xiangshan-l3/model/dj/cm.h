@@ -81,7 +81,9 @@ public:
 
     using TxSnpInArr = std::array<Valid<SnoopFlit>, kEntries>;
     using RespInArr = std::array<Valid<CMResp>, kEntries>;
+    using RdyArrN = std::array<bool, kEntries>;
     WIRE(TxSnpInArr, w_tx_snp_in);
+    WIRE(RdyArrN, w_alloc_rdy_all);
     WIRE(RespInArr, w_resp_in);
 
     SnoopCM();
@@ -144,7 +146,9 @@ public:
 
     using TxReqInArr = std::array<Valid<HReqFlit>, kEntries>;
     using RespInArr = std::array<Valid<CMResp>, kEntries>;
+    using RdyArrN = std::array<bool, kEntries>;
     WIRE(TxReqInArr, w_tx_req_in);
+    WIRE(RdyArrN, w_alloc_rdy_all);
     WIRE(RespInArr, w_resp_in);
 
     ReadCM();
@@ -217,8 +221,10 @@ public:
 
     using TxReqInArr = std::array<Valid<HReqFlit>, kEntries>;
     using RespInArr = std::array<Valid<CMResp>, kEntries>;
+    using RdyArrN = std::array<bool, kEntries>;
     using DataTaskInArr = std::array<Valid<DataTask>, kEntries>;
     WIRE(TxReqInArr, w_tx_req_in);
+    WIRE(RdyArrN, w_alloc_rdy_all);
     WIRE(RespInArr, w_resp_in);
     WIRE(DataTaskInArr, w_data_task_in);
 

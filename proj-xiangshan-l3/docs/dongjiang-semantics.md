@@ -345,7 +345,22 @@ WAITDATA →(dataRespHit)→ RESPCMT →(resp.fire)→ FREE（isRespCmt = state=
 - fastQosRRArb/fastRRArb/fastArb/VipArbiter/FastQueue：同 §4.6，prefab 齐备。
 - Alloc 语义已由 P0 `alloc` 对拍覆盖（AllocRef_n4/n16）。
 
-## 6. 待办提炼（后续子步骤开工前补）
+## 6. 5.3 Backend 对拍补充（harness 环境模型与框架纪律）
+
+- harness（verify/cosim/harness_backend.cpp）= HN 环境全模拟：请求生成器按
+  frontend/decode 表构造 CommitTask（ci/state 随机，task=getTaskCode，task 无效时
+  cmt=getCommitCode(0,0)）；PoS way 池（commit 0-13/repl 14-15）按 cleanPoS 释放；
+  CHI 响应器（read→CompData、write→DBIDResp(/CompDBIDResp)+Comp+RN 写数据、
+  snoop 按 opcode 取表内合法响应变体、CompAck 计划）；目录 wResp（替换写随机
+  victim/meta 分布）；dataResp/posResp；getAddrVec 地址表（updPosTag 跟写）。
+- 框架纪律两处新踩点：① 子模块 Out 端口不能由父模块驱动（Alloc 池的
+  entry alloc_rdy 须 combine 成数组后驱动 Alloc.out_rdy）；② 父模块读集不含
+  子模块内部 Reg——ReplaceCM 的 reqPoS 矩阵命中测试改用新增的
+  `hn_txn_id_out` 端口投影（combine 后使用）。
+- 验收：`run.sh backend` 3 seed × 15 万拍 = **1445 万比对零失配**。Backend 不设
+  独立单测，行为验证全部走该对拍。
+
+## 7. 待办提炼（后续子步骤开工前补）
 
 - 5.4 Frontend：FastQueue→ToChiTask→TaskBuffer→Block s0/s1→PoS
 - 5.5 ChiXbar：组合分发 + cBusy
