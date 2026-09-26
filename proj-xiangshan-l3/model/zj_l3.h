@@ -145,23 +145,11 @@ public:
         detail::wireConn(ring.n1_tx_data_rdy, cc_socket.ring_tx_data_rdy);
         detail::wireConn(ring.n1_tx_snoop_rdy, cc_socket.ring_tx_snoop_rdy);
 
-        // ring HF 站 ↔ HomeShell lan
-        connLan(shell0, 0, ring.n0_tx_req, ring.n0_tx_req_rdy, ring.n0_tx_resp, ring.n0_tx_resp_rdy,
-                ring.n0_tx_data, ring.n0_tx_data_rdy, ring.n0_rx_resp, ring.n0_rx_resp_rdy,
-                ring.n0_rx_data, ring.n0_rx_data_rdy, ring.n0_rx_snoop, ring.n0_rx_snoop_rdy,
-                ring.n0_rx_req, ring.n0_rx_req_rdy);
-        connLan(shell0, 1, ring.n7_tx_req, ring.n7_tx_req_rdy, ring.n7_tx_resp, ring.n7_tx_resp_rdy,
-                ring.n7_tx_data, ring.n7_tx_data_rdy, ring.n7_rx_resp, ring.n7_rx_resp_rdy,
-                ring.n7_rx_data, ring.n7_rx_data_rdy, ring.n7_rx_snoop, ring.n7_rx_snoop_rdy,
-                ring.n7_rx_req, ring.n7_rx_req_rdy);
-        connLan(shell1, 0, ring.n2_tx_req, ring.n2_tx_req_rdy, ring.n2_tx_resp, ring.n2_tx_resp_rdy,
-                ring.n2_tx_data, ring.n2_tx_data_rdy, ring.n2_rx_resp, ring.n2_rx_resp_rdy,
-                ring.n2_rx_data, ring.n2_rx_data_rdy, ring.n2_rx_snoop, ring.n2_rx_snoop_rdy,
-                ring.n2_rx_req, ring.n2_rx_req_rdy);
-        connLan(shell1, 1, ring.n5_tx_req, ring.n5_tx_req_rdy, ring.n5_tx_resp, ring.n5_tx_resp_rdy,
-                ring.n5_tx_data, ring.n5_tx_data_rdy, ring.n5_rx_resp, ring.n5_rx_resp_rdy,
-                ring.n5_rx_data, ring.n5_rx_data_rdy, ring.n5_rx_snoop, ring.n5_rx_snoop_rdy,
-                ring.n5_rx_req, ring.n5_rx_req_rdy);
+        // ring HF 站 ↔ HomeShell lan（经端口索引视图）
+        connLan(ring.stops[0], shell0.lan[0]);
+        connLan(ring.stops[7], shell0.lan[1]);
+        connLan(ring.stops[2], shell1.lan[0]);
+        connLan(ring.stops[5], shell1.lan[1]);
 
         // HomeShell ↔ HnfStub（hnx 边界）
         connHnx(shell0, hnf0);
@@ -213,54 +201,25 @@ public:
     }
 
 private:
-    // HomeShell lan ↔ Ring HF 站（lanIdx 0/1；ring 侧端口由调用方按站传入）
-    template <class ShellT>
-    void connLan(ShellT& shell, int lanIdx, Out<Dec<chi::RReqFlit>>& r_tx_req,
-                 In<bool>& r_tx_req_rdy, Out<Dec<chi::RespFlit>>& r_tx_resp,
-                 In<bool>& r_tx_resp_rdy, Out<Dec<chi::DataFlit>>& r_tx_data,
-                 In<bool>& r_tx_data_rdy, In<Dec<chi::RespFlit>>& r_rx_resp,
-                 Out<bool>& r_rx_resp_rdy, In<Dec<chi::DataFlit>>& r_rx_data,
-                 Out<bool>& r_rx_data_rdy, In<Dec<chi::SnoopFlit>>& r_rx_snoop,
-                 Out<bool>& r_rx_snoop_rdy, In<Dec<chi::HReqFlit>>& r_rx_erq,
-                 Out<bool>& r_rx_erq_rdy) {
+    // HomeShell lan ↔ Ring HF 站（端口索引视图接线；HF 站上这些字段由
+    // kStopTable 保证非空）
+    static void connLan(ring::StopIO& r, home::LanIO& l) {
         // eject（ring → shell）：ring nX_tx_* → shell lan_rx_*
-        auto& l_rx_req  = lanIdx == 0 ? shell.lan0_rx_req : shell.lan1_rx_req;
-        auto& l_rx_req_rdy =
-            lanIdx == 0 ? shell.lan0_rx_req_rdy : shell.lan1_rx_req_rdy;
-        auto& l_rx_resp = lanIdx == 0 ? shell.lan0_rx_resp : shell.lan1_rx_resp;
-        auto& l_rx_resp_rdy =
-            lanIdx == 0 ? shell.lan0_rx_resp_rdy : shell.lan1_rx_resp_rdy;
-        auto& l_rx_data = lanIdx == 0 ? shell.lan0_rx_data : shell.lan1_rx_data;
-        auto& l_rx_data_rdy =
-            lanIdx == 0 ? shell.lan0_rx_data_rdy : shell.lan1_rx_data_rdy;
+        detail::wireConn(*l.rx_req, *r.tx_req);
+        detail::wireConn(*l.rx_resp, *r.tx_resp);
+        detail::wireConn(*l.rx_data, *r.tx_data);
+        detail::wireConn(*r.tx_req_rdy, *l.rx_req_rdy);
+        detail::wireConn(*r.tx_resp_rdy, *l.rx_resp_rdy);
+        detail::wireConn(*r.tx_data_rdy, *l.rx_data_rdy);
         // inject（shell → ring）：shell lan_tx_* → ring nX_rx_*
-        auto& l_tx_resp = lanIdx == 0 ? shell.lan0_tx_resp : shell.lan1_tx_resp;
-        auto& l_tx_resp_rdy =
-            lanIdx == 0 ? shell.lan0_tx_resp_rdy : shell.lan1_tx_resp_rdy;
-        auto& l_tx_data = lanIdx == 0 ? shell.lan0_tx_data : shell.lan1_tx_data;
-        auto& l_tx_data_rdy =
-            lanIdx == 0 ? shell.lan0_tx_data_rdy : shell.lan1_tx_data_rdy;
-        auto& l_tx_snoop = lanIdx == 0 ? shell.lan0_tx_snoop : shell.lan1_tx_snoop;
-        auto& l_tx_snoop_rdy =
-            lanIdx == 0 ? shell.lan0_tx_snoop_rdy : shell.lan1_tx_snoop_rdy;
-        auto& l_tx_erq = lanIdx == 0 ? shell.lan0_tx_erq : shell.lan1_tx_erq;
-        auto& l_tx_erq_rdy =
-            lanIdx == 0 ? shell.lan0_tx_erq_rdy : shell.lan1_tx_erq_rdy;
-
-        detail::wireConn(l_rx_req, r_tx_req);
-        detail::wireConn(l_rx_resp, r_tx_resp);
-        detail::wireConn(l_rx_data, r_tx_data);
-        detail::wireConn(r_tx_req_rdy, l_rx_req_rdy);
-        detail::wireConn(r_tx_resp_rdy, l_rx_resp_rdy);
-        detail::wireConn(r_tx_data_rdy, l_rx_data_rdy);
-        detail::wireConn(r_rx_resp, l_tx_resp);
-        detail::wireConn(r_rx_data, l_tx_data);
-        detail::wireConn(r_rx_snoop, l_tx_snoop);
-        detail::wireConn(r_rx_erq, l_tx_erq);
-        detail::wireConn(l_tx_resp_rdy, r_rx_resp_rdy);
-        detail::wireConn(l_tx_data_rdy, r_rx_data_rdy);
-        detail::wireConn(l_tx_snoop_rdy, r_rx_snoop_rdy);
-        detail::wireConn(l_tx_erq_rdy, r_rx_erq_rdy);
+        detail::wireConn(*r.rx_resp, *l.tx_resp);
+        detail::wireConn(*r.rx_data, *l.tx_data);
+        detail::wireConn(*r.rx_snoop, *l.tx_snoop);
+        detail::wireConn(*r.rx_erq, *l.tx_erq);
+        detail::wireConn(*l.tx_resp_rdy, *r.rx_resp_rdy);
+        detail::wireConn(*l.tx_data_rdy, *r.rx_data_rdy);
+        detail::wireConn(*l.tx_snoop_rdy, *r.rx_snoop_rdy);
+        detail::wireConn(*l.tx_erq_rdy, *r.rx_erq_rdy);
     }
 
     template <class ShellT>

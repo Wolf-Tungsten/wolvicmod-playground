@@ -66,6 +66,26 @@ inline constexpr HomeShellCfg kHomeBank1 = {1, {0x10, 0x28},
 
 // Cfg 为 NTTP（createChildModule 仅支持默认构造；HomeShellCfg 是 structural
 // type，配置等价于 RTL elaboration 常量）
+
+// lan 端口索引视图：对称的 lan0/lan1 端口的指针视图（实体仍由模块持有，
+// 经 createIn/createOut 按名注册），供父模块（ZjL3）按 lanIdx 接线。
+struct LanIO {
+    In<Dec<RReqFlit>>*   rx_req       = nullptr;
+    Out<bool>*           rx_req_rdy   = nullptr;
+    In<Dec<RespFlit>>*   rx_resp      = nullptr;
+    Out<bool>*           rx_resp_rdy  = nullptr;
+    In<Dec<DataFlit>>*   rx_data      = nullptr;
+    Out<bool>*           rx_data_rdy  = nullptr;
+    Out<Dec<RespFlit>>*  tx_resp      = nullptr;
+    In<bool>*            tx_resp_rdy  = nullptr;
+    Out<Dec<DataFlit>>*  tx_data      = nullptr;
+    In<bool>*            tx_data_rdy  = nullptr;
+    Out<Dec<SnoopFlit>>* tx_snoop     = nullptr;
+    In<bool>*            tx_snoop_rdy = nullptr;
+    Out<Dec<HReqFlit>>*  tx_erq       = nullptr;
+    In<bool>*            tx_erq_rdy   = nullptr;
+};
+
 template <HomeShellCfg Cfg>
 class HomeShell : public wolvicmod::Module {
 public:
@@ -119,6 +139,9 @@ public:
     IN(Dec<HReqFlit>, hnx_tx_erq);
     OUT(bool, hnx_tx_erq_rdy);
 
+    // lan 端口索引视图（构造期填充，见 ctor 开头）
+    std::array<LanIO, 2> lan;
+
     using ReqQ  = Queue<RReqFlit, 2>;
     using RspQ  = Queue<RespFlit, 2>;
     using DatQ  = Queue<DataFlit, 2>;
@@ -149,6 +172,22 @@ public:
     SUB(DatArb, arb_dat);
 
     HomeShell() {
+        // lan 端口索引视图（实体归本模块持有；供 ZjL3 按 lanIdx 接线）
+        lan[0].rx_req = &lan0_rx_req;      lan[0].rx_req_rdy = &lan0_rx_req_rdy;
+        lan[0].rx_resp = &lan0_rx_resp;    lan[0].rx_resp_rdy = &lan0_rx_resp_rdy;
+        lan[0].rx_data = &lan0_rx_data;    lan[0].rx_data_rdy = &lan0_rx_data_rdy;
+        lan[0].tx_resp = &lan0_tx_resp;    lan[0].tx_resp_rdy = &lan0_tx_resp_rdy;
+        lan[0].tx_data = &lan0_tx_data;    lan[0].tx_data_rdy = &lan0_tx_data_rdy;
+        lan[0].tx_snoop = &lan0_tx_snoop;  lan[0].tx_snoop_rdy = &lan0_tx_snoop_rdy;
+        lan[0].tx_erq = &lan0_tx_erq;      lan[0].tx_erq_rdy = &lan0_tx_erq_rdy;
+        lan[1].rx_req = &lan1_rx_req;      lan[1].rx_req_rdy = &lan1_rx_req_rdy;
+        lan[1].rx_resp = &lan1_rx_resp;    lan[1].rx_resp_rdy = &lan1_rx_resp_rdy;
+        lan[1].rx_data = &lan1_rx_data;    lan[1].rx_data_rdy = &lan1_rx_data_rdy;
+        lan[1].tx_resp = &lan1_tx_resp;    lan[1].tx_resp_rdy = &lan1_tx_resp_rdy;
+        lan[1].tx_data = &lan1_tx_data;    lan[1].tx_data_rdy = &lan1_tx_data_rdy;
+        lan[1].tx_snoop = &lan1_tx_snoop;  lan[1].tx_snoop_rdy = &lan1_tx_snoop_rdy;
+        lan[1].tx_erq = &lan1_tx_erq;      lan[1].tx_erq_rdy = &lan1_tx_erq_rdy;
+
         lan0_ej_req_q.clk = clk; lan0_ej_rsp_q.clk = clk; lan0_ej_dat_q.clk = clk;
         lan1_ej_req_q.clk = clk; lan1_ej_rsp_q.clk = clk; lan1_ej_dat_q.clk = clk;
         lan0_ij_rsp_q.clk = clk; lan0_ij_dat_q.clk = clk;

@@ -72,7 +72,7 @@
 |---|---|---|
 | `FastQueue<T,N,NoX>`（`prefab/fastq.h`） | xs-utils `FastQueue`（`queue/FastQueue.scala:6-58`） | 移位队列压实不变式；enq.ready **寄存**（初值 true）：满 → deq 后下一拍才恢复（一拍气泡，与 pipe Queue 的本质差别）；deq.valid/bits 组合；带 count/freeNum |
 | `VipArb<T,N>`（`prefab/xsarb.h`） | xs-utils `VipArbiter`（`arb/VipArbiter.scala`） | vip 请求时 vip 获胜否则最低索引；指针让位到"之上最低 valid"（无则绕回之下）——连续 fire 时正向轮转跳过无效路、反压下粘性不动 |
-| `QosRRArb` / `QosFixedArb<T,N,Qos>`（`prefab/xsarb.h`） | dongjiang `FastArb`（`utils/FastArb.scala:11-63`） | 按 qos==0xf 拆 high/low（low=全部输入）各过一个子仲裁器；hasHigh 抢占。**FastArb 的 rr 子仲裁器是 VipArbiter 而非 chisel RRArbiter**——QosRRArb=VipArb 子组、QosFixedArb=FixedArb 子组 |
+| `QosRRArb` / `QosFixedArb<T,N>`（`prefab/xsarb.h`） | dongjiang `FastArb`（`utils/FastArb.scala:11-63`） | 按 qos==0xf 拆 high/low（low=全部输入）各过一个子仲裁器；hasHigh 抢占。**FastArb 的 rr 子仲裁器是 VipArbiter 而非 chisel RRArbiter**——QosRRArb=VipArb 子组、QosFixedArb=FixedArb 子组；T 须带 .qos 字段，子仲裁器类型经 `QosArb<T,N,Sub>` 第三参替换 |
 | `Alloc<T,N>`（`prefab/xsarb.h`） | dongjiang `Alloc`（`utils/Alloc.scala`） | 首个空闲项优先编码（组合），free_id 全忙归末位 N-1（chisel PriorityEncoder 空输入语义，对拍实证） |
 | `SpSram` / `DpSram`（`prefab/sram.h`） | xs-utils `Single/DualPortSramTemplate` | Mem 存储体 + ValidPipe 延迟链；读延迟 = (kIsc==1 ? Latency : kIsc+Latency) + (OutputReg?1:0)——目录配置 (1,2,outReg)=3 拍（d3 出 resp，连同 d4 输出寄存共 4 拍）、DS 配置 (2,2,outReg)=5 拍、双口 repl (1,1,outReg)=2 拍；intvCnt 回压间隔 max(Latency,kIsc)；way 掩码写；单口读写互斥、双口 bypassWrite 同址写优先/否则对齐 Verilator SyncReadMem 下件读新值（Undefined RDW 角落，ZhuJiang 不依赖）；ShouldReset 复现横扫回压（数据由 Mem 零初始化覆盖） |
 

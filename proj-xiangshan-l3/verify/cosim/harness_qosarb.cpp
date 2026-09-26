@@ -32,15 +32,10 @@ struct QosBitsC {
     bool operator==(const QosBitsC&) const = default;
 };
 
-template <class T>
-struct QosOfC {
-    uint8_t operator()(const T& t) const { return static_cast<uint8_t>(t.qos); }
-};
-
-template <class VRef, template <class, uint32_t, class> class QosArbT>
+template <class VRef, template <class, uint32_t> class QosArbT>
 uint64_t cosimQosArb(const char* cfg, uint32_t seed, uint64_t cycles) {
     VRef ref;
-    QosArbT<QosBitsC, 4, QosOfC<QosBitsC>> dut;
+    QosArbT<QosBitsC, 4> dut;
     dut.elaborate();
     std::mt19937 rng(seed);
     cosim::Stats st;

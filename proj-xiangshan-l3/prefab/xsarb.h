@@ -13,7 +13,6 @@
 
 #include <array>
 #include <cstdint>
-#include <type_traits>
 
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
@@ -118,26 +117,19 @@ public:
 // low 组 out_rdy 拉低；否则反之。in_rdy[i] = low.in_rdy[i] || high.in_rdy[i]。
 // 注意：FastArb.scala 的 rr=true 子仲裁器是 xs-utils 的 VipArbiter（不是
 // chisel3 RRArbiter）——QosRRArb 因此以 VipArb 为默认子仲裁器；QosFixedArb
-// 用 FixedArb（chisel3 Arbiter）。
+// 用 FixedArb（chisel3 Arbiter）。T 须带 .qos 字段（与 EjectBuffer 要求
+// .src_id/.txn_id 同款约定）；子仲裁器类型 Sub 对应 FastArb 的 rr 参数。
 //
 // 同名解包约定的跨模块写法：读集里的子模块端口按层次路径展开绑定名
 // （arb_hi.out → arb_hi_out，点替换为下划线）。
 
-template <class T>
-struct QosOf {
-    uint8_t operator()(const T& t) const { return static_cast<uint8_t>(t.qos); }
-};
-
-template <class T, uint32_t N, class Qos = QosOf<T>,
-          template <class, uint32_t> class SubArb = VipArb>
+template <class T, uint32_t N, class Sub = VipArb<T, N>>
 class QosArb : public wolvicmod::Module {
 public:
     static_assert(N >= 1);
-    static_assert(std::is_default_constructible_v<Qos>, "Qos must be default-constructible");
     using DecT = Dec<T>;
     using InArr = std::array<DecT, N>;  // 宏参数含逗号，先取别名
     using RdyArr = std::array<bool, N>;
-    using Sub = SubArb<T, N>;
 
     IN(bool, clk);
     IN(InArr, in);
@@ -158,7 +150,7 @@ public:
             auto [in] = src;
             InArr d{};
             for (uint32_t i = 0; i < N; ++i) {
-                d[i].valid = in[i].valid && Qos{}(in[i].bits) == 0xf;
+                d[i].valid = in[i].valid && in[i].bits.qos == 0xf;
                 d[i].bits = in[i].bits;
             }
             return d;
@@ -193,12 +185,12 @@ public:
 };
 
 // FastArb.scala 的 fastQosRRArb（rr=true → VipArbiter 子仲裁器）
-template <class T, uint32_t N, class Qos = QosOf<T>>
-using QosRRArb = QosArb<T, N, Qos, VipArb>;
+template <class T, uint32_t N>
+using QosRRArb = QosArb<T, N, VipArb<T, N>>;
 
 // FastArb.scala 的 fastQosArb（rr=false → chisel3 Arbiter 子仲裁器）
-template <class T, uint32_t N, class Qos = QosOf<T>>
-using QosFixedArb = QosArb<T, N, Qos, FixedArb>;
+template <class T, uint32_t N>
+using QosFixedArb = QosArb<T, N, FixedArb<T, N>>;
 
 // ---------------- Alloc：dongjiang Alloc（首个空闲项优先编码，组合） ----------------
 // free_id = 最低 out_rdy 为高的索引；全忙时归 N-1（chisel PriorityMux 的

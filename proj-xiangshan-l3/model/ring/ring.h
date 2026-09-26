@@ -161,6 +161,32 @@ inline std::array<bool, 2> tapSelOf(uint16_t tgt_id, const StopSpec& sp) {
     return {bool((sp.rightMask >> tgtGid) & 1), bool((sp.leftMask >> tgtGid) & 1)};
 }
 
+// 站边界端口索引视图：每站 icn 端口的指针视图（nullptr = 该站无此端口；
+// 实体仍由模块持有、按 n<gid>_* 命名注册）。构建循环与父模块（ZjL3）共用。
+// rx_erq/tx_erq 即端口名 *_rx_req/*_tx_req 中载荷为 HReqFlit（ERQ）的那些。
+struct StopIO {
+    In<Dec<RReqFlit>>*   rx_req       = nullptr;
+    Out<bool>*           rx_req_rdy   = nullptr;
+    Out<Dec<RReqFlit>>*  tx_req       = nullptr;
+    In<bool>*            tx_req_rdy   = nullptr;
+    In<Dec<HReqFlit>>*   rx_erq       = nullptr;
+    Out<bool>*           rx_erq_rdy   = nullptr;
+    Out<Dec<HReqFlit>>*  tx_erq       = nullptr;
+    In<bool>*            tx_erq_rdy   = nullptr;
+    In<Dec<RespFlit>>*   rx_resp      = nullptr;
+    Out<bool>*           rx_resp_rdy  = nullptr;
+    Out<Dec<RespFlit>>*  tx_resp      = nullptr;
+    In<bool>*            tx_resp_rdy  = nullptr;
+    In<Dec<DataFlit>>*   rx_data      = nullptr;
+    Out<bool>*           rx_data_rdy  = nullptr;
+    Out<Dec<DataFlit>>*  tx_data      = nullptr;
+    In<bool>*            tx_data_rdy  = nullptr;
+    In<Dec<SnoopFlit>>*  rx_snoop     = nullptr;
+    Out<bool>*           rx_snoop_rdy = nullptr;
+    Out<Dec<SnoopFlit>>* tx_snoop     = nullptr;
+    In<bool>*            tx_snoop_rdy = nullptr;
+};
+
 // ---------------- Ring ----------------
 
 class Ring : public wolvicmod::Module {
@@ -281,6 +307,9 @@ public:
     IN(bool, n6_tx_req_rdy);
     OUT(Dec<DataFlit>, n6_tx_data);
     IN(bool, n6_tx_data_rdy);
+
+    // 站边界端口索引视图（构造期填充，见 ctor；nullptr = 该站无此端口）
+    std::array<StopIO, 10> stops{};
 
     Ring();
 
@@ -513,90 +542,70 @@ inline Ring::Ring() {
     LaneEnds<DataFlit> datLane;
     LaneEnds<HrqFlit>  hrqLane;
 
-    // 边界端口指针表（按站索引；nullptr = 无此端口）
-    std::array<In<Dec<RReqFlit>>*, 10>  reqRx{};
-    std::array<Out<bool>*, 10>          reqRxRdy{};
-    std::array<Out<Dec<RReqFlit>>*, 10> reqTx{};
-    std::array<In<bool>*, 10>           reqTxRdy{};
-    std::array<In<Dec<HReqFlit>>*, 10>  erqRx{};
-    std::array<Out<bool>*, 10>          erqRxRdy{};
-    std::array<Out<Dec<HReqFlit>>*, 10> erqTx{};
-    std::array<In<bool>*, 10>           erqTxRdy{};
-    std::array<In<Dec<RespFlit>>*, 10>  rspRx{};
-    std::array<Out<bool>*, 10>          rspRxRdy{};
-    std::array<Out<Dec<RespFlit>>*, 10> rspTx{};
-    std::array<In<bool>*, 10>           rspTxRdy{};
-    std::array<In<Dec<DataFlit>>*, 10>  datRx{};
-    std::array<Out<bool>*, 10>          datRxRdy{};
-    std::array<Out<Dec<DataFlit>>*, 10> datTx{};
-    std::array<In<bool>*, 10>           datTxRdy{};
-    std::array<In<Dec<SnoopFlit>>*, 10>  snpRx{};
-    std::array<Out<bool>*, 10>           snpRxRdy{};
-    std::array<Out<Dec<SnoopFlit>>*, 10> snpTx{};
-    std::array<In<bool>*, 10>            snpTxRdy{};
+    // 站边界端口视图填充（按站索引；空缺字段保持 nullptr，与 kStopTable 一致）
+    stops[1].rx_req = &n1_rx_req;  stops[1].rx_req_rdy = &n1_rx_req_rdy;
+    stops[3].rx_req = &n3_rx_req;  stops[3].rx_req_rdy = &n3_rx_req_rdy;
+    stops[0].tx_req = &n0_tx_req;  stops[0].tx_req_rdy = &n0_tx_req_rdy;
+    stops[1].tx_req = &n1_tx_req;  stops[1].tx_req_rdy = &n1_tx_req_rdy;
+    stops[2].tx_req = &n2_tx_req;  stops[2].tx_req_rdy = &n2_tx_req_rdy;
+    stops[4].tx_req = &n4_tx_req;  stops[4].tx_req_rdy = &n4_tx_req_rdy;
+    stops[5].tx_req = &n5_tx_req;  stops[5].tx_req_rdy = &n5_tx_req_rdy;
+    stops[7].tx_req = &n7_tx_req;  stops[7].tx_req_rdy = &n7_tx_req_rdy;
 
-    reqRx[1] = &n1_rx_req;  reqRxRdy[1] = &n1_rx_req_rdy;
-    reqRx[3] = &n3_rx_req;  reqRxRdy[3] = &n3_rx_req_rdy;
-    reqTx[0] = &n0_tx_req;  reqTxRdy[0] = &n0_tx_req_rdy;
-    reqTx[1] = &n1_tx_req;  reqTxRdy[1] = &n1_tx_req_rdy;
-    reqTx[2] = &n2_tx_req;  reqTxRdy[2] = &n2_tx_req_rdy;
-    reqTx[4] = &n4_tx_req;  reqTxRdy[4] = &n4_tx_req_rdy;
-    reqTx[5] = &n5_tx_req;  reqTxRdy[5] = &n5_tx_req_rdy;
-    reqTx[7] = &n7_tx_req;  reqTxRdy[7] = &n7_tx_req_rdy;
+    stops[0].rx_erq = &n0_rx_req;  stops[0].rx_erq_rdy = &n0_rx_req_rdy;
+    stops[2].rx_erq = &n2_rx_req;  stops[2].rx_erq_rdy = &n2_rx_req_rdy;
+    stops[4].rx_erq = &n4_rx_req;  stops[4].rx_erq_rdy = &n4_rx_req_rdy;
+    stops[5].rx_erq = &n5_rx_req;  stops[5].rx_erq_rdy = &n5_rx_req_rdy;
+    stops[7].rx_erq = &n7_rx_req;  stops[7].rx_erq_rdy = &n7_rx_req_rdy;
+    stops[6].tx_erq = &n6_tx_req;  stops[6].tx_erq_rdy = &n6_tx_req_rdy;
 
-    erqRx[0] = &n0_rx_req;  erqRxRdy[0] = &n0_rx_req_rdy;
-    erqRx[2] = &n2_rx_req;  erqRxRdy[2] = &n2_rx_req_rdy;
-    erqRx[4] = &n4_rx_req;  erqRxRdy[4] = &n4_rx_req_rdy;
-    erqRx[5] = &n5_rx_req;  erqRxRdy[5] = &n5_rx_req_rdy;
-    erqRx[7] = &n7_rx_req;  erqRxRdy[7] = &n7_rx_req_rdy;
-    erqTx[6] = &n6_tx_req;  erqTxRdy[6] = &n6_tx_req_rdy;
+    stops[0].rx_resp = &n0_rx_resp; stops[0].rx_resp_rdy = &n0_rx_resp_rdy;
+    stops[1].rx_resp = &n1_rx_resp; stops[1].rx_resp_rdy = &n1_rx_resp_rdy;
+    stops[2].rx_resp = &n2_rx_resp; stops[2].rx_resp_rdy = &n2_rx_resp_rdy;
+    stops[3].rx_resp = &n3_rx_resp; stops[3].rx_resp_rdy = &n3_rx_resp_rdy;
+    stops[4].rx_resp = &n4_rx_resp; stops[4].rx_resp_rdy = &n4_rx_resp_rdy;
+    stops[5].rx_resp = &n5_rx_resp; stops[5].rx_resp_rdy = &n5_rx_resp_rdy;
+    stops[6].rx_resp = &n6_rx_resp; stops[6].rx_resp_rdy = &n6_rx_resp_rdy;
+    stops[7].rx_resp = &n7_rx_resp; stops[7].rx_resp_rdy = &n7_rx_resp_rdy;
+    stops[0].tx_resp = &n0_tx_resp; stops[0].tx_resp_rdy = &n0_tx_resp_rdy;
+    stops[1].tx_resp = &n1_tx_resp; stops[1].tx_resp_rdy = &n1_tx_resp_rdy;
+    stops[2].tx_resp = &n2_tx_resp; stops[2].tx_resp_rdy = &n2_tx_resp_rdy;
+    stops[3].tx_resp = &n3_tx_resp; stops[3].tx_resp_rdy = &n3_tx_resp_rdy;
+    stops[4].tx_resp = &n4_tx_resp; stops[4].tx_resp_rdy = &n4_tx_resp_rdy;
+    stops[5].tx_resp = &n5_tx_resp; stops[5].tx_resp_rdy = &n5_tx_resp_rdy;
+    stops[7].tx_resp = &n7_tx_resp; stops[7].tx_resp_rdy = &n7_tx_resp_rdy;
 
-    rspRx[0] = &n0_rx_resp; rspRxRdy[0] = &n0_rx_resp_rdy;
-    rspRx[1] = &n1_rx_resp; rspRxRdy[1] = &n1_rx_resp_rdy;
-    rspRx[2] = &n2_rx_resp; rspRxRdy[2] = &n2_rx_resp_rdy;
-    rspRx[3] = &n3_rx_resp; rspRxRdy[3] = &n3_rx_resp_rdy;
-    rspRx[4] = &n4_rx_resp; rspRxRdy[4] = &n4_rx_resp_rdy;
-    rspRx[5] = &n5_rx_resp; rspRxRdy[5] = &n5_rx_resp_rdy;
-    rspRx[6] = &n6_rx_resp; rspRxRdy[6] = &n6_rx_resp_rdy;
-    rspRx[7] = &n7_rx_resp; rspRxRdy[7] = &n7_rx_resp_rdy;
-    rspTx[0] = &n0_tx_resp; rspTxRdy[0] = &n0_tx_resp_rdy;
-    rspTx[1] = &n1_tx_resp; rspTxRdy[1] = &n1_tx_resp_rdy;
-    rspTx[2] = &n2_tx_resp; rspTxRdy[2] = &n2_tx_resp_rdy;
-    rspTx[3] = &n3_tx_resp; rspTxRdy[3] = &n3_tx_resp_rdy;
-    rspTx[4] = &n4_tx_resp; rspTxRdy[4] = &n4_tx_resp_rdy;
-    rspTx[5] = &n5_tx_resp; rspTxRdy[5] = &n5_tx_resp_rdy;
-    rspTx[7] = &n7_tx_resp; rspTxRdy[7] = &n7_tx_resp_rdy;
+    stops[0].rx_data = &n0_rx_data; stops[0].rx_data_rdy = &n0_rx_data_rdy;
+    stops[1].rx_data = &n1_rx_data; stops[1].rx_data_rdy = &n1_rx_data_rdy;
+    stops[2].rx_data = &n2_rx_data; stops[2].rx_data_rdy = &n2_rx_data_rdy;
+    stops[3].rx_data = &n3_rx_data; stops[3].rx_data_rdy = &n3_rx_data_rdy;
+    stops[4].rx_data = &n4_rx_data; stops[4].rx_data_rdy = &n4_rx_data_rdy;
+    stops[5].rx_data = &n5_rx_data; stops[5].rx_data_rdy = &n5_rx_data_rdy;
+    stops[6].rx_data = &n6_rx_data; stops[6].rx_data_rdy = &n6_rx_data_rdy;
+    stops[7].rx_data = &n7_rx_data; stops[7].rx_data_rdy = &n7_rx_data_rdy;
+    stops[0].tx_data = &n0_tx_data; stops[0].tx_data_rdy = &n0_tx_data_rdy;
+    stops[1].tx_data = &n1_tx_data; stops[1].tx_data_rdy = &n1_tx_data_rdy;
+    stops[2].tx_data = &n2_tx_data; stops[2].tx_data_rdy = &n2_tx_data_rdy;
+    stops[3].tx_data = &n3_tx_data; stops[3].tx_data_rdy = &n3_tx_data_rdy;
+    stops[4].tx_data = &n4_tx_data; stops[4].tx_data_rdy = &n4_tx_data_rdy;
+    stops[5].tx_data = &n5_tx_data; stops[5].tx_data_rdy = &n5_tx_data_rdy;
+    stops[6].tx_data = &n6_tx_data; stops[6].tx_data_rdy = &n6_tx_data_rdy;
+    stops[7].tx_data = &n7_tx_data; stops[7].tx_data_rdy = &n7_tx_data_rdy;
 
-    datRx[0] = &n0_rx_data; datRxRdy[0] = &n0_rx_data_rdy;
-    datRx[1] = &n1_rx_data; datRxRdy[1] = &n1_rx_data_rdy;
-    datRx[2] = &n2_rx_data; datRxRdy[2] = &n2_rx_data_rdy;
-    datRx[3] = &n3_rx_data; datRxRdy[3] = &n3_rx_data_rdy;
-    datRx[4] = &n4_rx_data; datRxRdy[4] = &n4_rx_data_rdy;
-    datRx[5] = &n5_rx_data; datRxRdy[5] = &n5_rx_data_rdy;
-    datRx[6] = &n6_rx_data; datRxRdy[6] = &n6_rx_data_rdy;
-    datRx[7] = &n7_rx_data; datRxRdy[7] = &n7_rx_data_rdy;
-    datTx[0] = &n0_tx_data; datTxRdy[0] = &n0_tx_data_rdy;
-    datTx[1] = &n1_tx_data; datTxRdy[1] = &n1_tx_data_rdy;
-    datTx[2] = &n2_tx_data; datTxRdy[2] = &n2_tx_data_rdy;
-    datTx[3] = &n3_tx_data; datTxRdy[3] = &n3_tx_data_rdy;
-    datTx[4] = &n4_tx_data; datTxRdy[4] = &n4_tx_data_rdy;
-    datTx[5] = &n5_tx_data; datTxRdy[5] = &n5_tx_data_rdy;
-    datTx[6] = &n6_tx_data; datTxRdy[6] = &n6_tx_data_rdy;
-    datTx[7] = &n7_tx_data; datTxRdy[7] = &n7_tx_data_rdy;
-
-    snpRx[0] = &n0_rx_snoop; snpRxRdy[0] = &n0_rx_snoop_rdy;
-    snpRx[2] = &n2_rx_snoop; snpRxRdy[2] = &n2_rx_snoop_rdy;
-    snpRx[5] = &n5_rx_snoop; snpRxRdy[5] = &n5_rx_snoop_rdy;
-    snpRx[7] = &n7_rx_snoop; snpRxRdy[7] = &n7_rx_snoop_rdy;
-    snpTx[1] = &n1_tx_snoop; snpTxRdy[1] = &n1_tx_snoop_rdy;
+    stops[0].rx_snoop = &n0_rx_snoop; stops[0].rx_snoop_rdy = &n0_rx_snoop_rdy;
+    stops[2].rx_snoop = &n2_rx_snoop; stops[2].rx_snoop_rdy = &n2_rx_snoop_rdy;
+    stops[5].rx_snoop = &n5_rx_snoop; stops[5].rx_snoop_rdy = &n5_rx_snoop_rdy;
+    stops[7].rx_snoop = &n7_rx_snoop; stops[7].rx_snoop_rdy = &n7_rx_snoop_rdy;
+    stops[1].tx_snoop = &n1_tx_snoop; stops[1].tx_snoop_rdy = &n1_tx_snoop_rdy;
 
     // 建站
     for (int i = 0; i < 10; ++i) {
-        buildReqChan(i, reqRx[i], reqRxRdy[i], reqTx[i], reqTxRdy[i], reqLane);
-        buildRspChan(i, rspRx[i], rspRxRdy[i], rspTx[i], rspTxRdy[i], rspLane);
-        buildDatChan(i, datRx[i], datRxRdy[i], datTx[i], datTxRdy[i], datLane);
-        buildHrqChan(i, hrqLane, erqRx[i], erqRxRdy[i], snpRx[i], snpRxRdy[i], erqTx[i],
-                     erqTxRdy[i], snpTx[i], snpTxRdy[i]);
+        const StopIO& io = stops[i];
+        buildReqChan(i, io.rx_req, io.rx_req_rdy, io.tx_req, io.tx_req_rdy, reqLane);
+        buildRspChan(i, io.rx_resp, io.rx_resp_rdy, io.tx_resp, io.tx_resp_rdy, rspLane);
+        buildDatChan(i, io.rx_data, io.rx_data_rdy, io.tx_data, io.tx_data_rdy, datLane);
+        buildHrqChan(i, hrqLane, io.rx_erq, io.rx_erq_rdy, io.rx_snoop, io.rx_snoop_rdy,
+                     io.tx_erq, io.tx_erq_rdy, io.tx_snoop, io.tx_snoop_rdy);
     }
 
     // 链路（Ring.scala:23-26）：rings(0).rx ← 左邻 rings(0).tx；rings(1).rx ← 右邻
