@@ -211,9 +211,15 @@ n3/n4/n6 直通外露）。
 
 对齐 `ZJ/device/bridge/axi/AxiBridge.scala`：64 个 CtrlMachine（PickOneLow 分配）、CHI ReadNoSnp/WriteNoSnp → AXI AW/AR、写数据 AxiDataBuffer(64)、awQueue 保序、同地址(32KB 粒度)写读排序 wakeup、R→CompData（DataID=addr(5) 拼接）、出口 ConditionVipArbiter ×3。
 
+> ✅ **P4a as-built**（`model/bridge/`）：共享 CM 骨架 `BridgeCm<Tr>`（`bridge_cm.h`，对齐 `BaseCtrlMachine.scala`，两桥差异经 traits 转写 opvec/info/entry 类型参数）+ `CmST` traits + `AxiDataBuffer`（`axi_data_buffer.h`）+ `SNodeAxiBridge`（`snode_axi_bridge.h`）。实测参数：outstanding=64（`ZhuJiangNoCTopology.scala` MemoryOutstanding）、AXI id 6b/data 256b/addr 48b、**compareTag=addr[37:6]**（64B 粒度、32b 字段——注意并非 32KB）。`AxiBufferChain`：S/HI 节点 `buffers=0`（AxiDeviceParams 默认）→ RTL 直通，边界即桥自身 axi 端口，不建模。`ConditionVipArbiter` 实现为项目 prefab `CondVipArb`（`prefab/xsarb.h`，SelNto1+selReg+VipArb，**出口仲裁有 1 拍注册延迟**）；freelist 的恒 ready MimoQueue 行为等价为 1 拍延迟寄存；64 CM 的 wakeup/info/alloc/W 广播经 `model/detail/collect.h` 的 `collectPorts` 设施汇聚。`working`/ZJPerf/MbistPipeline 不建模（时钟门控/性能/DFT 约定）；RTL 断言转注释。
+
 ### 3.7 HiNodeAxiLiteBridge
 
 对齐 `ZJ/device/bridge/axilite/AxiLiteBridge.scala`：结构同 §3.6 简化版，8 CM。**不可省略**：coremark 的 UART 输出等全部 MMIO 都经 CC→defaultHni→cfg AXI 出仿真外设。
+
+> ✅ **P4a as-built**：`CmHiT` traits + `HiNodeAxiLiteBridge`（`hinode_axilite_bridge.h`）。实测参数：outstanding=8（AxiDeviceParams 默认）、`busDataBits=cfgAxiDataBits=L3OuterBusWidth=256`（SoC.scala:148）、**tagOffset=3 → compareTag=addr[18:3]**、`nodeId=0x20` 常量化（生成 SV 中 nodeId 端口已被 firtool 常量折叠裁除）。W 直出（无 dataBuffer，CM 内 64b 数据/8b 掩码，`slvMask=MaskGen(addr,size,32)`——`info.mask` 在 RTL 中抽取但不被消费，模型同留作保真）；`icn.tx.req`（ERQ）恒 invalid。生成 SV 端口裁剪注记：HI 侧 `axi_b_ready`/`icn_rx_resp_ready`/`icn_rx_data_ready`/`nodeId` 等常量端口被 firtool 裁除，模型保留这些出口（对拍时不比）。
+>
+> ⚠️ **compAck 同拍覆盖陷阱**（桥级对拍实证）：`BaseCtrlMachine.scala:100-117` 中 `rx.resp`（CompAck）与 `rx.data` 两个 `when` 块都写 `compAck`，同拍同到时按 Chisel 后连接优先 = **rx.data 块覆盖 rx.resp 块**——ECA 写若 CompAck 与 NonCopyBackWriteData 同拍到达同一 CM，CompAck 被丢弃、CM 永久占住（5 万拍后触发 "bridge CM time out" 调试断言）。香山依赖 CHI 保序（CompAck 后于写数据）；模型按 RTL 原样复现该覆盖语义，激励侧须遵守保序。
 
 ---
 
