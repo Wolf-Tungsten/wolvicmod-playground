@@ -21,9 +21,9 @@
 
 #include "model/bridge/axi_flit.h"
 #include "model/bridge/bridge_cm.h"
-#include "model/detail/collect.h"
 #include "model/flit/zj_flit.h"
 #include "prefab/xsarb.h"
+#include "wolvicmod/core/collect.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/dec.h"
@@ -224,12 +224,12 @@ public:
             cm.alloc_resp         = false;
         }
 
-        detail::collectPorts(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
-        detail::collectPorts(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
-        detail::collectPorts(rsp_in, cms, [](Cm& cm) -> Out<Dec<RespFlit>>& { return cm.tx_resp; });
-        detail::collectPorts(aw_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_aw; });
-        detail::collectPorts(ar_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_ar; });
-        detail::collectPorts(w_all, cms,
+        wolvicmod::collectPorts(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
+        wolvicmod::collectPorts(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
+        wolvicmod::collectPorts(rsp_in, cms, [](Cm& cm) -> Out<Dec<RespFlit>>& { return cm.tx_resp; });
+        wolvicmod::collectPorts(aw_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_aw; });
+        wolvicmod::collectPorts(ar_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_ar; });
+        wolvicmod::collectPorts(w_all, cms,
                              [](Cm& cm) -> Out<Dec<axi::WFlit>>& { return cm.axi_w; });
 
         rsp_arb.in = rsp_in;
