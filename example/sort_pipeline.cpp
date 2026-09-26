@@ -46,7 +46,7 @@ struct SortPipeline : Module {
     IN(bool, clk);
     OUT(Vec, dout);
     REG(Vec, sorted);  // beat 0: din sorted and registered
-    SUB(SR, sr);       // child: 3 more beats
+    MOD(SR, sr);       // child: 3 more beats
 
     SortPipeline() {
         sorted.update().on(posedge(clk)).reads(din) = [](auto src) {

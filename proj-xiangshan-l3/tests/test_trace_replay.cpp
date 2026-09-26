@@ -72,8 +72,8 @@ public:
     IN(Dec<SnoopFlit>, ring_tx_snoop);
     OUT(bool, ring_tx_snoop_rdy);
 
-    SUB(xs::XscChiAdapter, adapter);
-    SUB(sock::CcSocket, socket);
+    MOD(xs::XscChiAdapter, adapter);
+    MOD(sock::CcSocket, socket);
 
     CcBoundary() {
         socket.l2_rx_req = adapter.zj_rx_req;

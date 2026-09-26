@@ -141,7 +141,7 @@ public:
     WIRE(uint32_t, w_wr_addr);
 
     using HoldPipe = ValidPipe<RespBits, kHoldDelay>;
-    SUB(HoldPipe, holdpipe);
+    MOD(HoldPipe, holdpipe);
     // kIsc>1 才例化（请求位寄存 + 采样/写提交推迟），kIsc==1 为纯组合直通
     using CapPipe = ValidPipe<uint32_t, (kCapDelay > 0 ? kCapDelay : 1)>;
     using WrPipe = ValidPipe<ReqBits, (kIsc > 1 ? kIsc - 1 : 1)>;

@@ -107,7 +107,7 @@ public:
     IN(bool, deq_rdy);
 
     using RxQ = Queue<F, kPdcTokens, true>;  // Queue(gen, 5, flow=true)
-    SUB(RxQ, rxq);
+    MOD(RxQ, rxq);
 
     REG(St, st);
 

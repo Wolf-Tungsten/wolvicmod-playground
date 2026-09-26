@@ -139,8 +139,8 @@ public:
     OUT(uint32_t, chosen);
 
     WIRE(bool, w_has_high);
-    SUB(Sub, arb_lo);
-    SUB(Sub, arb_hi);
+    MOD(Sub, arb_lo);
+    MOD(Sub, arb_hi);
 
     QosArb() {
         arb_lo.clk = clk;
@@ -264,7 +264,7 @@ public:
 
     REG(RdyArr, sel_reg);
     using Arb = VipArb<T, N>;  // 宏参数含逗号，先取别名
-    SUB(Arb, arb);
+    MOD(Arb, arb);
 
     WIRE(RdyArr, w_sel_oh);
     WIRE(bool, w_any_vld);

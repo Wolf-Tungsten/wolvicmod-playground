@@ -96,7 +96,7 @@ Update 的语义按目标分为两种形态：
 
 ## 3. 建模 API
 
-建模在模块构造函数中完成，由两步构成：声明结构成员（端口、Wire、Reg、Mem、子模块），再为每根 Wire 与每个端口注册 Assign、为每个 Reg 与 Mem 注册 Update。结构成员经 Module 的创建方法声明——`createIn` / `createOut` / `createWire` / `createReg` / `createMem` / `createChildModule`，创建时给出名字，供诊断与波形使用（§6.1）；`IN` / `OUT` / `WIRE` / `REG` / `MEM` / `SUB` 六个宏是对应的一行简写。本节通过五个递进的案例给出全部写法：§3.1 组合逻辑，§3.2 时序逻辑，§3.3 层次与参数化，§3.4 存储器，§3.5 elaboration 与外部驱动。
+建模在模块构造函数中完成，由两步构成：声明结构成员（端口、Wire、Reg、Mem、子模块），再为每根 Wire 与每个端口注册 Assign、为每个 Reg 与 Mem 注册 Update。结构成员经 Module 的创建方法声明——`createIn` / `createOut` / `createWire` / `createReg` / `createMem` / `createChildModule` / `createChildModuleArray`，创建时给出名字，供诊断与波形使用（§6.1）；`IN` / `OUT` / `WIRE` / `REG` / `MEM` / `MOD` / `MOD_ARRAY` 七个宏是对应的一行简写。本节通过五个递进的案例给出全部写法：§3.1 组合逻辑，§3.2 时序逻辑，§3.3 层次与参数化，§3.4 存储器，§3.5 elaboration 与外部驱动。
 
 ### 3.1 组合逻辑：32 位加法器
 
@@ -278,7 +278,7 @@ struct SortPipeline : Module {
     IN(Bool, clk);
     OUT(Vec, dout);
     REG(Vec, sorted);                 // 第 0 拍：din 排序后寄存
-    SUB(SR, sr);                      // 子模块：再延迟 3 拍
+    MOD(SR, sr);                      // 子模块：再延迟 3 拍
 
     SortPipeline() {
         sorted.update().on(posedge(clk)).reads(din) = [](auto src) {
@@ -298,7 +298,7 @@ struct SortPipeline : Module {
 
 移位寄存器的全部 N 级状态放在一条 `Reg<std::array<T, N>>` 中：Reg 的类型参数可以是任意 C++ 类型，这里是 STL 容器，移位只是 lambda 内的普通 for 循环。`reads(din, q)` 同时读输入端口与寄存器自身——次态由现态计算，这是时序逻辑的常规形态。`dout` 的取值是 `q[N - 1]`，元素访问超出单行表达式的范围，故用完整形式注册 Assign。
 
-顶层的组建展示了层次的工作方式：子模块经 `SUB` 宏（`createChildModule`）创建，声明方式与信号、状态一致，使用上与普通成员无别——`sr.din`、`sr.dout` 照常访问。三条注册语句覆盖连线三模式中的两条——`sr.din = sorted` 是下行（父模块的 Assign 驱动子模块的 `In`），`dout = sr.dout` 是上行（读子模块的 `Out`）；第三种模式即兄弟子模块间的连线，由这两条组合而成：父模块读一个子模块的 `Out`、驱动另一个子模块的 `In`，无需额外的连线设施。
+顶层的组建展示了层次的工作方式：子模块经 `MOD` 宏（`createChildModule`）创建，声明方式与信号、状态一致，使用上与普通成员无别——`sr.din`、`sr.dout` 照常访问。三条注册语句覆盖连线三模式中的两条——`sr.din = sorted` 是下行（父模块的 Assign 驱动子模块的 `In`），`dout = sr.dout` 是上行（读子模块的 `Out`）；第三种模式即兄弟子模块间的连线，由这两条组合而成：父模块读一个子模块的 `Out`、驱动另一个子模块的 `In`，无需额外的连线设施。
 
 行为：`din` 在 `clk` 上升沿被采样、排序后写入 `sorted`，此后每拍在移位寄存器中前进一级，3 拍后到达 `dout`——从采样到输出共 4 拍。
 
@@ -511,13 +511,16 @@ struct Counter : Module {
 宏把名字收敛到一处，声明保持一行：
 
 ```cpp
-#define IN(T, name)     In<T>&      name = createIn<T>(#name)
-#define OUT(T, name)    Out<T>&     name = createOut<T>(#name)
-#define WIRE(T, name)   Wire<T>&    name = createWire<T>(#name)
-#define REG(T, name)    Reg<T>&     name = createReg<T>(#name)
-#define MEM(T, R, name) Mem<T, R>&  name = createMem<T, R>(#name)
-#define SUB(T, name)    T&          name = createChildModule<T>(#name)
+#define IN(T, name)           In<T>&      name = createIn<T>(#name)
+#define OUT(T, name)          Out<T>&     name = createOut<T>(#name)
+#define WIRE(T, name)         Wire<T>&    name = createWire<T>(#name)
+#define REG(T, name)          Reg<T>&     name = createReg<T>(#name)
+#define MEM(T, R, name)       Mem<T, R>&  name = createMem<T, R>(#name)
+#define MOD(T, name)          T&          name = createChildModule<T>(#name)
+#define MOD_ARRAY(T, N, name) ChildModuleArray<T, N> name = createChildModuleArray<T, N>(#name)
 ```
+
+`MOD_ARRAY` 批量创建 N 个默认构造子模块（自动起名 `name[0]`..`name[N-1]`），返回 `ChildModuleArray<T, N>`——包装指针数组（C++ 无引用数组），`operator[]` 返回引用，调用点与单个子模块写法一致；数组默认作构造函数体内的局部连线句柄，确有构造后访问需求（如 testbench dump 子模块内部态）才绑为成员。
 
 宏参数按逗号切分，类型参数自身含逗号时（如 `std::array<T, N>`）先取别名再进宏。
 

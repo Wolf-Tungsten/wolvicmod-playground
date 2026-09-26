@@ -93,15 +93,15 @@ public:
     using HomeShellB0 = home::HomeShell<home::kHomeBank0>;
     using HomeShellB1 = home::HomeShell<home::kHomeBank1>;
 
-    SUB(xs::XscChiAdapter, adapter);
-    SUB(sock::CcSocket, cc_socket);
-    SUB(ring::Ring, ring);
-    SUB(HomeShellB0, shell0);  // bank0：lan0=n0(gid0)、lan1=n7(gid7)
-    SUB(HomeShellB1, shell1);  // bank1：lan0=n2(gid2)、lan1=n5(gid5)
-    SUB(home::HnfStub, hnf0);
-    SUB(home::HnfStub, hnf1);
-    SUB(bridge::SNodeAxiBridge, snode);    // n6 → memAXI
-    SUB(bridge::HiNodeAxiLiteBridge, hinode);  // n4 → cfgAXI
+    MOD(xs::XscChiAdapter, adapter);
+    MOD(sock::CcSocket, cc_socket);
+    MOD(ring::Ring, ring);
+    MOD(HomeShellB0, shell0);  // bank0：lan0=n0(gid0)、lan1=n7(gid7)
+    MOD(HomeShellB1, shell1);  // bank1：lan0=n2(gid2)、lan1=n5(gid5)
+    MOD(home::HnfStub, hnf0);
+    MOD(home::HnfStub, hnf1);
+    MOD(bridge::SNodeAxiBridge, snode);    // n6 → memAXI
+    MOD(bridge::HiNodeAxiLiteBridge, hinode);  // n4 → cfgAXI
 
     ZjL3() {
         adapter.chi_tx_req = chi_tx_req;

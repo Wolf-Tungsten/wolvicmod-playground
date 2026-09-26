@@ -177,14 +177,14 @@ public:
     using AxArbT  = CondVipArb<axi::AxFlit, kOutst>;
     using AwQ     = Queue<uint8_t, kOutst>;
     using RdPipe  = Queue<DataFlit, 1, false, true>;
-    SUB(RspArbT, rsp_arb);
-    SUB(AxArbT, aw_arb);
-    SUB(AxArbT, ar_arb);
-    SUB(AwQ, aw_q);  // UInt(8.W) 一位热
-    SUB(RdPipe, rd_pipe);  // readDataPipe
+    MOD(RspArbT, rsp_arb);
+    MOD(AxArbT, aw_arb);
+    MOD(AxArbT, ar_arb);
+    MOD(AwQ, aw_q);  // UInt(8.W) 一位热
+    MOD(RdPipe, rd_pipe);  // readDataPipe
 
     // 成员持有（而非构造函数局部）：cosim harness 看门狗需构造后访问各 CM 内部态
-    std::array<Cm*, kOutst> cms = createChildModuleArray<Cm, kOutst>("cm");
+    MOD_ARRAY(Cm, kOutst, cms);
 
     using BoolArr = std::array<bool, kOutst>;
     using WkArr   = std::array<WkV, kOutst>;
@@ -216,7 +216,7 @@ public:
         aw_q.clk = clk;
         rd_pipe.clk = clk;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm                = *cms[i];
+            Cm& cm                = cms[i];
             cm.clk                = clk;
             cm.idx                = i;
             // HI 无 alloc：req 已在 CM 内 tie invalid；rdy/resp 按 §4.2 须有驱动
@@ -242,7 +242,7 @@ public:
         axi_ar = ar_arb.out;
         ar_arb.out_rdy = axi_ar_rdy;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.wk_in = wk_all;
             cm.wait_num = w_wait_num;
             cm.tx_resp_rdy.assign().reads(rsp_arb.in_rdy) = [i](auto src) {
@@ -282,7 +282,7 @@ public:
             return rx_req.valid && w_any_free;
         };
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.rx_req.assign().reads(rx_req, free_lo) = [i](auto src) {
                 auto [rx_req, free_lo] = src;
                 Dec<RReqFlit> d;
@@ -344,7 +344,7 @@ public:
             return axi_w_rdy && w_wsel_vld;
         };
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.axi_w_rdy.assign().reads(axi_w_rdy, aw_q.deq) = [i](auto src) {
                 auto [axi_w_rdy, aw_q_deq] = src;
                 return axi_w_rdy && aw_q_deq.valid && ((aw_q_deq.bits >> i) & 1);
@@ -356,7 +356,7 @@ public:
         rx_data_rdy = true;
         axi_b_rdy = true;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.rx_resp.assign().reads(rx_resp) = [i](auto src) {
                 auto [rx_resp] = src;
                 Dec<RespFlit> d;
@@ -405,7 +405,7 @@ public:
         tx_data = rd_pipe.deq;
         rd_pipe.deq_rdy = tx_data_rdy;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.rd_fire.assign().reads(axi_r, rd_pipe.enq_rdy) = [i](auto src) {
                 auto [axi_r, rd_pipe_enq_rdy] = src;
                 return axi_r.valid && rd_pipe_enq_rdy && (axi_r.bits.id & (kOutst - 1)) == i;

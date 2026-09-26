@@ -151,24 +151,24 @@ public:
     using DatArb = RRArb<DataFlit, 2>;
 
     // ChiBuffer 队列（每 lan：eject 3 + inject 4）
-    SUB(ReqQ, lan0_ej_req_q);
-    SUB(RspQ, lan0_ej_rsp_q);
-    SUB(DatQ, lan0_ej_dat_q);
-    SUB(ReqQ, lan1_ej_req_q);
-    SUB(RspQ, lan1_ej_rsp_q);
-    SUB(DatQ, lan1_ej_dat_q);
-    SUB(RspQ, lan0_ij_rsp_q);
-    SUB(DatQ, lan0_ij_dat_q);
-    SUB(SnpQ, lan0_ij_snp_q);
-    SUB(ErqQ, lan0_ij_erq_q);
-    SUB(RspQ, lan1_ij_rsp_q);
-    SUB(DatQ, lan1_ij_dat_q);
-    SUB(SnpQ, lan1_ij_snp_q);
-    SUB(ErqQ, lan1_ij_erq_q);
+    MOD(ReqQ, lan0_ej_req_q);
+    MOD(RspQ, lan0_ej_rsp_q);
+    MOD(DatQ, lan0_ej_dat_q);
+    MOD(ReqQ, lan1_ej_req_q);
+    MOD(RspQ, lan1_ej_rsp_q);
+    MOD(DatQ, lan1_ej_dat_q);
+    MOD(RspQ, lan0_ij_rsp_q);
+    MOD(DatQ, lan0_ij_dat_q);
+    MOD(SnpQ, lan0_ij_snp_q);
+    MOD(ErqQ, lan0_ij_erq_q);
+    MOD(RspQ, lan1_ij_rsp_q);
+    MOD(DatQ, lan1_ij_dat_q);
+    MOD(SnpQ, lan1_ij_snp_q);
+    MOD(ErqQ, lan1_ij_erq_q);
     // eject 合流仲裁
-    SUB(ReqArb, arb_req);
-    SUB(RspArb, arb_rsp);
-    SUB(DatArb, arb_dat);
+    MOD(ReqArb, arb_req);
+    MOD(RspArb, arb_rsp);
+    MOD(DatArb, arb_dat);
 
     HomeShell() {
         // lan 端口索引视图（实体归本模块持有；供 ZjL3 按 lanIdx 接线）

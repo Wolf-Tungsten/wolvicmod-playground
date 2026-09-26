@@ -69,21 +69,21 @@ public:
     OUT(bool, ring_tx_snoop_rdy);
 
     // inject 通道（L2→环）：tx 在 dev 侧、rx 在 icn 侧
-    SUB(PdcTx<RReqFlit>, ij_req_tx);
-    SUB(PdcRx<RReqFlit>, ij_req_rx);
-    SUB(PdcTx<RespFlit>, ij_rsp_tx);
-    SUB(PdcRx<RespFlit>, ij_rsp_rx);
-    SUB(PdcTx<DataFlit>, ij_dat_tx);
-    SUB(PdcRx<DataFlit>, ij_dat_rx);
+    MOD(PdcTx<RReqFlit>, ij_req_tx);
+    MOD(PdcRx<RReqFlit>, ij_req_rx);
+    MOD(PdcTx<RespFlit>, ij_rsp_tx);
+    MOD(PdcRx<RespFlit>, ij_rsp_rx);
+    MOD(PdcTx<DataFlit>, ij_dat_tx);
+    MOD(PdcRx<DataFlit>, ij_dat_rx);
     // eject 通道（环→L2）：tx 在 icn 侧、rx 在 dev 侧
-    SUB(PdcTx<RReqFlit>, ej_req_tx);
-    SUB(PdcRx<RReqFlit>, ej_req_rx);
-    SUB(PdcTx<RespFlit>, ej_rsp_tx);
-    SUB(PdcRx<RespFlit>, ej_rsp_rx);
-    SUB(PdcTx<DataFlit>, ej_dat_tx);
-    SUB(PdcRx<DataFlit>, ej_dat_rx);
-    SUB(PdcTx<SnoopFlit>, ej_snp_tx);
-    SUB(PdcRx<SnoopFlit>, ej_snp_rx);
+    MOD(PdcTx<RReqFlit>, ej_req_tx);
+    MOD(PdcRx<RReqFlit>, ej_req_rx);
+    MOD(PdcTx<RespFlit>, ej_rsp_tx);
+    MOD(PdcRx<RespFlit>, ej_rsp_rx);
+    MOD(PdcTx<DataFlit>, ej_dat_tx);
+    MOD(PdcRx<DataFlit>, ej_dat_rx);
+    MOD(PdcTx<SnoopFlit>, ej_snp_tx);
+    MOD(PdcRx<SnoopFlit>, ej_snp_rx);
 
     CcSocket() {
         buildChan(l2_rx_req, l2_rx_req_rdy, ring_rx_req, ring_rx_req_rdy, ij_req_tx, ij_req_rx);

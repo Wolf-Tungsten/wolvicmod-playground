@@ -155,9 +155,9 @@ public:
     using OQueue   = Queue<FlitT, Size - 1>;        // Queue(gen, size-1)
     using VipTableT = VipTable<kVipSize>;
 
-    SUB(IPipe, ipipe);
-    SUB(OQueue, oqueue);
-    SUB(VipTableT, vip_table);
+    MOD(IPipe, ipipe);
+    MOD(OQueue, oqueue);
+    MOD(VipTableT, vip_table);
 
     REG(St, st);
 

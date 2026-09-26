@@ -171,17 +171,17 @@ public:
     using AllocQ   = Queue<AllocReqBits, 2>;
     using AwQ      = Queue<uint64_t, kOutst>;
     using RdPipe   = Queue<DataFlit, 1, false, true>;
-    SUB(RspArbT, rsp_arb);
-    SUB(AxArbT, aw_arb);
-    SUB(AxArbT, ar_arb);
-    SUB(AllocArbT, alloc_sel);
-    SUB(AllocQ, alloc_q);
-    SUB(AwQ, aw_q);  // UInt(64.W) 一位热
-    SUB(AxiDataBuffer, data_buf);
-    SUB(RdPipe, rd_pipe);  // readDataPipe
+    MOD(RspArbT, rsp_arb);
+    MOD(AxArbT, aw_arb);
+    MOD(AxArbT, ar_arb);
+    MOD(AllocArbT, alloc_sel);
+    MOD(AllocQ, alloc_q);
+    MOD(AwQ, aw_q);  // UInt(64.W) 一位热
+    MOD(AxiDataBuffer, data_buf);
+    MOD(RdPipe, rd_pipe);  // readDataPipe
 
     // 成员持有（而非构造函数局部）：cosim harness 看门狗需构造后访问各 CM 内部态
-    std::array<Cm*, kOutst> cms = createChildModuleArray<Cm, kOutst>("cm");
+    MOD_ARRAY(Cm, kOutst, cms);
 
     using BoolArr = std::array<bool, kOutst>;
     using WkArr   = std::array<WkV, kOutst>;
@@ -218,7 +218,7 @@ public:
         data_buf.clk = clk;
         rd_pipe.clk = clk;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm     = *cms[i];
+            Cm& cm     = cms[i];
             cm.clk     = clk;
             cm.idx     = i;
             cm.rx_resp = Dec<RespFlit>{};  // S 无 rx.resp（tie invalid）
@@ -247,7 +247,7 @@ public:
         axi_ar = ar_arb.out;
         ar_arb.out_rdy = axi_ar_rdy;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.wk_in = wk_all;
             cm.wait_num = w_wait_num;
             cm.tx_resp_rdy.assign().reads(rsp_arb.in_rdy) = [i](auto src) {
@@ -291,7 +291,7 @@ public:
             return rx_req.valid && w_any_free;
         };
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.rx_req.assign().reads(rx_req, free_lo) = [i](auto src) {
                 auto [rx_req, free_lo] = src;
                 Dec<HReqFlit> d;
@@ -328,7 +328,7 @@ public:
         data_buf.alloc = alloc_q.deq;
         alloc_q.deq_rdy = data_buf.alloc_rdy;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.alloc_resp.assign().reads(alloc_q.deq, data_buf.alloc_rdy) =
                 [i](auto src) {
                     auto [alloc_q_deq, data_buf_alloc_rdy] = src;
@@ -367,7 +367,7 @@ public:
             return data_buf_from_cm_rdy && w_wsel_vld;
         };
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.axi_w_rdy.assign().reads(data_buf.from_cm_rdy, aw_q.deq) = [i](auto src) {
                 auto [data_buf_from_cm_rdy, aw_q_deq] = src;
                 return data_buf_from_cm_rdy && aw_q_deq.valid &&
@@ -382,7 +382,7 @@ public:
         axi_w = data_buf.axi_w;
         data_buf.axi_w_rdy = axi_w_rdy;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.axi_b.assign().reads(axi_b) = [i](auto src) {
                 auto [axi_b] = src;
                 Dec<axi::BFlit> d;
@@ -425,7 +425,7 @@ public:
         tx_data = rd_pipe.deq;
         rd_pipe.deq_rdy = tx_data_rdy;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            Cm& cm = *cms[i];
+            Cm& cm = cms[i];
             cm.rd_fire.assign().reads(axi_r, rd_pipe.enq_rdy) = [i](auto src) {
                 auto [axi_r, rd_pipe_enq_rdy] = src;
                 return axi_r.valid && rd_pipe_enq_rdy && (axi_r.bits.id & (kOutst - 1)) == i;

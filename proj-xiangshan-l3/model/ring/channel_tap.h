@@ -221,11 +221,11 @@ public:
     using Eb   = EjectBuffer<FlitT, EjDepth, IsDat>;
     using Earb = RRArb<FlitT, 2>;
 
-    SUB(Tap, tap0);
-    SUB(Tap, tap1);
-    SUB(Eb, eb0);
-    SUB(Eb, eb1);
-    SUB(Earb, earb);
+    MOD(Tap, tap0);
+    MOD(Tap, tap1);
+    MOD(Eb, eb0);
+    MOD(Eb, eb1);
+    MOD(Earb, earb);
 
     ChannelTap() {
         tap0.clk = clk;

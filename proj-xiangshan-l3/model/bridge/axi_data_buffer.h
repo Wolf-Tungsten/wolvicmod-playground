@@ -122,8 +122,8 @@ public:
     REG(St, st);
     using Stage1Q = Queue<S1Bits, 1, false, true>;      // 宏参数含逗号，先取别名
     using Stage2Q = Queue<axi::WFlit, 1, false, true>;
-    SUB(Stage1Q, stage1);
-    SUB(Stage2Q, stage2);
+    MOD(Stage1Q, stage1);
+    MOD(Stage2Q, stage2);
 
     WIRE(uint32_t, w_req_num);
     WIRE(bool, w_alloc_fire);
