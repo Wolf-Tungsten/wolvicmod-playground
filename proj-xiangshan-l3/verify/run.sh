@@ -31,13 +31,15 @@ JOBS=32
 MODULE="all"
 SKIP_REFGEN=0
 SKIP_BUILD=0
+SKIP_VERILATE=0
 for arg in "$@"; do
   case "$arg" in
     --skip-refgen) SKIP_REFGEN=1 ;;
     --skip-build)  SKIP_BUILD=1 ;;
+    --skip-verilate) SKIP_VERILATE=1 ;;  # 参考 RTL 已 verilate 过时跳过（harness 照构）
     -j*)           JOBS="${arg#-j}" ;;
-    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|all) MODULE="$arg" ;;
-    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|all）" >&2; exit 2 ;;
+    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|all) MODULE="$arg" ;;
+    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|all）" >&2; exit 2 ;;
   esac
 done
 
@@ -62,6 +64,7 @@ case "$MODULE" in
   dpsram) MODULES=(dpsram); ALL_CFGS=("${DPSRAM_CFGS[@]}") ;;
   ring)   MODULES=(ring) ;;   # 免 refgen：直接用 XS_RTL 的 ZRING
   socket) MODULES=(socket) ;; # 免 refgen：直接用 XS_RTL 的 Socket{Dev,Icn}Side
+  bridge) MODULES=(bridge) ;; # 免 refgen：直接用 XS_RTL 的 AxiBridge/AxiLiteBridge
   all)    MODULES=(fastq viparb qosarb alloc spsram dpsram)
           ALL_CFGS=("${FASTQ_CFGS[@]}" "${VIPARB_CFGS[@]}" "${QOSARB_CFGS[@]}"
                     "${ALLOC_CFGS[@]}" "${SPSRAM_CFGS[@]}" "${DPSRAM_CFGS[@]}") ;;
@@ -75,8 +78,8 @@ if [[ -e "$VERIFY_DIR/refgen/out" && ! -L "$VERIFY_DIR/refgen/out" ]]; then
 fi
 ln -sfn "$OUT/mill" "$VERIFY_DIR/refgen/out"
 
-# ---------- 1. refgen：逐配置生成 SV（ring/socket 免）----------
-if [[ "$MODULE" == "ring" || "$MODULE" == "socket" ]]; then
+# ---------- 1. refgen：逐配置生成 SV（ring/socket/bridge 免）----------
+if [[ "$MODULE" == "ring" || "$MODULE" == "socket" || "$MODULE" == "bridge" ]]; then
   echo "==> [1/4] refgen 不适用（$MODULE 直接用 $XS_RTL 的构建产物）"
 elif [[ "$SKIP_REFGEN" == 0 ]]; then
   echo "==> [1/4] refgen: 逐配置生成 SystemVerilog（${#ALL_CFGS[@]} 个配置）"
@@ -93,6 +96,9 @@ fi
 
 # ---------- 2. verilate + 3. 构建 harness ----------
 if [[ "$SKIP_BUILD" == 0 ]]; then
+  if [[ "$SKIP_VERILATE" == 1 ]]; then
+    echo "==> [2/4] verilate 跳过（--skip-verilate）；直接构建 harness"
+  else
   echo "==> [2/4] verilator: 编译参考模型"
   mkdir -p "$OUT/obj"
   if [[ "$MODULE" == "ring" ]]; then
@@ -118,6 +124,20 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
         echo "verilate FAILED for ccsocket"; tail -10 "$OUT/obj/ccsocket.verilate.log"; exit 1; }
     make -C "$obj" -f VCcSocket.mk -j"$JOBS" > "$OUT/obj/ccsocket.make.log" 2>&1 || {
         echo "verilated make FAILED for ccsocket"; tail -10 "$OUT/obj/ccsocket.make.log"; exit 1; }
+  elif [[ "$MODULE" == "bridge" ]]; then
+    # 两桥：build/rtl 的 AxiBridge/AxiLiteBridge 即边界顶层（端口与模型一致），
+    # 子模块闭包（CtrlMachine/DataBuffer/Queue/SRAM 等）由 -y 解析
+    for br in AxiBridge AxiLiteBridge; do
+      obj="$OUT/obj/$(echo "$br" | tr 'A-Z' 'a-z')"
+      mkdir -p "$obj"
+      verilator --cc --top-module "$br" -Mdir "$obj" --prefix "V$br" \
+        -Wno-fatal -Wno-WIDTH -Wno-LATCH -Wno-MULTIDRIVEN -Wno-UNOPTTHREADS \
+        "$VERIFY_DIR/cosim/xs_assert_shim.sv" "$XS_RTL/$br.sv" \
+        -y "$XS_RTL" +libext+.sv > "$obj.verilate.log" 2>&1 || {
+          echo "verilate FAILED for $br"; tail -10 "$obj.verilate.log"; exit 1; }
+      make -C "$obj" -f "V$br.mk" -j"$JOBS" > "$obj.make.log" 2>&1 || {
+        echo "verilated make FAILED for $br"; tail -10 "$obj.make.log"; exit 1; }
+    done
   else
   for cfg in "${ALL_CFGS[@]}"; do
     obj="$OUT/obj/$cfg"
@@ -130,6 +150,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       echo "verilated make FAILED for $cfg"; tail -10 "$OUT/obj/$cfg.make.log"; exit 1; }
   done
   fi
+  fi  # SKIP_VERILATE
   g++ -std=c++20 -O2 -I"$VR_ROOT/include" -c "$VR_ROOT/include/verilated.cpp" -o "$OUT/verilated.o"
   g++ -std=c++20 -O2 -I"$VR_ROOT/include" -c "$VR_ROOT/include/verilated_threads.cpp" -o "$OUT/verilated_threads.o"
 
@@ -145,6 +166,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       dpsram) cfgs=("${DPSRAM_CFGS[@]}") ;;
       ring)   cfgs=(zring) ;;
       socket) cfgs=(ccsocket) ;;
+      bridge) cfgs=(axibridge axilitebridge) ;;
     esac
     incs=() libs=()
     for cfg in "${cfgs[@]}"; do
@@ -153,6 +175,10 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
         libs+=("$OUT/obj/$cfg/VZRing__ALL.a")
       elif [[ "$cfg" == "ccsocket" ]]; then
         libs+=("$OUT/obj/$cfg/VCcSocket__ALL.a")
+      elif [[ "$cfg" == "axibridge" ]]; then
+        libs+=("$OUT/obj/$cfg/VAxiBridge__ALL.a")
+      elif [[ "$cfg" == "axilitebridge" ]]; then
+        libs+=("$OUT/obj/$cfg/VAxiLiteBridge__ALL.a")
       else
         libs+=("$OUT/obj/$cfg/V$cfg"__ALL.a)
       fi

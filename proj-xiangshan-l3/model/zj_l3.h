@@ -1,10 +1,10 @@
 #pragma once
 
-// ZjL3：P2 阶段的部分组装顶层（WolvicZjTop 雏形，后续步骤在同一文件演进）：
+// ZjL3：P4a 阶段的部分组装顶层（WolvicZjTop 雏形，后续步骤在同一文件演进）：
 //   L2 CHI 边界 → XscChiAdapter → CcSocket → Ring n1(CC)
 //   Ring n0/n7 → HomeShell(bank0) → HnfStub；n2/n5 → HomeShell(bank1) → HnfStub
-// 未建模站点（RI n3 / HI n4 / S n6）的环边界端口直通外露（P4 接
-// SNode/HiNode bridge；当前由测试 tie-off）。M/P 无环边界通道。
+//   Ring n4(HI) → HiNodeAxiLiteBridge → cfgAXI；n6(S) → SNodeAxiBridge → memAXI
+// 未建模站点（RI n3）的环边界端口直通外露（由测试 tie-off）。M/P 无环边界通道。
 //
 // ZhuJiangBridge 的 tie-off 角色（ZhuJiangBridge.scala:116-127,147-149）：
 //   - eject REQ（l2_tx_req）：rdy 恒 false，valid/bits 外露 cc_tx_req 供观察
@@ -13,6 +13,8 @@
 
 #include <cstdint>
 
+#include "model/bridge/hinode_axilite_bridge.h"
+#include "model/bridge/snode_axi_bridge.h"
 #include "model/cc/cc_socket.h"
 #include "model/cc/xsc_chi_adapter.h"
 #include "model/home/hnf_stub.h"
@@ -64,27 +66,29 @@ public:
     OUT(Dec<chi::DataFlit>, n3_tx_data);
     IN(bool, n3_tx_data_rdy);
 
-    OUT(Dec<chi::RReqFlit>, n4_tx_req);
-    IN(bool, n4_tx_req_rdy);
-    OUT(Dec<chi::RespFlit>, n4_tx_resp);
-    IN(bool, n4_tx_resp_rdy);
-    OUT(Dec<chi::DataFlit>, n4_tx_data);
-    IN(bool, n4_tx_data_rdy);
-    IN(Dec<chi::HReqFlit>, n4_rx_req);
-    OUT(bool, n4_rx_req_rdy);
-    IN(Dec<chi::RespFlit>, n4_rx_resp);
-    OUT(bool, n4_rx_resp_rdy);
-    IN(Dec<chi::DataFlit>, n4_rx_data);
-    OUT(bool, n4_rx_data_rdy);
+    // ---- memAXI（SNode 桥，id 6b/addr 48b/data 256b）----
+    OUT(Dec<axi::AWFlit>, mem_aw);
+    IN(bool, mem_aw_rdy);
+    OUT(Dec<axi::WFlit>, mem_w);
+    IN(bool, mem_w_rdy);
+    OUT(Dec<axi::ARFlit>, mem_ar);
+    IN(bool, mem_ar_rdy);
+    IN(Dec<axi::BFlit>, mem_b);
+    OUT(bool, mem_b_rdy);
+    IN(Dec<axi::RFlit>, mem_r);
+    OUT(bool, mem_r_rdy);
 
-    IN(Dec<chi::RespFlit>, n6_rx_resp);
-    OUT(bool, n6_rx_resp_rdy);
-    IN(Dec<chi::DataFlit>, n6_rx_data);
-    OUT(bool, n6_rx_data_rdy);
-    OUT(Dec<chi::HReqFlit>, n6_tx_req);
-    IN(bool, n6_tx_req_rdy);
-    OUT(Dec<chi::DataFlit>, n6_tx_data);
-    IN(bool, n6_tx_data_rdy);
+    // ---- cfgAXI（HiNode 桥，id 3b/addr 48b/data 256b）----
+    OUT(Dec<axi::AWFlit>, cfg_aw);
+    IN(bool, cfg_aw_rdy);
+    OUT(Dec<axi::WFlit>, cfg_w);
+    IN(bool, cfg_w_rdy);
+    OUT(Dec<axi::ARFlit>, cfg_ar);
+    IN(bool, cfg_ar_rdy);
+    IN(Dec<axi::BFlit>, cfg_b);
+    OUT(bool, cfg_b_rdy);
+    IN(Dec<axi::RFlit>, cfg_r);
+    OUT(bool, cfg_r_rdy);
 
     using HomeShellB0 = home::HomeShell<home::kHomeBank0>;
     using HomeShellB1 = home::HomeShell<home::kHomeBank1>;
@@ -96,6 +100,8 @@ public:
     SUB(HomeShellB1, shell1);  // bank1：lan0=n2(gid2)、lan1=n5(gid5)
     SUB(home::HnfStub, hnf0);
     SUB(home::HnfStub, hnf1);
+    SUB(bridge::SNodeAxiBridge, snode);    // n6 → memAXI
+    SUB(bridge::HiNodeAxiLiteBridge, hinode);  // n4 → cfgAXI
 
     ZjL3() {
         adapter.chi_tx_req = chi_tx_req;
@@ -166,27 +172,50 @@ public:
         ring.n3_tx_resp_rdy = n3_tx_resp_rdy;
         ring.n3_tx_data_rdy = n3_tx_data_rdy;
 
-        ring.n4_rx_req = n4_rx_req;
-        ring.n4_rx_resp = n4_rx_resp;
-        ring.n4_rx_data = n4_rx_data;
-        n4_rx_req_rdy = ring.n4_rx_req_rdy;
-        n4_rx_resp_rdy = ring.n4_rx_resp_rdy;
-        n4_rx_data_rdy = ring.n4_rx_data_rdy;
-        n4_tx_req = ring.n4_tx_req;
-        n4_tx_resp = ring.n4_tx_resp;
-        n4_tx_data = ring.n4_tx_data;
-        ring.n4_tx_req_rdy = n4_tx_req_rdy;
-        ring.n4_tx_resp_rdy = n4_tx_resp_rdy;
-        ring.n4_tx_data_rdy = n4_tx_data_rdy;
+        // ring n4(HI) ↔ HiNodeAxiLiteBridge（经 stops 视图；ERQ 恒 invalid）
+        hinode.rx_req = *ring.stops[4].tx_req;
+        *ring.stops[4].tx_req_rdy = hinode.rx_req_rdy;
+        hinode.rx_resp = *ring.stops[4].tx_resp;
+        *ring.stops[4].tx_resp_rdy = hinode.rx_resp_rdy;
+        hinode.rx_data = *ring.stops[4].tx_data;
+        *ring.stops[4].tx_data_rdy = hinode.rx_data_rdy;
+        *ring.stops[4].rx_resp = hinode.tx_resp;
+        hinode.tx_resp_rdy = *ring.stops[4].rx_resp_rdy;
+        *ring.stops[4].rx_data = hinode.tx_data;
+        hinode.tx_data_rdy = *ring.stops[4].rx_data_rdy;
+        *ring.stops[4].rx_erq = Dec<chi::HReqFlit>{};  // AxiLiteBridge.scala:33
+        // cfgAXI 外露
+        cfg_aw = hinode.axi_aw;
+        hinode.axi_aw_rdy = cfg_aw_rdy;
+        cfg_w = hinode.axi_w;
+        hinode.axi_w_rdy = cfg_w_rdy;
+        cfg_ar = hinode.axi_ar;
+        hinode.axi_ar_rdy = cfg_ar_rdy;
+        hinode.axi_b = cfg_b;
+        cfg_b_rdy = hinode.axi_b_rdy;
+        hinode.axi_r = cfg_r;
+        cfg_r_rdy = hinode.axi_r_rdy;
 
-        ring.n6_rx_resp = n6_rx_resp;
-        ring.n6_rx_data = n6_rx_data;
-        n6_rx_resp_rdy = ring.n6_rx_resp_rdy;
-        n6_rx_data_rdy = ring.n6_rx_data_rdy;
-        n6_tx_req = ring.n6_tx_req;
-        n6_tx_data = ring.n6_tx_data;
-        ring.n6_tx_req_rdy = n6_tx_req_rdy;
-        ring.n6_tx_data_rdy = n6_tx_data_rdy;
+        // ring n6(S) ↔ SNodeAxiBridge（经 stops 视图）
+        snode.rx_req = *ring.stops[6].tx_erq;
+        *ring.stops[6].tx_erq_rdy = snode.rx_req_rdy;
+        snode.rx_data = *ring.stops[6].tx_data;
+        *ring.stops[6].tx_data_rdy = snode.rx_data_rdy;
+        *ring.stops[6].rx_resp = snode.tx_resp;
+        snode.tx_resp_rdy = *ring.stops[6].rx_resp_rdy;
+        *ring.stops[6].rx_data = snode.tx_data;
+        snode.tx_data_rdy = *ring.stops[6].rx_data_rdy;
+        // memAXI 外露
+        mem_aw = snode.axi_aw;
+        snode.axi_aw_rdy = mem_aw_rdy;
+        mem_w = snode.axi_w;
+        snode.axi_w_rdy = mem_w_rdy;
+        mem_ar = snode.axi_ar;
+        snode.axi_ar_rdy = mem_ar_rdy;
+        snode.axi_b = mem_b;
+        mem_b_rdy = snode.axi_b_rdy;
+        snode.axi_r = mem_r;
+        mem_r_rdy = snode.axi_r_rdy;
 
         ring.ci = ci;
         shell0.ci = ci;
@@ -197,6 +226,9 @@ public:
         shell1.clk = clk;
         hnf0.clk = clk;
         hnf1.clk = clk;
+        snode.clk = clk;
+        hinode.clk = clk;
+        hinode.node_id = uint16_t{0x20};  // HI gid4 nodeId
     }
 
 private:

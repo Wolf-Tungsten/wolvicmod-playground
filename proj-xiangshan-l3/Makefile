@@ -2,8 +2,8 @@
 #
 #   make test                 项目侧单元测试（ctest，逐文件独立条目）
 #   make cosim                项目侧预制菜 RTL 对拍全矩阵
-#   make cosim M=fastq        单模块对拍（fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket）
-#                             # M=ring/socket：环级/CC socket 对拍（直接用
+#   make cosim M=fastq        单模块对拍（fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge）
+#                             # M=ring/socket/bridge：环级/CC socket/P4a 两桥对拍（直接用
 #                             # XiangShan/build/rtl 的产物，须先 emu）
 #   make emu [LLC=ZhuJiang]   构建 XiangShan emu（默认 DefaultConfig + OpenLLC）
 #           [TRACE=fst]       带波形（EMU_TRACE=fst；fst 之外取值见 difftest/verilator.mk）

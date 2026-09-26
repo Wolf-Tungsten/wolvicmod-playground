@@ -238,4 +238,78 @@ public:
     }
 };
 
+// ---------------- CondVipArb：xs-utils ConditionVipArbiter ----------------
+// （arb/ConditionArbiter.scala + SelNto1）结构 = SelNto1 → selReg → VipArbiter：
+//   sel_oh(i) = mvalid(i) 且 mvalid 中不存在 qos 更高者（全胜，可多热）；
+//   mvalid(i) = in(i).valid && !本拍该路 fire（fire 当拍即从选择中剔除）
+//   selReg ← sel_oh（en = 任一路原始 valid；无 valid 时保持）
+//   内层 VipArb 的输入 valid = selReg(i)、bits 直通；in_rdy = 内层 in_rdy
+//   （= out_rdy && selReg(i) && chosen==i，即 io.in(i).fire）。
+// T 须带 .qos 字段（同 QosArb/EjectBuffer 的字段约定）。
+
+template <class T, uint32_t N>
+class CondVipArb : public wolvicmod::Module {
+public:
+    static_assert(N >= 1);
+    using DecT = Dec<T>;
+    using InArr = std::array<DecT, N>;  // 宏参数含逗号，先取别名
+    using RdyArr = std::array<bool, N>;
+
+    IN(bool, clk);
+    IN(InArr, in);
+    OUT(RdyArr, in_rdy);
+    OUT(DecT, out);
+    IN(bool, out_rdy);
+    OUT(uint32_t, chosen);
+
+    REG(RdyArr, sel_reg);
+    using Arb = VipArb<T, N>;  // 宏参数含逗号，先取别名
+    SUB(Arb, arb);
+
+    WIRE(RdyArr, w_sel_oh);
+    WIRE(bool, w_any_vld);
+
+    CondVipArb() {
+        arb.clk = clk;
+        // mvalid：剔除本拍 fire 的路（in_rdy 即 fire）
+        w_sel_oh.assign().reads(in, sel_reg, chosen, out_rdy) = [](auto src) {
+            auto [in, sel_reg, chosen, out_rdy] = src;
+            bool mv[N];
+            for (uint32_t i = 0; i < N; ++i)
+                mv[i] = in[i].valid && !(out_rdy && sel_reg[i] && chosen == i);
+            RdyArr oh{};
+            for (uint32_t i = 0; i < N; ++i) {
+                bool win = mv[i];
+                for (uint32_t j = 0; j < N; ++j)
+                    if (j != i && mv[j]) win = win && (in[i].bits.qos >= in[j].bits.qos);
+                oh[i] = win;
+            }
+            return oh;
+        };
+        w_any_vld.assign().reads(in) = [](auto src) {
+            auto [in] = src;
+            for (uint32_t i = 0; i < N; ++i)
+                if (in[i].valid) return true;
+            return false;
+        };
+        sel_reg.update().on(posedge(clk)).en(w_any_vld).reads(w_sel_oh) = [](auto src) {
+            auto [w_sel_oh] = src;
+            return w_sel_oh;
+        };
+        arb.in.assign().reads(in, sel_reg) = [](auto src) {
+            auto [in, sel_reg] = src;
+            InArr d{};
+            for (uint32_t i = 0; i < N; ++i) {
+                d[i].valid = sel_reg[i];
+                d[i].bits  = in[i].bits;
+            }
+            return d;
+        };
+        arb.out_rdy = out_rdy;
+        out = arb.out;
+        in_rdy = arb.in_rdy;
+        chosen = arb.chosen;
+    }
+};
+
 }  // namespace zj::prefab

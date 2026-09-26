@@ -49,6 +49,27 @@ inline constexpr int kFlitDat = 2;
 inline constexpr int kFlitSnp = 3;
 inline constexpr int kFlitErq = 4;
 
+// Opcode.scala 通道内编码（桥/桩建模用到的子集）
+namespace req_op {
+inline constexpr uint8_t kReadNoSnp               = 0x04;
+inline constexpr uint8_t kWriteNoSnpPtl           = 0x1c;
+inline constexpr uint8_t kWriteNoSnpFull          = 0x1d;
+inline constexpr uint8_t kWriteNoSnpFullCleanInv  = 0x51;
+}  // namespace req_op
+namespace rsp_op {
+inline constexpr uint8_t kCompAck      = 0x02;
+inline constexpr uint8_t kComp         = 0x04;
+inline constexpr uint8_t kCompDBIDResp = 0x05;
+inline constexpr uint8_t kDBIDResp     = 0x06;
+inline constexpr uint8_t kReadReceipt  = 0x08;
+}  // namespace rsp_op
+namespace dat_op {
+inline constexpr uint8_t kNonCopyBackWriteData = 0x03;
+inline constexpr uint8_t kCompData             = 0x04;
+inline constexpr uint8_t kWriteDataCancel      = 0x07;
+inline constexpr uint8_t kNCBWrDataCompAck     = 0x0c;
+}  // namespace dat_op
+
 // NodeIdBundle（Flit.scala:195-199）：nid 高位、aid 低位；router = nid << aidBits
 template <class Cfg = ZjFlitCfg>
 struct NodeIdT {
