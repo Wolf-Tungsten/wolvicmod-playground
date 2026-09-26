@@ -180,7 +180,8 @@ public:
     SUB(AxiDataBuffer, data_buf);
     SUB(RdPipe, rd_pipe);  // readDataPipe
 
-    std::array<Cm*, kOutst> cms{};  // createChildModule 循环建（命名 cm_<i>）
+    // 成员持有（而非构造函数局部）：cosim harness 看门狗需构造后访问各 CM 内部态
+    std::array<Cm*, kOutst> cms = createChildModuleArray<Cm, kOutst>("cm");
 
     using BoolArr = std::array<bool, kOutst>;
     using WkArr   = std::array<WkV, kOutst>;
@@ -217,8 +218,7 @@ public:
         data_buf.clk = clk;
         rd_pipe.clk = clk;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            auto& cm   = createChildModule<Cm>("cm_" + std::to_string(i));
-            cms[i]     = &cm;
+            Cm& cm     = *cms[i];
             cm.clk     = clk;
             cm.idx     = i;
             cm.rx_resp = Dec<RespFlit>{};  // S 无 rx.resp（tie invalid）

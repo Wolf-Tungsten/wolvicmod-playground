@@ -183,7 +183,8 @@ public:
     SUB(AwQ, aw_q);  // UInt(8.W) 一位热
     SUB(RdPipe, rd_pipe);  // readDataPipe
 
-    std::array<Cm*, kOutst> cms{};
+    // 成员持有（而非构造函数局部）：cosim harness 看门狗需构造后访问各 CM 内部态
+    std::array<Cm*, kOutst> cms = createChildModuleArray<Cm, kOutst>("cm");
 
     using BoolArr = std::array<bool, kOutst>;
     using WkArr   = std::array<WkV, kOutst>;
@@ -215,8 +216,7 @@ public:
         aw_q.clk = clk;
         rd_pipe.clk = clk;
         for (uint32_t i = 0; i < kOutst; ++i) {
-            auto& cm              = createChildModule<Cm>("cm_" + std::to_string(i));
-            cms[i]                = &cm;
+            Cm& cm                = *cms[i];
             cm.clk                = clk;
             cm.idx                = i;
             // HI 无 alloc：req 已在 CM 内 tie invalid；rdy/resp 按 §4.2 须有驱动
