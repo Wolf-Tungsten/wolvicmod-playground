@@ -225,14 +225,14 @@ public:
         }
 
         // ---- 汇聚 ----
-        wolvicmod::collectPorts(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
-        wolvicmod::collectPorts(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
-        wolvicmod::collectPorts(rsp_in, cms, [](Cm& cm) -> Out<Dec<RespFlit>>& { return cm.tx_resp; });
-        wolvicmod::collectPorts(aw_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_aw; });
-        wolvicmod::collectPorts(ar_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_ar; });
-        wolvicmod::collectPorts(alloc_in, cms,
+        wolvicmod::combine(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
+        wolvicmod::combine(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
+        wolvicmod::combine(rsp_in, cms, [](Cm& cm) -> Out<Dec<RespFlit>>& { return cm.tx_resp; });
+        wolvicmod::combine(aw_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_aw; });
+        wolvicmod::combine(ar_in, cms, [](Cm& cm) -> Out<Dec<axi::AxFlit>>& { return cm.axi_ar; });
+        wolvicmod::combine(alloc_in, cms,
                              [](Cm& cm) -> Out<Dec<AllocReqBits>>& { return cm.alloc_req; });
-        wolvicmod::collectPorts(w_all, cms,
+        wolvicmod::combine(w_all, cms,
                              [](Cm& cm) -> Out<Dec<axi::WFlit>>& { return cm.axi_w; });
 
         // ---- 仲裁合流 ----
