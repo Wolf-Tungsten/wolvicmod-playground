@@ -217,8 +217,135 @@ CLEAN→(release.fire)→isZero?FREE:ALLOC。
   getDBID 在多匹配时按 PriorityEncoder 取**首个** dcid（模型初版取末位，违例域
   才暴露，顺手修为忠实）。
 
-## 5. 待办提炼（后续子步骤开工前补）
+## 5. 5.3 Backend 语义（backend/{Backend,Commit,ReplaceCM,SnoopCM,ReadCM,WriteCM,Decode,Bundle}.scala）
 
-- 5.3 Backend：Commit、Read/Write/Snoop/Replace/Dataless CM、Decode Pipe、仲裁网络
+### 5.1 组装（Backend.scala）
+
+- 五个部件：`Commit`（112 entry）+ `ReplaceCM`(64) + `SnoopCM`(32) + `WriteCM`(32) + `ReadCM`(64)。
+  **DatalessCM 本配置不例化**（nrDatalessCM 未用）。
+- txReq = FastQueue(fastQosRRArb(readCM.txReq, writeCM.txReq))；txSnp = snoopCM 直连；
+  txRsp = fastQosRRArb(commit.txRsp, FastQueue(io.fastResp))（无 BBN 两路）。rxRsp.ready 恒 1。
+- cleanPoS 合流（commit/repl fastQosRRArb → FastQueue）**同时三分叉**：io.cleanPoS（出）、
+  io.unlock（hnIdx 原样）、io.cleanDB（hnIdx→hnTxnID，dataVec=Full）——cleanPoS.ready 由
+  io.cleanDB.ready 反压。
+- writeDir：replCM.writeDir → Queue(1, pipe) → io.writeDir；writeDirDone = io.writeDir.fire
+  且 sf.valid & directAlloc（回 replCM）。wDirQ.enq 的 llc/sf addr 被 getAddrVec(2).result 改写。
+- reqDB = fastArb(replCM, commit)（**repl 固定优先**）；dataTask = fastQosRRArb(
+  FastQueue(commit), FastQueue(repl), FastQueue(writeCM)）。
+- cmResp 二路 Pipe(fastQosRRArb.validOut(snoop, read, write))：toRepl=0→commit、=1→repl。
+- alloc 三路：snoopCM ← fastQosRRArb(FQ(commit.cmTaskVec(SNP)), FQ(repl.cmTaskVec(SNP)))；
+  writeCM ← 同构(WRI)；readCM ← fastQosRRArb(FQ(commit.cmTaskVec(READ)))。
+- getAddrVec(0) ← txReq.TxnID 的 hnIdx；getAddrVec(1) ← txSnp.TxnID；getAddrVec(2) ←
+  replCM.writeDir.llc.addr。txReq.bits.Addr 按 MemAttr/Size 对齐改写（!cacheable→原址；
+  size=6→64B 对齐；否则→32B 对齐）；txSnp.bits.Addr = (addr>>6)<<3。
+- commit.cmtTaskVec 每路先 Pipe(1)。
+
+### 5.2 CommitEntry（五态 FSM，entry=112=2 银行 ×(posWays-2=14)×posSets 4）
+
+状态：FREE →(alloc 且 task.isValid)→ FSTTASK /（否则）→ COMMIT；
+FSTTASK →(decListIn，taskCode.isValid & cmt.waitSecDone)→ SECTASK /（否则）→ COMMIT；
+SECTASK →(decListIn)→ COMMIT；COMMIT →(allFlagDone)→ CLEAN →(cleanPoS.fire)→ FREE。
+
+- **flag 双层**：intl.s（待发 decode/reqDB/cmTask/dataTask/wriDir）、intl.w（待回
+  cmResp/replResp/dataResp）、chi.s（待发 dbid/resp 两路 txRsp）、
+  chi.w（待收 xCBWrData0/1、compAck）。allocHit 或 decListIn.valid 时整体重算；
+  否则各 fire/hit 逐位清零。allFlagDone = 两层全 0。
+- rxRsp/rxDat 监听（按 TxnID 匹配）：compAck（Rsp.CompAck|Dat.NCBWrDataCompAck）、
+  XCBWrData0/1（NCBWr/CBWr 按 DataID 00/10）；alrGetReg 累积；respErrReg 取首个错误
+  （cmResp.isERR 优先于 rxDat.RespErr）。
+- 输出：reqDB（dataVec：snoop 任务→Full 否则 chi.dataVec）、dataTask（仅 alr.reqDB 后置），
+  replTask（flag wriDir 且 !w.dataResp），cmTaskVec（SNP/READ/WRI 三选一 valid，
+  bits 由 taskReg/taskInst 重组），txRsp（dbid 或 resp：opcode = resp?cmt.opcode:
+  (isCopyBackWrite?CompDBIDResp:DBIDResp)），trd/fthDecOut（decValid = s.decode &
+  !(w.cmResp|w.xCBWrData0|w.xCBWrData1)，按 FST/SEC 分流），cleanPoS（CLEAN 态）。
+- instReg（TaskInst）：FST 段 OR 累积 cmResp.taskInst，SEC 段覆盖；xCBResp 在
+  FST/FREE 段锁存 rxDat.Resp。decListIn 到达时 taskNext.{decList,task,cmt} 整体换入
+  （FST 且 waitSecDone → cmt 清零等 SEC 结果）。
+
+### 5.3 译码 Pipe（backend/Decode.scala + frontend/decode/Bundle.scala）
+
+- `Commit` 内 `trdDec`(Third)、`fthDec`(Fourth) 各一：entries 的 trd/fthDecOut 经
+  fastRRArb.validOut 各合一路 → Decode 模块；2 拍延迟（RegNext+RegEnable 两级）后
+  hnTxnIdOut/decListOut/taskCodeOut/cmtCodeOut 按 hnTxnID 匹配回灌各 entry 的 decListIn。
+- Decode 内部：`thirdDec` 用当前 instReg（TaskInst）在四级表里查 decList(2)（
+  `fourthDec` 查 (3)）；`GetDecRes` 按 decList 索引查 taskCode/secTaskCode/commitCode。
+- **四级内容寻址表**（frontend/decode/Bundle.scala Decode 对象）：
+  `table = Read_LAN_DCT_DMT.table ++ Dataless_LAN.table ++ Write_LAN.table`
+  （34 chi 项 × ≤7 state 项 × ≤8 task 项 × ≤1 sec 项，1904 表项）。
+  decode = 对表项按 UInt 全等 PriorityEncoder（断言唯一）；查码 = 四重 Vec 索引。
+- 指令/码位宽（Chisel Bundle 字段 MSB 先排）：
+  - ChiInst(18b)：valid, channel(2), fromLAN, toLAN, opcode(7), expCompAck, allocate, ewa, order(2), fullSize
+  - StateInst(5b)：valid, srcHit, othHit, llcState(2)
+  - TaskInst(19b)：valid, fwdValid, channel(2), opcode(5=max(5,4)), resp(3), fwdResp(3), getXCBResp, xCBResp(3)
+  - TaskCode(24b)：ops(4: snoop/read/dataless/write), dataOp(5), opcode(7), needDB, returnDBID, expCompAck, doDMT, retToSrc, snpTgt(2), fullSize
+  - CommitCode(28b)：wri*(3+2+2=7 含 srcValid/snpValid/llcState), dataOp(5), waitSecDone, sendResp, sendfwdResp, channel(2), opcode(5), resp(3), fwdResp(3), fullSize
+  - 注：字段序 = trait 后挂先生效（末位 trait 字段在 MSB）——模型按生成 RTL 端口/常量实证后定稿。
+- DecodeCHI 编码：I=0,SC=1,UC=2,UD=3,I_PD=4,SC_PD=5,UC_PD=6(=UD_PD),SD_PD=7；
+  toResp(UD→SD 其余直通)；toState(低 2 位 I/SC/UC/UD)。
+- 表内容（三张，逐字翻译见模型 dj_decode_table）：
+  - Read_LAN_DCT_DMT（15 chi 项）：readNoSnp×3、readOnce×8、readNotSharedDirty、readUnique、stashOnceShared。
+  - Dataless_LAN（5）：makeUnique、evict、cleanShared、cleanInvalid、makeInvalid。
+  - Write_LAN（14）：writeNoSnpPtl×3、writeUniquePtl×8、writeEvictOrEvict、writeBackFull×2、writeCleanFull。
+
+### 5.4 ReplaceEntry（十八态 FSM，entry=64）
+
+FREE →(alloc)→ REQPOS（isReplDIR）/ WRIDIR（否则）；
+REQPOS →(reqPoS.fire)→ WAITPOS →(posRespHit→WRIDIR，否则回 REQPOS 重试)；
+WRIDIR →(writeDir.fire)→ WAITDIR(isReplDIR) / WAITWRIDIR(isDirectAllocSF) / RESPCMT；
+WAITWRIDIR →(writeDirDoneHit)→ RESPCMT；
+WAITDIR →(dirRespHit)→ sfRespHit:RESPCMT / needReplLLC:(localClean?SAVEDATA:UPDATEID) / !need:SAVEDATA；
+UPDATEID →(updHnTxnID.fire)→ WRITE →(cmTask WRI.fire)→ WAITRWRI →(cmRespHit)→ alrReplSF?CLEANPOST:RESPCMT；
+RESPCMT →(resp.fire)→ isReplSF:(needSnp?REQDB:CLEANPOSR) / isReplLLC:CLEANPOSR / 否则 FREE；
+REQDB →(reqDB.fire)→ SNOOP →(cmTask SNP.fire)→ WAITRSNP →(cmRespHit)→ cmRespData?COPYID:CLEANPOSR；
+COPYID →(1 拍)→ REQPOS（hnTxnID←repl.hnTxnID，换槽重迭代）；
+SAVEDATA →(dataTask.fire)→ WAITRESP →(dataRespHit)→ alrReplSF?CLEANPOST:RESPCMT；
+CLEANPOST/CLEANPOSR →(cleanPoS.fire)→ CLEANPOSR/FREE。
+- 关键副作用：llcRespHit 记 repl.toLan/ds（ds.set(addr, way)）；sfRespHit 记
+  needSnp/alrReplSF 并刷新 dir.sf；cmRespData 到达时把任务改写为 wriLLC（hit=0，
+  meta=UD/SC 按 passDirty）——snooze 数据回流更新 LLC。
+- ReplacementWritePolicy：issueWrite = !toLan || dirty；saveLocalCleanVictim = toLan && !dirty。
+- reqPoS 矩阵：每 (dirBank × posSet) 一个 VipArbiter(nrReplaceCM)，entry 的
+  reqPoS.ready = 各矩阵 ready 按自身 (bank,set) 命中 OR。
+
+### 5.5 SnoopEntry（五态，entry=32）
+
+FREE →(alloc)→ PRESNP（SnpUniqueFwd 且 snpVec>1）/ SENDSNP；
+PRESNP →(倒数第 2 个 txSnp.fire)→ SENDSNP（PRESNP 段发 SnpMakeInvalid）；
+SENDSNP →(alrSnpAll)→ WAITRESP →(alrGetAll=响应齐&数据齐)→ RESPCMT →(resp.fire)→ FREE。
+- txSnp：PRESNP 段 opcode=SnpMakeInvalid，否则 task.chi.opcode；
+  RetToSrc = 最后一个 & task.retToSrc；TgtID=各 meta 对应节点（本配置恒 0x09）。
+- 响应合并：rspHit/datHit 时 taskInst 按优先级合并（fwdValid OR、channel DAT>RSP、
+  opcode/resp 依 fwd/channel 保持或覆盖、resp 不劣化）；respErr 取首个非 OK。
+- nrSfMetas=1：snpVec 恒单位，PRESNP 路径实际只用于 SnpUniqueFwd 单节点（PopCount=1
+  不满足 >1，故直接 SENDSNP）。
+
+### 5.6 ReadEntry（八态，entry=64）
+
+FREE →(alloc)→ SENDREQ（本配置无 BBN，CANNEST/CANTNEST/SENDACK 不到达）；
+SENDREQ →(txReq.fire)→ doDMT?RESPCMT:WAITDATA0；
+WAITDATA0 →(recDataHit)→ isHalfSize?RESPCMT:WAITDATA1 →(recDataHit)→ RESPCMT →(resp.fire)→ FREE。
+- txReq：ExpCompAck/MemAttr/Size/Opcode 透传，Order=None，ReturnTxnID/NID 按 doDMT
+  （本配置 openDCT 的 DCT 回传字段，LAN 侧 doDMT 仍可出现）。
+- recDataHit：opcode=CompData 且 TxnID 匹配；记 nodeId←HomeNID、txnID←DBID、
+  taskInst.resp←Resp、respErr。
+- resp：!doDMT → taskInst{valid, channel=DAT, opcode=CompData, resp=reg.resp, fwdResp=I}；
+  doDMT → 仅 valid。
+
+### 5.7 WriteEntry（八态，entry=32）
+
+FREE →(alloc)→ SENDREQ →(txReq.fire)→ WAITDBID →(dbidHit)→ DATATASK →(dataTask.fire)→
+WAITDATA →(dataRespHit)→ RESPCMT →(resp.fire)→ FREE（isRespCmt = state==RESPCMT & alrGetComp）。
+- dbidHit = Rsp.CompDBIDResp|DBIDResp：txnID←DBID、nodeId←SrcID、alrGetComp |= (op==CompDBIDResp)、
+  respErr；compHit = CompDBIDResp|Comp：alrGetComp=1、respErr。
+- dataTask：dataOp 透传、txDat.Resp=cbResp、Opcode=isImmediateWrite?NonCopyBackWriteData:CopyBackWriteData。
+
+### 5.8 共享件
+
+- `Alloc`（dongjiang/utils/Alloc.scala）：CM 池分配（Snoop/Read/Write 用；prefab 已对拍）。
+- fastQosRRArb/fastRRArb/fastArb/VipArbiter/FastQueue：同 §4.6，prefab 齐备。
+- Alloc 语义已由 P0 `alloc` 对拍覆盖（AllocRef_n4/n16）。
+
+## 6. 待办提炼（后续子步骤开工前补）
+
 - 5.4 Frontend：FastQueue→ToChiTask→TaskBuffer→Block s0/s1→PoS
 - 5.5 ChiXbar：组合分发 + cBusy
