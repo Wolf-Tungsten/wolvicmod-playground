@@ -46,6 +46,17 @@ constexpr uint32_t hnIdxDirBank(uint8_t h) { return h >> 6; }
 constexpr uint32_t hnIdxPosSet(uint8_t h) { return (h >> 4) & 3u; }
 constexpr uint32_t hnIdxPosWay(uint8_t h) { return h & 0xFu; }
 
+// ci = addr[47:44]
+constexpr uint32_t ciOf(uint64_t a) { return static_cast<uint32_t>(a >> 44); }
+
+// 一位热 → 二进制（chisel OHToUInt；0 输入 → 0）
+constexpr uint8_t ohToUInt(uint32_t oh) {
+    if (oh == 0) return 0;
+    uint8_t i = 0;
+    while (((oh >> i) & 1u) == 0) ++i;
+    return i;
+}
+
 // ---------------- PLRU（rocket-chip PseudoLRU 同构） ----------------
 // state 15bit（16 路二叉树）：state(tree-2)=节点位（1 ⇒ 左子树更老），
 // 左子树状态 = state(tree-3, right-1)，右子树 = state(right-2, 0)。
