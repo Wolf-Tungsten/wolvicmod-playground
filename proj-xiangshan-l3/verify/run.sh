@@ -11,6 +11,8 @@
 # 用法：
 #   ./run.sh                  # 全矩阵
 #   ./run.sh fastq            # 单模块（fastq|viparb|qosarb|alloc|spsram|dpsram）
+#   ./run.sh dir              # Directory 对拍（wolvicmod Directory vs refgenDj
+#                             #   生成的 dongjiang Directory RTL，真实配置）
 #   ./run.sh ring             # 环级对拍（wolvicmod Ring vs RTL ZRING，免 refgen：
 #                             #   直接用 XiangShan emu 构建产物 build/rtl 的
 #                             #   ZRING2X1C1P1D1M1G32，与目标配置同源同参）
@@ -38,8 +40,8 @@ for arg in "$@"; do
     --skip-build)  SKIP_BUILD=1 ;;
     --skip-verilate) SKIP_VERILATE=1 ;;  # 参考 RTL 已 verilate 过时跳过（harness 照构）
     -j*)           JOBS="${arg#-j}" ;;
-    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|all) MODULE="$arg" ;;
-    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|all）" >&2; exit 2 ;;
+    fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|dir|all) MODULE="$arg" ;;
+    *) echo "unknown arg: $arg（模块：fastq|viparb|qosarb|alloc|spsram|dpsram|ring|socket|bridge|dir|all）" >&2; exit 2 ;;
   esac
 done
 
@@ -65,6 +67,7 @@ case "$MODULE" in
   ring)   MODULES=(ring) ;;   # 免 refgen：直接用 XS_RTL 的 ZRING
   socket) MODULES=(socket) ;; # 免 refgen：直接用 XS_RTL 的 Socket{Dev,Icn}Side
   bridge) MODULES=(bridge) ;; # 免 refgen：直接用 XS_RTL 的 AxiBridge/AxiLiteBridge
+  dir)    MODULES=(dir) ;;    # refgenDj：dongjiang 真实源码生成 Directory RTL
   all)    MODULES=(fastq viparb qosarb alloc spsram dpsram)
           ALL_CFGS=("${FASTQ_CFGS[@]}" "${VIPARB_CFGS[@]}" "${QOSARB_CFGS[@]}"
                     "${ALLOC_CFGS[@]}" "${SPSRAM_CFGS[@]}" "${DPSRAM_CFGS[@]}") ;;
@@ -78,9 +81,20 @@ if [[ -e "$VERIFY_DIR/refgen/out" && ! -L "$VERIFY_DIR/refgen/out" ]]; then
 fi
 ln -sfn "$OUT/mill" "$VERIFY_DIR/refgen/out"
 
-# ---------- 1. refgen：逐配置生成 SV（ring/socket/bridge 免）----------
+# ---------- 1. refgen：逐配置生成 SV（ring/socket/bridge 免；dir 走 refgenDj）----------
 if [[ "$MODULE" == "ring" || "$MODULE" == "socket" || "$MODULE" == "bridge" ]]; then
   echo "==> [1/4] refgen 不适用（$MODULE 直接用 $XS_RTL 的构建产物）"
+elif [[ "$MODULE" == "dir" ]]; then
+  if [[ "$SKIP_REFGEN" == 0 ]]; then
+    echo "==> [1/4] refgenDj: 生成 dongjiang Directory SystemVerilog"
+    mkdir -p "$OUT/sv-dj/Directory"
+    (cd "$VERIFY_DIR/refgen" && "$MILL" -i refgenDj.run "$OUT/sv-dj/Directory" Directory) \
+      > "$OUT/sv-dj/Directory.refgen.log" 2>&1 || {
+        echo "refgenDj FAILED（日志 $OUT/sv-dj/Directory.refgen.log）"; tail -5 "$OUT/sv-dj/Directory.refgen.log"; exit 1; }
+    [[ -f "$OUT/sv-dj/Directory/Directory.sv" ]] || { echo "refgenDj 未产出 Directory.sv"; exit 1; }
+  else
+    echo "==> [1/4] refgenDj 跳过（--skip-refgen）"
+  fi
 elif [[ "$SKIP_REFGEN" == 0 ]]; then
   echo "==> [1/4] refgen: 逐配置生成 SystemVerilog（${#ALL_CFGS[@]} 个配置）"
   for cfg in "${ALL_CFGS[@]}"; do
@@ -138,6 +152,18 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       make -C "$obj" -f "V$br.mk" -j"$JOBS" > "$obj.make.log" 2>&1 || {
         echo "verilated make FAILED for $br"; tail -10 "$obj.make.log"; exit 1; }
     done
+  elif [[ "$MODULE" == "dir" ]]; then
+    obj="$OUT/obj/directory"
+    mkdir -p "$obj"
+    # 顶层 Directory.sv 显式传入；子模块闭包（DirectoryLLC/SF、SRAM 模板、
+    # ClockGate 等）由同目录 -y 解析（refgenDj 单目录取名=模块名）
+    verilator --cc --top-module Directory -Mdir "$obj" --prefix VDirectory \
+      -Wno-fatal -Wno-WIDTH -Wno-LATCH -Wno-MULTIDRIVEN -Wno-UNOPTTHREADS \
+      "$OUT/sv-dj/Directory/Directory.sv" \
+      -y "$OUT/sv-dj/Directory" +libext+.sv > "$obj.verilate.log" 2>&1 || {
+        echo "verilate FAILED for directory"; tail -10 "$obj.verilate.log"; exit 1; }
+    make -C "$obj" -f VDirectory.mk -j"$JOBS" > "$obj.make.log" 2>&1 || {
+      echo "verilated make FAILED for directory"; tail -10 "$obj.make.log"; exit 1; }
   else
   for cfg in "${ALL_CFGS[@]}"; do
     obj="$OUT/obj/$cfg"
@@ -178,6 +204,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
       ring)   cfgs=(zring) ;;
       socket) cfgs=(ccsocket) ;;
       bridge) cfgs=(axibridge axilitebridge) ;;
+      dir)    cfgs=(directory) ;;
     esac
     incs=() libs=()
     for cfg in "${cfgs[@]}"; do
@@ -190,6 +217,8 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
         libs+=("$OUT/obj/$cfg/VAxiBridge__ALL.a")
       elif [[ "$cfg" == "axilitebridge" ]]; then
         libs+=("$OUT/obj/$cfg/VAxiLiteBridge__ALL.a")
+      elif [[ "$cfg" == "directory" ]]; then
+        libs+=("$OUT/obj/$cfg/VDirectory__ALL.a")
       else
         libs+=("$OUT/obj/$cfg/V$cfg"__ALL.a)
       fi

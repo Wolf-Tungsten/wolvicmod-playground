@@ -42,7 +42,10 @@
 // 零）；横扫窗口对齐 SramResetGen 逐拍推导：复位撤除后 4 拍 resetHold（
 // resetDelay=4）+ 每 set 间隔 kIsc 拍写零 +（kIsc>1 时 io.resetState 的
 // RegNext 尾巴 1 拍），即 kRstCycles = 4 + Sets*kIsc + (kIsc>1 ? 1 : 0)，
-// 期间 req_rdy 拉低。
+// 期间 req_rdy 拉低。**横扫写与正常写共享 intvCnt 重装路径**（SRAMTemplate
+// `when(ramRen || ramWen) intvCnt := interval-1`）：末笔横扫写（cnt ==
+// kSweepLastWr 拍）同样重装 intvCnt，故横扫结束后 ready 还要再延迟
+// kInterval-1 拍（仅 kInterval>1 可观察；dir 对拍在 llc(2) 上实证）。
 // 地址合法性同源模板：addr 必须 < Sets（源模板有断言；本模型写口越界由框架
 // Mem 检查报错，读口越界属使用方违约）。
 //
@@ -117,6 +120,8 @@ public:
     // （kIsc>1 时 resetState 的 RegNext 尾巴 1 拍）
     static constexpr uint32_t kRstCycles =
         ShouldReset ? 4 + Sets * kIsc + (kIsc > 1 ? 1u : 0u) : 0;
+    // 末笔横扫写发生的拍（rst.cnt 计数值）：该拍 intvCnt 被重装 kInterval-1
+    static constexpr uint32_t kSweepLastWr = ShouldReset ? kIsc + (kIsc > 1 ? 1u : 0u) : 0;
 
     struct RstState {
         uint32_t cnt = kRstCycles;
@@ -186,9 +191,10 @@ private:
             auto [req] = src;
             return req.bits.addr;
         };
-        intv.update().on(posedge(clk)).reads(intv, w_fire) = [](auto src) -> uint32_t {
-            auto [intv, w_fire] = src;
+        intv.update().on(posedge(clk)).reads(intv, w_fire, rst) = [](auto src) -> uint32_t {
+            auto [intv, w_fire, rst] = src;
             if (w_fire) return kInterval - 1;
+            if (kSweepLastWr != 0 && rst.cnt == kSweepLastWr) return kInterval - 1;
             return intv > 0 ? intv - 1 : 0;
         };
         rst.update().on(posedge(clk)).reads(rst) = [](auto src) {
@@ -293,6 +299,8 @@ public:
     static constexpr uint32_t kDpHoldDepth = kReadDelay - kDpCapDepth;
     static constexpr uint32_t kRstCycles =
         ShouldReset ? 4 + Sets * kIsc + (kIsc > 1 ? 1u : 0u) : 0;
+    // 末笔横扫写拍（rst.cnt 计数值）：该拍 wIntvCnt 被重装 kInterval-1（横扫只写）
+    static constexpr uint32_t kSweepLastWr = ShouldReset ? kIsc + (kIsc > 1 ? 1u : 0u) : 0;
 
     struct RstState {
         uint32_t cnt = kRstCycles;
@@ -399,9 +407,10 @@ private:
             if (w_r_fire) return kInterval - 1;
             return r_intv > 0 ? r_intv - 1 : 0;
         };
-        w_intv.update().on(posedge(clk)).reads(w_intv, w_w_fire) = [](auto src) -> uint32_t {
-            auto [w_intv, w_w_fire] = src;
+        w_intv.update().on(posedge(clk)).reads(w_intv, w_w_fire, rst) = [](auto src) -> uint32_t {
+            auto [w_intv, w_w_fire, rst] = src;
             if (w_w_fire) return kInterval - 1;
+            if (kSweepLastWr != 0 && rst.cnt == kSweepLastWr) return kInterval - 1;
             return w_intv > 0 ? w_intv - 1 : 0;
         };
         rst.update().on(posedge(clk)).reads(rst) = [](auto src) {
