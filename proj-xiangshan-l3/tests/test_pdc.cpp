@@ -8,7 +8,7 @@
 #include <doctest/doctest.h>
 #include <wolvicmod/wolvicmod.h>
 #include <model/cc/pdc.h>
-#include <model/zj_flit.h>
+#include <model/flit/zj_flit.h>
 
 #include "test_prefab_common.h"
 

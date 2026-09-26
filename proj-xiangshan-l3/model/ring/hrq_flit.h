@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "model/zj_flit.h"
+#include "model/flit/zj_flit.h"
 
 namespace zj::chi {
 

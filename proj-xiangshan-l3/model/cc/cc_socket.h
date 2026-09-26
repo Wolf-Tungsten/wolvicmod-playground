@@ -23,7 +23,7 @@
 #include <cstdint>
 
 #include "model/cc/pdc.h"
-#include "model/zj_flit.h"
+#include "model/flit/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/dec.h"

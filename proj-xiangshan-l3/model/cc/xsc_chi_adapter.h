@@ -21,8 +21,8 @@
 
 #include <cstdint>
 
-#include "model/xs_flit.h"
-#include "model/zj_flit.h"
+#include "model/flit/xs_flit.h"
+#include "model/flit/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/dec.h"

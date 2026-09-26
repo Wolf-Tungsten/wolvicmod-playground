@@ -22,7 +22,7 @@
 #include <cstdint>
 
 #include "model/ring/eject_buffer.h"
-#include "model/ring_slot.h"
+#include "model/ring/ring_slot.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"

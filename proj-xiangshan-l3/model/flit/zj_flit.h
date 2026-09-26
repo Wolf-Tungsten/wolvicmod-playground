@@ -19,7 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "model/bit_pack.h"
+#include "model/flit/bit_pack.h"
 
 namespace zj::chi {
 

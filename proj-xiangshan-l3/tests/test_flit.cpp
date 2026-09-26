@@ -11,9 +11,9 @@
 #include <random>
 
 #include <doctest/doctest.h>
-#include <model/ring_slot.h>
-#include <model/xs_flit.h>
-#include <model/zj_flit.h>
+#include <model/ring/ring_slot.h>
+#include <model/flit/xs_flit.h>
+#include <model/flit/zj_flit.h>
 
 using namespace zj;
 

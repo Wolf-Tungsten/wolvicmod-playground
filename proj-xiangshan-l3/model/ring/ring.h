@@ -32,8 +32,8 @@
 
 #include "model/ring/channel_tap.h"
 #include "model/ring/hrq_flit.h"
-#include "model/ring_slot.h"
-#include "model/zj_flit.h"
+#include "model/ring/ring_slot.h"
+#include "model/flit/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
