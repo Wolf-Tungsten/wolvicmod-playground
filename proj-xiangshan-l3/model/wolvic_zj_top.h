@@ -1,10 +1,17 @@
 #pragma once
 
-// ZjL3：P4a 阶段的部分组装顶层（WolvicZjTop 雏形，后续步骤在同一文件演进）：
+// WolvicZjTop：P4b 顶层组装（wolvicmod 模型的根模块，P5 DPI-C 集成落点）：
 //   L2 CHI 边界 → XscChiAdapter → CcSocket → Ring n1(CC)
 //   Ring n0/n7 → HomeShell(bank0) → DongJiang；n2/n5 → HomeShell(bank1) → DongJiang
 //   Ring n4(HI) → HiNodeAxiLiteBridge → cfgAXI；n6(S) → SNodeAxiBridge → memAXI
-// 未建模站点（RI n3）的环边界端口直通外露（由测试 tie-off）。M/P 无环边界通道。
+// 三边界：rn（xscache DecoupledPortIO 六通道）/ memAXI / cfgAXI，外加 clk/ci。
+//
+// stubs（对齐 ZhuJiang 生成 RTL ZCI2X1C1P1D1M1G32 的集成形态）：
+//   - RI(n3) 全 tie-off：XiangShan 侧 RI 的 s_axi_main slave 口常 0（XSTop.sv
+//     zhujiang_opt 实例），Axi2Chi 永不产生注入流量；eject 两通道 rdy 常 1
+//     （ZRING 端口裁剪语义：无流量到达，行为无关）
+//   - M(n8) → 全局同步复位（不建模两相复位时序，框架文档 §2.1）
+//   - P(n9) → 1 拍线延迟（纯打拍站，已并入 Ring STOP_TABLE）
 //
 // ZhuJiangBridge 的 tie-off 角色（ZhuJiangBridge.scala:116-127,147-149）：
 //   - eject REQ（l2_tx_req）：rdy 恒 false，valid/bits 外露 cc_tx_req 供观察
@@ -32,7 +39,7 @@ using wolvicmod::In;
 using wolvicmod::Out;
 using wolvicmod::prefab::Valid;
 
-class ZjL3 : public wolvicmod::Module {
+class WolvicZjTop : public wolvicmod::Module {
 public:
     IN(bool, clk);
     IN(uint8_t, ci);  // 单核恒 0
@@ -53,18 +60,6 @@ public:
 
     // eject REQ 观察口（rdy 内部恒 false）
     OUT(Valid<chi::RReqFlit>, cc_tx_req);
-
-    // ---- 未建模站点的环边界直通（RI n3 / HI n4 / S n6）----
-    IN(Valid<chi::RReqFlit>, n3_rx_req);
-    OUT(bool, n3_rx_req_rdy);
-    IN(Valid<chi::RespFlit>, n3_rx_resp);
-    OUT(bool, n3_rx_resp_rdy);
-    IN(Valid<chi::DataFlit>, n3_rx_data);
-    OUT(bool, n3_rx_data_rdy);
-    OUT(Valid<chi::RespFlit>, n3_tx_resp);
-    IN(bool, n3_tx_resp_rdy);
-    OUT(Valid<chi::DataFlit>, n3_tx_data);
-    IN(bool, n3_tx_data_rdy);
 
     // ---- memAXI（SNode 桥，id 6b/addr 48b/data 256b）----
     OUT(Valid<axi::AWFlit>, mem_aw);
@@ -93,7 +88,7 @@ public:
     using HomeShellB0 = home::HomeShell<home::kHomeBank0>;
     using HomeShellB1 = home::HomeShell<home::kHomeBank1>;
 
-    ZjL3();
+    WolvicZjTop();
 
     // 白盒访问（测试/调试）：hnf/shell 实例引用
     home::DongJiang& hnfAt(int i) { return i == 0 ? hnf0 : hnf1; }

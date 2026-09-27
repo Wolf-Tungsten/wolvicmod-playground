@@ -37,7 +37,7 @@ using wolvicmod::prefab::Valid;
 
 namespace {
 
-// ---------------- DUT：adapter + socket（连线同 ZjL3） ----------------
+// ---------------- DUT：adapter + socket（连线同 WolvicZjTop） ----------------
 class CcBoundary : public wolvicmod::Module {
 public:
     IN(bool, clk);

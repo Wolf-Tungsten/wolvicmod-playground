@@ -1,10 +1,10 @@
-#include "model/zj_l3.h"
+#include "model/wolvic_zj_top.h"
 
 #include <wolvicmod/wolvicmod.h>
 
 namespace zj {
 
-ZjL3::ZjL3() {
+WolvicZjTop::WolvicZjTop() {
     adapter.chi_tx_req = chi_tx_req;
     adapter.chi_tx_rsp = chi_tx_rsp;
     adapter.chi_tx_dat = chi_tx_dat;
@@ -61,17 +61,13 @@ ZjL3::ZjL3() {
     connHnx(shell0, hnf0);
     connHnx(shell1, hnf1);
 
-    // 未建模站点直通
-    ring.n3_rx_req = n3_rx_req;
-    ring.n3_rx_resp = n3_rx_resp;
-    ring.n3_rx_data = n3_rx_data;
-    n3_rx_req_rdy = ring.n3_rx_req_rdy;
-    n3_rx_resp_rdy = ring.n3_rx_resp_rdy;
-    n3_rx_data_rdy = ring.n3_rx_data_rdy;
-    n3_tx_resp = ring.n3_tx_resp;
-    n3_tx_data = ring.n3_tx_data;
-    ring.n3_tx_resp_rdy = n3_tx_resp_rdy;
-    ring.n3_tx_data_rdy = n3_tx_data_rdy;
+    // RI(n3) tie-off 桩：XiangShan 侧 s_axi_main slave 常 0 → 无注入；
+    // eject rdy 常 1（ZRING 裁剪语义）；eject valid/bits 悬空（无流量到达）
+    ring.n3_rx_req = Valid<chi::RReqFlit>{};
+    ring.n3_rx_resp = Valid<chi::RespFlit>{};
+    ring.n3_rx_data = Valid<chi::DataFlit>{};
+    ring.n3_tx_resp_rdy = true;
+    ring.n3_tx_data_rdy = true;
 
     // ring n4(HI) ↔ HiNodeAxiLiteBridge（经 stops 视图；ERQ 恒 invalid）
     hinode.rx_req = *ring.stops[4].tx_req;
@@ -136,7 +132,7 @@ ZjL3::ZjL3() {
     hinode.node_id = uint16_t{0x20};  // HI gid4 nodeId
 }
 
-void ZjL3::connLan(ring::StopIO& r, home::LanIO& l) {
+void WolvicZjTop::connLan(ring::StopIO& r, home::LanIO& l) {
     // eject（ring → shell）：ring nX_tx_* → shell lan_rx_*
     *l.rx_req = *r.tx_req;
     *l.rx_resp = *r.tx_resp;

@@ -11,7 +11,7 @@
 // PDC 线即 Zhujiang 顶层的 ccnIO（Socket.scala:118-132 的 IcnPdcBundle ↔
 // DevPdcBundle）；本模型不跨时钟域，两侧同 clk。
 //
-// eject REQ 通道完整建模但 L2 侧由上层（ZjL3，相当于 ZhuJiangBridge 的
+// eject REQ 通道完整建模但 L2 侧由上层（WolvicZjTop，相当于 ZhuJiangBridge 的
 // `tx.req.ready := false.B`，ZhuJiangBridge.scala:147）恒置不消费：token 耗尽后
 // 反压经 PDC 传回环侧（ring_tx_req_rdy=0）——行为与 RTL 一致。
 //

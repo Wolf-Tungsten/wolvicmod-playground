@@ -1,4 +1,4 @@
-// P4a/P3 ZjL3 组装单测：L2 CHI 边界 → adapter → CcSocket → 环 → HomeShell →
+// P3/P4a/P4b WolvicZjTop 组装单测：L2 CHI 边界 → adapter → CcSocket → 环 → HomeShell →
 // DongJiang 全量模型（P3 已替换 P2 的 HnfStub 行为桩）：cacheable ReadOnce 经
 // 真实通路收回 ReadReceipt + CompData（LLC miss → 内存模型供数 → LLC 分配），
 // 并回 CompAck；device REQ 经 RnRouter 落 defaultHni，穿越 HiNode 桥出
@@ -8,7 +8,7 @@
 
 #include <doctest/doctest.h>
 #include <wolvicmod/wolvicmod.h>
-#include <model/zj_l3.h>
+#include <model/wolvic_zj_top.h>
 
 #include "test_prefab_common.h"
 
@@ -21,14 +21,9 @@ using namespace prefabtest;
 
 namespace {
 
-void tieOff(ZjL3& top) {
+void tieOff(WolvicZjTop& top) {
     top.ci.set(0);
-    // 未建模站点：无注入、不消费
-    top.n3_rx_req.set(Valid<RReqFlit>{});
-    top.n3_rx_resp.set(Valid<RespFlit>{});
-    top.n3_rx_data.set(Valid<DataFlit>{});
-    top.n3_tx_resp_rdy.set(false);
-    top.n3_tx_data_rdy.set(false);
+    // RI(n3) 桩已内收进 WolvicZjTop（inject 常 0 / eject rdy 常 1），无需外部 tie-off
     // AXI 边界：地址/数据通道全收，b/r 无流量
     top.mem_aw_rdy.set(true);
     top.mem_w_rdy.set(true);
@@ -51,7 +46,7 @@ void tieOff(ZjL3& top) {
 
 // 空跑至多 n 拍（每拍 cycle+comb），pred 满足即返回 true
 template <class Pred>
-bool runUntil(ZjL3& top, int n, Pred pred) {
+bool runUntil(WolvicZjTop& top, int n, Pred pred) {
     for (int i = 0; i < n; ++i) {
         cycle(top);
         comb(top);
@@ -60,8 +55,8 @@ bool runUntil(ZjL3& top, int n, Pred pred) {
     return false;
 }
 
-TEST_CASE("ZjL3 通路：ReadOnce 经 DongJiang 全量模型收回 ReadReceipt/CompData 并完成 CompAck") {
-    ZjL3 top;
+TEST_CASE("WolvicZjTop 通路：ReadOnce 经 DongJiang 全量模型收回 ReadReceipt/CompData 并完成 CompAck") {
+    WolvicZjTop top;
     top.elaborate();
     tieOff(top);
 
@@ -71,7 +66,7 @@ TEST_CASE("ZjL3 通路：ReadOnce 经 DongJiang 全量模型收回 ReadReceipt/C
         Valid<RFlit> pend{false, {}};
         uint32_t beat = 0;
         uint64_t c    = 0;
-        void drive(ZjL3& t) {
+        void drive(WolvicZjTop& t) {
             if (!pend.valid && !q.empty() && q.front().first <= c) {
                 pend.valid = true;
                 pend.bits.id = q.front().second;
@@ -81,11 +76,11 @@ TEST_CASE("ZjL3 通路：ReadOnce 经 DongJiang 全量模型收回 ReadReceipt/C
             }
             t.mem_r.set(pend);
         }
-        void sample(ZjL3& t) {
+        void sample(WolvicZjTop& t) {
             if (t.mem_ar.get().valid && t.mem_ar_rdy.get())
                 q.push_back({c + 4, t.mem_ar.get().bits.id});
         }
-        void consume(ZjL3& t) {  // 时钟沿后调用
+        void consume(WolvicZjTop& t) {  // 时钟沿后调用
             if (pend.valid && t.mem_r_rdy.get()) {
                 if (pend.bits.last) {
                     q.pop_front();
@@ -173,8 +168,8 @@ done:
     CHECK(dat_beats == 2);
 }
 
-TEST_CASE("ZjL3 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 cfgAXI 并回数") {
-    ZjL3 top;
+TEST_CASE("WolvicZjTop 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 cfgAXI 并回数") {
+    WolvicZjTop top;
     top.elaborate();
     tieOff(top);
 

@@ -67,7 +67,7 @@ inline constexpr HomeShellCfg kHomeBank1 = {1, {0x10, 0x28},
 // type，配置等价于 RTL elaboration 常量）
 
 // lan 端口索引视图：对称的 lan0/lan1 端口的指针视图（实体仍由模块持有，
-// 经 createIn/createOut 按名注册），供父模块（ZjL3）按 lanIdx 接线。
+// 经 createIn/createOut 按名注册），供父模块（WolvicZjTop）按 lanIdx 接线。
 struct LanIO {
     In<Valid<RReqFlit>>*   rx_req       = nullptr;
     Out<bool>*           rx_req_rdy   = nullptr;
@@ -237,7 +237,7 @@ private:
 
 template <HomeShellCfg Cfg>
 HomeShell<Cfg>::HomeShell() {
-    // lan 端口索引视图（实体归本模块持有；供 ZjL3 按 lanIdx 接线）
+    // lan 端口索引视图（实体归本模块持有；供 WolvicZjTop 按 lanIdx 接线）
     lan[0].rx_req = &lan0_rx_req;      lan[0].rx_req_rdy = &lan0_rx_req_rdy;
     lan[0].rx_resp = &lan0_rx_resp;    lan[0].rx_resp_rdy = &lan0_rx_resp_rdy;
     lan[0].rx_data = &lan0_rx_data;    lan[0].rx_data_rdy = &lan0_rx_data_rdy;

@@ -161,7 +161,7 @@ inline std::array<bool, 2> tapSelOf(uint16_t tgt_id, const StopSpec& sp) {
 }
 
 // 站边界端口索引视图：每站 icn 端口的指针视图（nullptr = 该站无此端口；
-// 实体仍由模块持有、按 n<gid>_* 命名注册）。构建循环与父模块（ZjL3）共用。
+// 实体仍由模块持有、按 n<gid>_* 命名注册）。构建循环与父模块（WolvicZjTop）共用。
 // rx_erq/tx_erq 即端口名 *_rx_req/*_tx_req 中载荷为 HReqFlit（ERQ）的那些。
 struct StopIO {
     In<Valid<RReqFlit>>*   rx_req       = nullptr;
