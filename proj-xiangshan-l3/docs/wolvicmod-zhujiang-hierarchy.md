@@ -253,7 +253,7 @@ n2/n5→shell1；n4→HI 桥、n6→S 桥；RI n3 tie-off 桩内收于 WolvicZjT
 | P1 | Ring + RouterStop + ChannelTap/EjectBuffer | 环上传输 trace 对拍 |
 | P2 | XscChiAdapter + CcSocket + HomeWrapper 外壳 | ✅ 已达成：单测全绿 + socket 对拍 5220 万比对零失配 + **coremark 前端 2 万拍 trace 重放到 CC 边界（26.5 万比对零失配，`make replay`）**（HNF 用行为桩） |
 | P3 | DongJiang 全量（Directory→DataBlock→Backend→Frontend→ChiXbar） | ✅ 已达成：五子模块独立对拍全零失配（dir 544万/db 213万/backend 1445万/frontend 766万/chixbar 466万比对）+ 顶层组装替换行为桩，test_wolvic_zj_top 端到端全绿 |
-| P4 | S/HI 桥 + 顶层组装 | P4a ✅（两桥对拍 941 万比对零失配）；P4b 进行中：WolvicZjTop 三边界顶层 + RI tie-off 内收 ✅、C++ FST 直读提取器 ✅、时钟门控 woken 建模 ✅、coremark 前端 2 万拍三边界重放零失配 ✅，全程重放待验 |
+| P4 | S/HI 桥 + 顶层组装 | ✅ 已达成：P4a 两桥对拍 941 万比对零失配；P4b WolvicZjTop 三边界顶层 + RI tie-off 内收 + 时钟门控 woken 建模 + **coremark 全程 316,748 拍重放 542 万比对零失配**（`make replay-top`） |
 | P5 | DPI-C 集成 + coremark 系统级验证 | difftest 过 + cycleCnt=316,801 |
 
 ## 7. 风险与注意点
