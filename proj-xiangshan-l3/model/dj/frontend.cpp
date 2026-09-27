@@ -151,111 +151,6 @@ TaskEntry::TaskEntry() {
     };
 }
 
-// ---------------- TaskBuffer ----------------
-
-TaskBuffer::TaskBuffer() {
-    alloc_arb.clk = clk;
-    s0_arb.clk = clk;
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].clk = clk;
-        entries[i].retry_s1 = retry_s1;
-        entries[i].sleep_s1 = sleep_s1;
-        entries[i].wakeup = wakeup;
-    }
-    alloc_arb.in = chi_task_in;
-    chi_task_in_rdy = alloc_arb.in_rdy;
-    combine(w_alloc_rdy_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.chi_task_in_rdy; });
-    alloc_arb.out_rdy = w_alloc_rdy_all;
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].chi_task_in.assign().reads(alloc_arb.out) = [i](auto src) {
-            auto [out] = src;
-            return out[i];
-        };
-    }
-    // sort：initNid = 同 useAddr 的 valid 数；othRel = 同 useAddr 的 release 任一
-    combine(w_valid_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_valid; });
-    combine(w_release_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_release; });
-    combine(w_addr_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<uint64_t>& { return e.st_addr; });
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].init_nid.assign().reads(w_valid_all, w_addr_all, chi_task_in) =
-            [i](auto src) -> uint8_t {
-                auto [valids, addrs, chi_task_in] = src;
-                uint8_t cnt = 0;
-                for (uint32_t j = 0; j < kEntries; ++j)
-                    if (valids[j] && useAddr(addrs[j]) == useAddr(chi_task_in.bits.addr)) ++cnt;
-                return cnt;
-            };
-        entries[i].oth_rel.assign().reads(w_release_all, w_addr_all, entries[i].st_addr) =
-            [i](auto src) {
-                auto [rels, addrs, self_addr] = src;
-                for (uint32_t j = 0; j < kEntries; ++j)
-                    if (rels[j] && useAddr(addrs[j]) == useAddr(self_addr)) return true;
-                return false;
-            };
-    }
-    // 出站仲裁：hasLockReg(RegNext 任意 lock) 时锁定 lockIdx 路，否则 RR
-    combine(w_s0_in, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<Valid<ChiTask>>& { return e.chi_task_s0; });
-    combine(w_lock_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_lock; });
-    has_lock_reg.update().on(posedge(clk)).reads(w_lock_all) = [](auto src) {
-        auto [locks] = src;
-        for (bool l : locks) {
-            if (l) return true;
-        }
-        return false;
-    };
-    s0_arb.in = w_s0_in;
-    // RTL 生成 SV 实证：arb 的 out.ready 直连 io_chiTask_s0_ready，与 hasLockReg
-    // 无关——锁定期间仲裁器照样每拍 fire 并推进 vip 指针（仅输出被锁定项覆盖）。
-    s0_arb.out_rdy = chi_task_s0_rdy;
-    // lockIdx = 首个 lock 位，无 lock 时默认 N-1（chisel PriorityMux 无匹配取末值，
-    // 生成 SV 实证：末分支为 {3'h7, ~lock14}）。锁定期间选中项即 lockIdx，即使
-    // lockVec 已空（刚发射完）也选 N-1 项。
-    chi_task_s0.assign().reads(has_lock_reg, w_lock_all, w_s0_in, s0_arb.out) = [](auto src) {
-        auto [has_lock_reg, locks, s0_in, arb_out] = src;
-        if (has_lock_reg) {
-            uint32_t idx = kEntries - 1;
-            for (uint32_t i = 0; i < kEntries; ++i)
-                if (locks[i]) {
-                    idx = i;
-                    break;
-                }
-            return Valid<ChiTask>{s0_in[idx].valid, s0_in[idx].bits};
-        }
-        return arb_out;
-    };
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].chi_task_s0_rdy.assign().reads(has_lock_reg, w_lock_all, s0_arb.in_rdy,
-                                                  chi_task_s0_rdy) =
-            [i](auto src) {
-                auto [has_lock_reg, locks, arb_rdy, chi_task_s0_rdy] = src;
-                if (has_lock_reg) {
-                    uint32_t idx = kEntries - 1;
-                    for (uint32_t j = 0; j < kEntries; ++j)
-                        if (locks[j]) {
-                            idx = j;
-                            break;
-                        }
-                    return idx == i && chi_task_s0_rdy;
-                }
-                return arb_rdy[i];
-            };
-    }
-    lock_task = has_lock_reg;
-    working.assign().reads(w_valid_all) = [](auto src) {
-        auto [valids] = src;
-        for (bool v : valids) {
-            if (v) return true;
-        }
-        return false;
-    };
-}
-
 // ---------------- Block ----------------
 
 Block::Block() {
@@ -849,8 +744,11 @@ FrontendDecode::FrontendDecode() {
 
 Frontend::Frontend() {
     rx_q.clk = clk;
+    rx_hpr_q.clk = clk;
     req2task.clk = clk;
+    hpr2task.clk = clk;
     req_task_buf.clk = clk;
+    hpr_task_buf.clk = clk;
     block.clk = clk;
     pos_table.clk = clk;
     s1_pipe.clk = clk;
@@ -858,6 +756,7 @@ Frontend::Frontend() {
     fast_resp_q.clk = clk;
 
     req2task.cfg_ci = cfg_ci;
+    hpr2task.cfg_ci = cfg_ci;
     block.cfg_ci = cfg_ci;
     decode.cfg_ci = cfg_ci;
     pos_table.cfg_bank_id = cfg_bank_id;
@@ -871,22 +770,40 @@ Frontend::Frontend() {
     req_task_buf.chi_task_in = req2task.chi_task;
     req2task.chi_task_rdy = req_task_buf.chi_task_in_rdy;
 
-    // hasHPR=false：selectReq 恒真（hpr 缓冲不存在，恒空）
-    block.chi_task_s0.assign().reads(req_task_buf.chi_task_s0) = [](auto src) {
-        auto [s0] = src;
-        return s0;
+    // rxHpr → FastQueue → ReqToChiTask → HprTaskBuffer（同构，16 项）
+    rx_hpr_q.enq = rx_hpr;
+    rx_hpr_rdy = rx_hpr_q.enq_rdy;
+    hpr2task.rx_req = rx_hpr_q.deq;
+    rx_hpr_q.deq_rdy = hpr2task.rx_req_rdy;
+    hpr_task_buf.chi_task_in = hpr2task.chi_task;
+    hpr2task.chi_task_rdy = hpr_task_buf.chi_task_in_rdy;
+    hpr_task_buf.retry_s1 = block.retry_s1;
+    hpr_task_buf.sleep_s1 = pos_table.sleep_s1;
+    hpr_task_buf.wakeup = pos_table.wakeup;
+
+    // selectReq = !hprBuf.s0.valid & !hprBuf.lockTask；hpr ready 恒 true
+    w_select_req.assign().reads(hpr_task_buf.chi_task_s0, hpr_task_buf.lock_task) =
+        [](auto src) {
+            auto [hpr_s0, hpr_lock] = src;
+            return !hpr_s0.valid && !hpr_lock;
+        };
+    block.chi_task_s0.assign().reads(w_select_req, req_task_buf.chi_task_s0,
+                                     hpr_task_buf.chi_task_s0) = [](auto src) {
+        auto [sel, req_s0, hpr_s0] = src;
+        return sel ? req_s0 : hpr_s0;
     };
-    req_task_buf.chi_task_s0_rdy = true;  // HPR 优先位空 → req 恒被选
+    req_task_buf.chi_task_s0_rdy = w_select_req;
+    hpr_task_buf.chi_task_s0_rdy = true;
     req_task_buf.retry_s1 = block.retry_s1;
     req_task_buf.sleep_s1 = pos_table.sleep_s1;
     req_task_buf.wakeup = pos_table.wakeup;
 
-    // posAlloc_s0：与 chiTask_s0 同步（channel 恒 REQ，无 BBN）
-    pos_table.alloc_s0_valid.assign().reads(req_task_buf.chi_task_s0) = [](auto src) {
+    // posAlloc_s0：与 chiTask_s0（req/hpr 选择后）同步（channel 恒 REQ，无 BBN）
+    pos_table.alloc_s0_valid.assign().reads(block.chi_task_s0) = [](auto src) {
         auto [s0] = src;
         return s0.valid;
     };
-    pos_table.alloc_s0_addr.assign().reads(req_task_buf.chi_task_s0) = [](auto src) {
+    pos_table.alloc_s0_addr.assign().reads(block.chi_task_s0) = [](auto src) {
         auto [s0] = src;
         return s0.bits.addr;
     };
@@ -928,10 +845,11 @@ Frontend::Frontend() {
         return r;
     };
     alr_use_pos = pos_table.alr_use_pos;
-    working.assign().reads(req_task_buf.working, pos_table.working) = [](auto src) {
-        auto [a, b] = src;
-        return a || b;
-    };
+    working.assign().reads(req_task_buf.working, hpr_task_buf.working, pos_table.working) =
+        [](auto src) {
+            auto [a, h, b] = src;
+            return a || h || b;
+        };
 }
 
 }  // namespace zj::dj

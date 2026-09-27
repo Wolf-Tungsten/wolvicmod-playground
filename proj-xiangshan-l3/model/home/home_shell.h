@@ -1,7 +1,7 @@
 #pragma once
 
-// HomeShell：HomeWrapper 外壳（DongJiang 内部在 P2 用行为桩替代，见
-// hnf_stub.h），对齐 zhujiang/device/home/HomeWrapper.scala。
+// HomeShell：HomeWrapper 外壳（内部 DongJiang 全量模型见 dongjiang.h），
+// 对齐 zhujiang/device/home/HomeWrapper.scala。
 // kunminghu-v3 单核：hnxPipelineDepth=0 → 每 lan 恰好 1 级 ChiBuffer
 // （每通道 Queue(flit, entries=2, pipe=false)）；每 bank 1 实例、2 lan。
 //

@@ -1,8 +1,8 @@
-// P4a ZjL3 组装单测：L2 CHI 边界 → adapter → CcSocket → 环 → HomeShell →
-// HnfStub 全通路连通（cacheable REQ 路由到 bank0 HNF 桩并收到 Comp/CompData
-// 回声）；device REQ 经 RnRouter 落 defaultHni，穿越 HiNode 桥出 cfgAXI AR，
-// R 应答经桥 → 环 → CC 回到 L2。
-// 桩的行为参数见 hnf_stub.h（P3 由 DongJiang 全量替换）。
+// P4a/P3 ZjL3 组装单测：L2 CHI 边界 → adapter → CcSocket → 环 → HomeShell →
+// DongJiang 全量模型（P3 已替换 P2 的 HnfStub 行为桩）：cacheable ReadOnce 经
+// 真实通路收回 ReadReceipt + CompData（LLC miss → 内存模型供数 → LLC 分配），
+// 并回 CompAck；device REQ 经 RnRouter 落 defaultHni，穿越 HiNode 桥出
+// cfgAXI AR，R 应答经桥 → 环 → CC 回到 L2。
 
 #include <cstdint>
 
@@ -60,48 +60,117 @@ bool runUntil(ZjL3& top, int n, Pred pred) {
     return false;
 }
 
-TEST_CASE("ZjL3 通路：ReadOnce 到 bank0 HNF 桩并收回 Comp/CompData") {
+TEST_CASE("ZjL3 通路：ReadOnce 经 DongJiang 全量模型收回 ReadReceipt/CompData 并完成 CompAck") {
     ZjL3 top;
     top.elaborate();
     tieOff(top);
 
+    // 内存模型：memAR → 4 拍后回 2 beat R（256b/beat，64B 行）
+    struct {
+        std::deque<std::pair<uint64_t, uint8_t>> q;  // (due, id)
+        Valid<RFlit> pend{false, {}};
+        uint32_t beat = 0;
+        uint64_t c    = 0;
+        void drive(ZjL3& t) {
+            if (!pend.valid && !q.empty() && q.front().first <= c) {
+                pend.valid = true;
+                pend.bits.id = q.front().second;
+                for (int i = 0; i < 4; ++i)
+                    pend.bits.data[i] = 0xDEADBEEF00000000ull | (uint64_t)beat << 32 | i;
+                pend.bits.last = beat == 1;
+            }
+            t.mem_r.set(pend);
+        }
+        void sample(ZjL3& t) {
+            if (t.mem_ar.get().valid && t.mem_ar_rdy.get())
+                q.push_back({c + 4, t.mem_ar.get().bits.id});
+        }
+        void consume(ZjL3& t) {  // 时钟沿后调用
+            if (pend.valid && t.mem_r_rdy.get()) {
+                if (pend.bits.last) {
+                    q.pop_front();
+                    beat = 0;
+                } else {
+                    ++beat;
+                }
+                pend = {false, {}};
+            }
+        }
+    } mem;
+    bool got_ar = false, got_receipt = false;
+    uint32_t dat_beats = 0;
+
+    // DongJiang 目录 SRAM 上电横扫约 8.2k 拍，期间 readDir 反压；给足窗口
     Valid<CHIREQ> req;
-    req.valid            = true;
-    req.bits.opcode      = 0x03;          // ReadOnce
-    req.bits.addr        = 0x80000000ULL; // addr[12]=0 → bank0 → gid0
-    req.bits.tgt_id      = 0;
-    req.bits.src_id      = 0x08;          // CC 节点自身
-    req.bits.txn_id      = 0x5A;
-    req.bits.size        = 6;
+    req.valid                   = true;
+    req.bits.opcode             = 0x03;  // ReadOnce
+    req.bits.addr               = 0x80000000ULL;
+    req.bits.tgt_id             = 0;
+    req.bits.src_id             = 0x08;
+    req.bits.txn_id             = 0x5A;
+    req.bits.size               = 6;
+    req.bits.order              = 3;  // 合法 ReadOnce 必须 order=3 且 eca=1（译码表实证）
+    req.bits.exp_comp_ack       = true;
     req.bits.mem_attr_cacheable = true;
     req.bits.mem_attr_allocate  = true;
     req.bits.mem_attr_ewa       = true;
     top.chi_tx_req.set(req);
 
-    // 等待 socket 接收（rdy 起来即 fire）
-    comb(top);
-    CHECK(top.chi_tx_req_rdy.get());
-    bool consumed = runUntil(top, 20, [&] { return top.chi_tx_req_rdy.get(); });
+    bool consumed = false, ack_sent = false;
+    for (uint64_t c = 0; c < 20000; ++c) {
+        mem.c = c;
+        mem.drive(top);
+        comb(top);
+        // 采样
+        if (top.chi_tx_req_rdy.get() && req.valid) consumed = true;
+        if (top.mem_ar.get().valid) {
+            CHECK(top.mem_ar.get().bits.addr == 0x80000000ULL);
+            got_ar = true;
+        }
+        if (top.chi_rx_rsp.get().valid) {
+            CHECK(top.chi_rx_rsp.get().bits.opcode == 0x08);  // ReadReceipt
+            CHECK(top.chi_rx_rsp.get().bits.txn_id == 0x5A);
+            got_receipt = true;
+        }
+        if (top.chi_rx_dat.get().valid) {
+            CHECK(top.chi_rx_dat.get().bits.opcode == 0x04);  // CompData
+            CHECK(top.chi_rx_dat.get().bits.txn_id == 0x5A);
+            CHECK(top.chi_rx_dat.get().bits.tgt_id == 0x08);
+            CHECK((top.chi_rx_dat.get().bits.data[0] >> 32) == 0xDEADBEEF);
+            ++dat_beats;
+        }
+        CHECK(!top.cc_tx_req.get().valid);
+        mem.sample(top);
+        edge(top);
+        // 沿后动作
+        if (consumed && req.valid) {
+            top.chi_tx_req.set(Valid<CHIREQ>{});
+            req.valid = false;
+        }
+        if (dat_beats == 2 && !ack_sent) {  // 全行到齐后回一次 CompAck
+            ack_sent = true;
+        }
+        mem.consume(top);
+        if (ack_sent) {
+            Valid<CHIRSP> ack;
+            ack.valid = true;
+            ack.bits.opcode = 0x02;  // CompAck
+            ack.bits.txn_id = 0x5A;
+            top.chi_tx_rsp.set(ack);
+            comb(top);
+            if (top.chi_tx_rsp_rdy.get()) {
+                top.chi_tx_rsp.set(Valid<CHIRSP>{});
+                ack_sent = false;
+                goto done;
+            }
+            edge(top);
+        }
+    }
+done:
     CHECK(consumed);
-    top.chi_tx_req.set(Valid<CHIREQ>{});
-
-    // 收回 RSP(Comp) 与 DAT(CompData)
-    bool got_rsp = runUntil(top, 200, [&] { return top.chi_rx_rsp.get().valid; });
-    CHECK(got_rsp);
-    CHECK(top.chi_rx_rsp.get().bits.opcode == 0x04);  // Comp
-    CHECK(top.chi_rx_rsp.get().bits.txn_id == 0x5A);
-    CHECK(top.chi_rx_rsp.get().bits.tgt_id == 0);     // adapter 不回填
-    comb(top);  // RSP 被 L2 消费（rdy=1 恒真）
-
-    bool got_dat = runUntil(top, 200, [&] { return top.chi_rx_dat.get().valid; });
-    CHECK(got_dat);
-    CHECK(top.chi_rx_dat.get().bits.opcode == 0x04);  // CompData
-    CHECK(top.chi_rx_dat.get().bits.txn_id == 0x5A);
-    CHECK(top.chi_rx_dat.get().bits.tgt_id == 0x08);  // 回到 CC
-
-    // eject REQ 观察口全程无 valid（本集成不该有 REQ 到 CC）
-    comb(top);
-    CHECK(!top.cc_tx_req.get().valid);
+    CHECK(got_receipt);
+    CHECK(got_ar);
+    CHECK(dat_beats == 2);
 }
 
 TEST_CASE("ZjL3 通路：device REQ 经 RnRouter 落 defaultHni，穿 HI 桥出 cfgAXI 并回数") {

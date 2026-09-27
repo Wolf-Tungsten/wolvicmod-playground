@@ -79,9 +79,11 @@ public:
     TaskEntry();
 };
 
+// N = 任务项数（本配置 req=16、hpr=8，per dirBank）
+template <uint32_t N>
 class TaskBuffer : public wolvicmod::Module {
 public:
-    static constexpr uint32_t kEntries = 16;  // nrReqTaskBuf（per dirBank）
+    static constexpr uint32_t kEntries = N;
 
     IN(bool, clk);
     IN(Valid<ChiTask>, chi_task_in);
@@ -313,6 +315,8 @@ public:
     IN(uint8_t, dir_bank);
     IN(Valid<HReqFlit>, rx_req);
     OUT(bool, rx_req_rdy);
+    IN(Valid<HReqFlit>, rx_hpr);
+    OUT(bool, rx_hpr_rdy);
     OUT(Valid<ReqDB>, req_db_s1);
     IN(bool, req_db_s1_rdy);
     OUT(Valid<ReqDB>, req_db_s3);
@@ -340,9 +344,14 @@ public:
     OUT(bool, working);
 
     MOD(ReqToChiTask, req2task);
+    MOD(ReqToChiTask, hpr2task);
     using RxQT = zj::prefab::FastQueue<HReqFlit, 2, false>;
     MOD(RxQT, rx_q);
-    MOD(TaskBuffer, req_task_buf);
+    MOD(RxQT, rx_hpr_q);
+    using ReqTaskBufT = TaskBuffer<16>;  // nrReqTaskBuf(per dirBank)=16
+    using HprTaskBufT = TaskBuffer<8>;   // nrHprTaskBuf(per dirBank)=8
+    MOD(ReqTaskBufT, req_task_buf);
+    MOD(HprTaskBufT, hpr_task_buf);
     MOD(Block, block);
     MOD(PosTable, pos_table);
     using S1PipeT = ValidPipe<TaskS1, 3>;  // readDirLatency-1=3
@@ -351,8 +360,117 @@ public:
     using FastRespQT = zj::prefab::FastQueue<RespFlit, 2, false>;
     MOD(FastRespQT, fast_resp_q);
 
+    WIRE(bool, w_select_req);  // !hprBuf.s0.valid & !hprBuf.lockTask
+
     Frontend();
 };
+
+// ---------------- TaskBuffer 构造（模板，req=16/hpr=8 共用） ----------------
+
+template <uint32_t N>
+TaskBuffer<N>::TaskBuffer() {
+    alloc_arb.clk = clk;
+    s0_arb.clk = clk;
+    for (uint32_t i = 0; i < kEntries; ++i) {
+        entries[i].clk = clk;
+        entries[i].retry_s1 = retry_s1;
+        entries[i].sleep_s1 = sleep_s1;
+        entries[i].wakeup = wakeup;
+    }
+    alloc_arb.in = chi_task_in;
+    chi_task_in_rdy = alloc_arb.in_rdy;
+    combine(w_alloc_rdy_all, entries,
+            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.chi_task_in_rdy; });
+    alloc_arb.out_rdy = w_alloc_rdy_all;
+    for (uint32_t i = 0; i < kEntries; ++i) {
+        entries[i].chi_task_in.assign().reads(alloc_arb.out) = [i](auto src) {
+            auto [out] = src;
+            return out[i];
+        };
+    }
+    // sort：initNid = 同 useAddr 的 valid 数；othRel = 同 useAddr 的 release 任一
+    combine(w_valid_all, entries,
+            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_valid; });
+    combine(w_release_all, entries,
+            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_release; });
+    combine(w_addr_all, entries,
+            [](TaskEntry& e) -> wolvicmod::Out<uint64_t>& { return e.st_addr; });
+    for (uint32_t i = 0; i < kEntries; ++i) {
+        entries[i].init_nid.assign().reads(w_valid_all, w_addr_all, chi_task_in) =
+            [i](auto src) -> uint8_t {
+                auto [valids, addrs, chi_task_in] = src;
+                uint8_t cnt = 0;
+                for (uint32_t j = 0; j < kEntries; ++j)
+                    if (valids[j] && useAddr(addrs[j]) == useAddr(chi_task_in.bits.addr)) ++cnt;
+                return cnt;
+            };
+        entries[i].oth_rel.assign().reads(w_release_all, w_addr_all, entries[i].st_addr) =
+            [i](auto src) {
+                auto [rels, addrs, self_addr] = src;
+                for (uint32_t j = 0; j < kEntries; ++j)
+                    if (rels[j] && useAddr(addrs[j]) == useAddr(self_addr)) return true;
+                return false;
+            };
+    }
+    // 出站仲裁：hasLockReg(RegNext 任意 lock) 时锁定 lockIdx 路，否则 RR
+    combine(w_s0_in, entries,
+            [](TaskEntry& e) -> wolvicmod::Out<Valid<ChiTask>>& { return e.chi_task_s0; });
+    combine(w_lock_all, entries,
+            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_lock; });
+    has_lock_reg.update().on(posedge(clk)).reads(w_lock_all) = [](auto src) {
+        auto [locks] = src;
+        for (bool l : locks) {
+            if (l) return true;
+        }
+        return false;
+    };
+    s0_arb.in = w_s0_in;
+    // RTL 生成 SV 实证：arb 的 out.ready 直连 io_chiTask_s0_ready，与 hasLockReg
+    // 无关——锁定期间仲裁器照样每拍 fire 并推进 vip 指针（仅输出被锁定项覆盖）。
+    s0_arb.out_rdy = chi_task_s0_rdy;
+    // lockIdx = 首个 lock 位，无 lock 时默认 N-1（chisel PriorityMux 无匹配取末值，
+    // 生成 SV 实证：末分支为 {3'h7, ~lock14}）。锁定期间选中项即 lockIdx，即使
+    // lockVec 已空（刚发射完）也选 N-1 项。
+    chi_task_s0.assign().reads(has_lock_reg, w_lock_all, w_s0_in, s0_arb.out) = [](auto src) {
+        auto [has_lock_reg, locks, s0_in, arb_out] = src;
+        if (has_lock_reg) {
+            uint32_t idx = kEntries - 1;
+            for (uint32_t i = 0; i < kEntries; ++i)
+                if (locks[i]) {
+                    idx = i;
+                    break;
+                }
+            return Valid<ChiTask>{s0_in[idx].valid, s0_in[idx].bits};
+        }
+        return arb_out;
+    };
+    for (uint32_t i = 0; i < kEntries; ++i) {
+        entries[i].chi_task_s0_rdy.assign().reads(has_lock_reg, w_lock_all, s0_arb.in_rdy,
+                                                  chi_task_s0_rdy) =
+            [i](auto src) {
+                auto [has_lock_reg, locks, arb_rdy, chi_task_s0_rdy] = src;
+                if (has_lock_reg) {
+                    uint32_t idx = kEntries - 1;
+                    for (uint32_t j = 0; j < kEntries; ++j)
+                        if (locks[j]) {
+                            idx = j;
+                            break;
+                        }
+                    return idx == i && chi_task_s0_rdy;
+                }
+                return arb_rdy[i];
+            };
+    }
+    lock_task = has_lock_reg;
+    working.assign().reads(w_valid_all) = [](auto src) {
+        auto [valids] = src;
+        for (bool v : valids) {
+            if (v) return true;
+        }
+        return false;
+    };
+}
+
 
 }  // namespace zj::dj
 

@@ -57,7 +57,7 @@ ZjL3::ZjL3() {
     connLan(ring.stops[2], shell1.lan[0]);
     connLan(ring.stops[5], shell1.lan[1]);
 
-    // HomeShell ↔ HnfStub（hnx 边界）
+    // HomeShell ↔ DongJiang（hnx 边界）
     connHnx(shell0, hnf0);
     connHnx(shell1, hnf1);
 
@@ -127,6 +127,10 @@ ZjL3::ZjL3() {
     shell1.clk = clk;
     hnf0.clk = clk;
     hnf1.clk = clk;
+    hnf0.ci = ci;
+    hnf1.ci = ci;
+    hnf0.bank_id = uint8_t{0};
+    hnf1.bank_id = uint8_t{1};
     snode.clk = clk;
     hinode.clk = clk;
     hinode.node_id = uint16_t{0x20};  // HI gid4 nodeId

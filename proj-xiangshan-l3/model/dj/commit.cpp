@@ -67,9 +67,20 @@ BackendDecode<Third>::BackendDecode() {
         return dc::getCommitCode(w_dec_list[0], w_dec_list[1], w_dec_list[2], w_dec_list[3]);
     };
 
-    hn_txn_id_out.assign().reads(dec_val_reg, dec_mes_reg) = [](auto src) {
-        auto [dec_val_reg, dec_mes_reg] = src;
-        return Valid<uint8_t>{dec_val_reg, dec_mes_reg.hnTxnID};
+    hn_id_val_reg.update().on(posedge(clk)).reads(dec_val_reg) = [](auto src) {
+        auto [dec_val_reg] = src;
+        return dec_val_reg;
+    };
+    hn_id_reg.update().on(posedge(clk)).reads(dec_val_reg, dec_mes_reg, hn_id_reg) =
+        [](auto src) {
+            auto [dec_val_reg, dec_mes_reg, hn_id_reg] = src;
+            return dec_val_reg ? dec_mes_reg.hnTxnID : hn_id_reg;
+        };
+    // RTL backend/Decode.scala：io.hnTxnIdOut.valid := RegNext(decValReg)、
+    // bits := RegEnable(decMesReg.hnTxnID, decValReg)——与 code 输出同拍（第二级）。
+    hn_txn_id_out.assign().reads(hn_id_val_reg, hn_id_reg) = [](auto src) {
+        auto [v, id] = src;
+        return Valid<uint8_t>{v, id};
     };
     dec_list_out = dec_list_reg;
     task_code_out = task_code_reg;

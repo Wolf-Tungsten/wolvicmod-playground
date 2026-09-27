@@ -2,7 +2,7 @@
 
 // ZjL3：P4a 阶段的部分组装顶层（WolvicZjTop 雏形，后续步骤在同一文件演进）：
 //   L2 CHI 边界 → XscChiAdapter → CcSocket → Ring n1(CC)
-//   Ring n0/n7 → HomeShell(bank0) → HnfStub；n2/n5 → HomeShell(bank1) → HnfStub
+//   Ring n0/n7 → HomeShell(bank0) → DongJiang；n2/n5 → HomeShell(bank1) → DongJiang
 //   Ring n4(HI) → HiNodeAxiLiteBridge → cfgAXI；n6(S) → SNodeAxiBridge → memAXI
 // 未建模站点（RI n3）的环边界端口直通外露（由测试 tie-off）。M/P 无环边界通道。
 //
@@ -17,7 +17,7 @@
 #include "model/bridge/snode_axi_bridge.h"
 #include "model/cc/cc_socket.h"
 #include "model/cc/xsc_chi_adapter.h"
-#include "model/home/hnf_stub.h"
+#include "model/home/dongjiang.h"
 #include "model/home/home_shell.h"
 #include "model/ring/ring.h"
 #include "model/flit/xs_flit.h"
@@ -95,14 +95,22 @@ public:
 
     ZjL3();
 
+    // 白盒访问（测试/调试）：hnf/shell 实例引用
+    home::DongJiang& hnfAt(int i) { return i == 0 ? hnf0 : hnf1; }
+    home::HomeShell<home::kHomeBank0>& shell0Ref() { return shell0; }
+    home::HomeShell<home::kHomeBank1>& shell1Ref() { return shell1; }
+    xs::XscChiAdapter& adapterRef() { return adapter; }
+    sock::CcSocket& socketRef() { return cc_socket; }
+    ring::Ring& ringRef() { return ring; }
+
 private:
     MOD(xs::XscChiAdapter, adapter);
     MOD(sock::CcSocket, cc_socket);
     MOD(ring::Ring, ring);
     MOD(HomeShellB0, shell0);  // bank0：lan0=n0(gid0)、lan1=n7(gid7)
     MOD(HomeShellB1, shell1);  // bank1：lan0=n2(gid2)、lan1=n5(gid5)
-    MOD(home::HnfStub, hnf0);
-    MOD(home::HnfStub, hnf1);
+    MOD(home::DongJiang, hnf0);
+    MOD(home::DongJiang, hnf1);
     MOD(bridge::SNodeAxiBridge, snode);    // n6 → memAXI
     MOD(bridge::HiNodeAxiLiteBridge, hinode);  // n4 → cfgAXI
 
@@ -111,7 +119,7 @@ private:
     static void connLan(ring::StopIO& r, home::LanIO& l);
 
     template <class ShellT>
-    void connHnx(ShellT& shell, home::HnfStub& hnf) {
+    void connHnx(ShellT& shell, home::DongJiang& hnf) {
         hnf.hnx_rx_req = shell.hnx_rx_req;
         hnf.hnx_rx_resp = shell.hnx_rx_resp;
         hnf.hnx_rx_data = shell.hnx_rx_data;

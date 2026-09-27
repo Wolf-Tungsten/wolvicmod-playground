@@ -49,6 +49,8 @@ public:
     OUT(uint32_t, cmt_code_out);
 
     REG(bool, dec_val_reg);
+    REG(bool, hn_id_val_reg);
+    REG(uint8_t, hn_id_reg);
     REG(DecMes, dec_mes_reg);
     REG(DecListArr, dec_list_reg);
     REG(uint32_t, task_code_reg);

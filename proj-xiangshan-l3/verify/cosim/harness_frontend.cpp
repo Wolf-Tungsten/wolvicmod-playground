@@ -130,6 +130,21 @@ void setRxReq(VFrontend& ref, const Valid<HReqFlit>& v) {
     ref.io_rxReq_bits_TgtID = v.bits.tgt_id;
     ref.io_rxReq_bits_QoS = v.bits.qos;
 }
+void setRxHpr(VFrontend& ref, const Valid<HReqFlit>& v) {
+    ref.io_rxHpr_valid = v.valid;
+    ref.io_rxHpr_bits_ExpCompAck = v.bits.exp_comp_ack;
+    ref.io_rxHpr_bits_Excl = v.bits.excl;
+    ref.io_rxHpr_bits_SnpAttr = v.bits.snp_attr;
+    ref.io_rxHpr_bits_MemAttr = v.bits.mem_attr;
+    ref.io_rxHpr_bits_Order = v.bits.order;
+    ref.io_rxHpr_bits_Addr = v.bits.addr;
+    ref.io_rxHpr_bits_Size = v.bits.size;
+    ref.io_rxHpr_bits_Opcode = v.bits.opcode;
+    ref.io_rxHpr_bits_TxnID = v.bits.txn_id;
+    ref.io_rxHpr_bits_SrcID = v.bits.src_id;
+    ref.io_rxHpr_bits_TgtID = v.bits.tgt_id;
+    ref.io_rxHpr_bits_QoS = v.bits.qos;
+}
 void setRespDir(VFrontend& ref, const Valid<DirMsg>& v) {
     ref.io_respDir_valid = v.valid;
     ref.io_respDir_bits_llc_wayOH = v.bits.llc.wayOH;
@@ -387,6 +402,7 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
     std::deque<EvPosR> evPosR;
     std::deque<EvClean> evClean;
     Valid<HReqFlit> pendReq{false, {}};
+    Valid<HReqFlit> pendHpr{false, {}};
 
     auto shadowLookup = [&](uint64_t addr, DirMsg& m) {
         auto& line = dirShadow[useAddr(addr) & 0x3F];
@@ -422,6 +438,24 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
             fl.src_id = 0x09;
             fl.tgt_id = 0;
             pendReq = {true, fl};
+        }
+        // HPR：同合法性约束的独立流，qos 偏 0xf（ChiXbar 只把 0xf 改道 HPR）
+        if (!pendHpr.valid && cosim::roll(rng, pct / 3)) {
+            const Fam f = randFam(rng);
+            HReqFlit fl{};
+            fl.addr = randAddr(rng);
+            fl.qos = (rng() % 4 != 0) ? 0xF : (rng() & 7);
+            fl.opcode = f.opcode;
+            fl.order = f.order;
+            fl.exp_comp_ack = f.expCompAck;
+            fl.snp_attr = true;
+            fl.excl = false;
+            fl.mem_attr = (f.allocate << 3) | (1u << 2) | f.ewa;
+            fl.size = f.fullSize ? 6 : 5;
+            fl.txn_id = rng() & 0xFFF;
+            fl.src_id = 0x09;
+            fl.tgt_id = 0;
+            pendHpr = {true, fl};
         }
 
         // ---- 事件出队 ----
@@ -464,6 +498,8 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
 
         dut.rx_req.set(pendReq);
         setRxReq(ref, pendReq);
+        dut.rx_hpr.set(pendHpr);
+        setRxHpr(ref, pendHpr);
         dut.resp_dir.set(dirV);
         setRespDir(ref, dirV);
         // reqPosVec：随机脉冲（ReplaceCM 侧要槽）
@@ -585,6 +621,7 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
         }
         // rxReq fire → 撤销
         if (pendReq.valid && dut.rx_req_rdy.get()) pendReq = {false, {}};
+        if (pendHpr.valid && dut.rx_hpr_rdy.get()) pendHpr = {false, {}};
     }
 
     std::cout << (st.mismatches == 0 ? "PASS" : "FAIL") << " frontend Frontend seed=" << seed

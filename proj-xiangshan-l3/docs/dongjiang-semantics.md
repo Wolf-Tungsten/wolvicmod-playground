@@ -509,8 +509,39 @@ dj_decode.h 无匹配语义修正后 `run.sh backend` 回归仍零失配。
 - 对拍 `run.sh chixbar`：随机 5 路 flit + 随机 ready + cBusy，
   3 seed × 10 万拍 = **466 万比对零失配**。
 
-## 9. 待办提炼（后续子步骤开工前补）
+## 9. P3 收口：DongJiang 顶层组装与集成（dongjiang/DongJiang.scala）
 
-- P3 收口：model/home/dongjiang.h 组装（2×Frontend + Backend + Directory +
-  DataBlock + ChiXbar），替换 hnf_stub；cBusy = RegNext(posBusy) 的顶层连接。
+`model/home/dongjiang.{h,cpp}`：2×Frontend + Backend + Directory + DataBlock +
+ChiXbar，hnx 端口与原 HnfStub 行为桩同形（原位替换，桩源码已删）。要点：
+
+- **rx 输入 setRx**：tgt:=LAN(0)；backend.rxDat.valid := rxDat fire（抄送）。
+- **合流仲裁**（DongJiang.scala:160-171）：backend.fastResp ← fastRRArb
+  (fe.fastResp)（VipArb）；dataBlock.reqDB ← fastArb(backend.reqDB,
+  fastRRArb(fe.reqDB_s3), fastRRArb(fe.reqDB_s1))（FixedArb index0 优先）；
+  cleanDB/task 为 validOut 形态（out.ready 恒 true）；rxRsp/rxDat 单路直通。
+- **cBusy** = RegNext({0, posBusy})：两 FE alrUsePoS 合计分档
+  （<64/<96/<115/else → 0/1/2/3）。
+- **getAddrVec**：hnIdx 广播两 FE，result 按 hnIdx.dirBank 选择回填。
+- **Frontend 的 rxHpr 通道必须建模**：ChiXbar 把 QoS==0xf 请求改道 HPR，
+  HprTaskBuffer 独立存在（本配置 8 项；req 侧 16 项），selectReq =
+  !hprBuf.s0.valid & !hprBuf.lockTask。Frontend 模型为此补全 HPR 全通路
+  （FastQueue→ReqToChiTask→HprTaskBuffer），对拍同步加 HPR 激励仍零失配。
+- **集成发现的模型 bug（已修）**：BackendDecode（backend/Decode.scala）的
+  `io.hnTxnIdOut.valid := RegNext(decValReg)`——与 code 输出同属第二级流水；
+  模型曾用首级 dec_val_reg 组合输出，导致 commit 早一拍消费陈旧 cmtCode
+  （有效 task 的 commit code 依赖后端重译码，滞后一拍即丢 OpSend/WriLLC，
+  commit 永久卡在 kCommit）。backend 对拍回归在修正后仍零失配。
+- **集成激励合法性**：非法 ChiInst 经 PriorityMux 落第 33 行产生垃圾行为
+  （如 ReadOnce 必须 order=3 且 eca=1——译码表 8 个 ReadOnce 行全部如此）。
+  test_zj_l3 据此修正激励（eca=1、order=3、单次 CompAck）。
+- **上电横扫**：目录/数据 SRAM 横扫写约 8.2k 拍才 ready（readDir 反压），
+  集成测试窗口需 ≥2 万拍。
+- 端到端时序实测（单 ReadOnce miss+allocate）：~8200 拍横扫完成后 commit →
+  ReadReceipt → txReq → 内存 → CompData×2 → CompAck → writeDir → DS save，
+  commit/PoS/DataCM 全部回收。
+
+## 10. 待办提炼（后续步骤开工前补）
+
+- 步骤 6（P4b WolvicZjTop 顶层 + standalone coremark trace 重放）与
+  步骤 7（DPI-C 集成）见实施计划，不在 P3 范围。
 
