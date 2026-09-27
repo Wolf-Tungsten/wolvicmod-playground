@@ -153,7 +153,7 @@ cd proj-xiangshan-l3/XiangShan
 
 结果：`HIT GOOD TRAP`，difftest 663,692 指令零失配，**cycleCnt = 316,801 与 RTL ZhuJiang 逐拍完全相等**，host time ≈ 876s（EMU_THREADS=16——模型环不在 Verilator 内，不受 UNOPTTHREADS 限制）。
 
-集成结构（详见 `docs/wolvicmod-zhujiang-implementation-plan.md` 步骤 7）：
+集成结构（详见 `docs/p5-dpi-integration.md` 集成手册：接口/构建/生命周期/复现/排障，`docs/wolvicmod-zhujiang-implementation-plan.md` 步骤 7 有验收数据）：
 
 - **chisel 侧**（XiangShan 子模块 `wolvicmod-l3` 分支）：`--wolvic-zj` 开关 → BlackBox `WolvicZjBB` 替换 `Zhujiang` + SocketDevSide + flit remap，边界与 WolvicZjTop 完全一致（L2 CHI 六通道 + memAXI + cfgAXI）
 - **SV 薄壳** `dpi/sv/WolvicZjBB.sv`：经 difftest `RTL_INCLUDE` 注入；每 posedge 调一次 DPI `wolvic_zj_step`（前提：`tests/test_comb_audit.cpp` 审计证明模型边界零组合穿透）
