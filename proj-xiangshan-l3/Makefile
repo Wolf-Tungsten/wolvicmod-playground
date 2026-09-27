@@ -13,6 +13,9 @@
 #   make replay [N=20000]     coremark 前端 N 拍 trace 重放到 CC 边界：
 #                             emu dump FST（需 emu 带 TRACE=fst 构建）→ fst2vcd
 #                             → verify/trace/extract_cc_trace.py → ctest -R trace_replay
+#   make replay-top           coremark 全程 trace 重放到 WolvicZjTop 三边界（P4b）：
+#                             emu 全程 dump FST → verify/trace/extract_top_trace.cpp
+#                             （C++ libfst 直读）→ ctest -R wolvic_top_replay
 #   make emu-clean            手动清除 XiangShan 构建产物
 #
 # 本仓构建产物全部在 build/ 下（已入 .gitignore）；XiangShan 子模块的产物在
@@ -83,3 +86,23 @@ replay:
 	  python3 verify/trace/extract_cc_trace.py --start 0 --end $(N) -o build/trace/cc_front.txt
 	cmake --build build -j --target test_trace_replay
 	cd build && ctest -R test_trace_replay --output-on-failure
+
+# --- coremark 全程 trace 重放到 WolvicZjTop 三边界（P4b 验收）---
+# emu 全程 dump FST → C++ FST 直读提取器（L2 CHI 缝 + mem/cfg AXI）→ 重放对拍。
+# coremark 于 ~31.7 万拍 HIT GOOD TRAP 自然结束；FULLN 仅为防死循环上限。
+FULLN ?= 400000
+replay-top:
+	@[[ -f XiangShan/build/emu ]] || { echo "emu 不存在，先 make emu LLC=ZhuJiang TRACE=fst"; exit 1; }
+	@grep -q 'trace=fst' $(STAMP) || { echo "当前 emu 未开 trace（$$(cat $(STAMP))），先 make emu LLC=ZhuJiang TRACE=fst"; exit 1; }
+	@mkdir -p build/trace
+	cd XiangShan && ./build/emu -b 0 -e $(FULLN) -C $(FULLN) --dump-wave \
+	  --wave-path ../build/trace/cm_full.fst -i ./ready-to-run/coremark-2-iteration.bin \
+	  --diff ./ready-to-run/riscv64-nemu-interpreter-so
+	cmake --build build -j  # 确保 libwolvicmod_fst.a 存在
+	g++ -O2 -std=c++17 -I ../wolvicmod/third_party/libfst/src \
+	  verify/trace/extract_top_trace.cpp \
+	  build/wolvicmod/third_party/libfst/libwolvicmod_fst.a -lz \
+	  -o build/trace/extract_top_trace
+	./build/trace/extract_top_trace build/trace/cm_full.fst -o build/trace/cm_full.txt
+	cmake --build build -j --target test_wolvic_top_replay
+	cd build && ctest -R test_wolvic_top_replay --output-on-failure
