@@ -38,7 +38,7 @@
 - 时序常量：目录读 4 拍 / muticycle 2；DS 读 5 拍 / muticycle 2
 - 地址切分：offset[5:0]、dirBank=addr[6]、bankId=addr[12]、ci=addr[47:44]=0、hnTxnID={dirBank 1, posSet 2, posWay 4}
 
-省略清单：HPR/DBG 环（hasHprRing=false、hwa 关）、BBN（`require(!hasBBN)`）、c2c、MBIST/DFT、时钟门控（DoubleCounterClockGate 组合唤醒，时序等价于常开）、QoS（环内仲裁不使用）、RI 数据通路、ZJPerf。
+省略清单：HPR/DBG 环（hasHprRing=false、hwa 关）、BBN（`require(!hasBBN)`）、c2c、MBIST/DFT、QoS（环内仲裁不使用）、RI 数据通路、ZJPerf。时钟门控（DoubleCounterClockGate）**稳态等价于常开**（working 维持 + inbound 组合唤醒零延迟），不建睡/醒循环；但**上电横扫期冻结**必须建模——DongJiang 顶层 `woken` 锁存 + 横扫/预充计数功能使能（§3.4 as-built 与 dongjiang-semantics §9）。
 
 ---
 
@@ -185,13 +185,21 @@ WolvicZjTop                                   ← 集成边界（DPI-C 落点）
 （`HomeShell<Cfg>`，Cfg 为 NTTP——createChildModule 只支持默认构造；每 lan 7 个
 `Queue<F,2>` ChiBuffer + 3 个 `RRArb<F,2>` eject 合流；inject friends 组合分发：
 ERQ 选址 `addr.ci==ci?0x30:0`、ReturnNID noDmt(0x7FF) 改写 srcId、DAT.HomeNID 改写），
-HNF 暂用行为桩 `model/home/hnf_stub.h`（16 项池、8 拍延迟、先 RSP(Comp 0x04) 后
-DAT(CompData)，丢弃 RSP/DAT、不发 SNP/ERQ），P3 由 DongJiang 全量替换。
+P3 起 HNF 为 DongJiang 全量模型（`model/home/dongjiang.{h,cpp}`，P2 的行为桩已删）。
 实测锁定值：bank0 = nids{0x00,0x38} friends{{0x08,0x18},{0x40,0x30}}、
 bank1 = nids{0x10,0x28} friends{{0x18,0x08},{0x30,0x40}}、mem_nid=0x30；
 hnxPipelineDepth=0 → 每 lan 仅 1 级 ChiBuffer。
-组装见 `model/zj_l3.h`（adapter→cc_socket→ring n1；n0/n7→shell0、n2/n5→shell1；
-n3/n4/n6 直通外露）。
+组装见 `model/wolvic_zj_top.h`（adapter→cc_socket→ring n1；n0/n7→shell0、
+n2/n5→shell1；n4→HI 桥、n6→S 桥；RI n3 tie-off 桩内收于 WolvicZjTop）。
+
+> ⚠️ **P4b 时钟门控修正**：HomeWrapper 的 DoubleCounterClockGate 门控整个
+> DongJiang 时钟域（`hnx.clock := cg.io.ock`），上电横扫（目录 SRAM/DBID 预充）
+> 冻结至首个 REQ/HPR flit 到达 ChiBuffer 出口（inbound 组合唤醒零延迟），两 hnf
+> 独立唤醒——coremark 实测 hnf_0 cyc~1038 醒、hnf_1 cyc~9323 醒，首笔 mem.ar 时刻
+> 直接由唤醒拍决定。模型在 DongJiang 顶层建 `woken` 单向锁存
+> （`= woken | hnx_rx_req.valid`），横扫/预充计数（SpSram/DpSram/DBIDPool）挂
+> `clk_en` 功能使能；ICG 冻结前 resetHold 已移一位，横扫窗口首拍无条件推进。
+> 稳态流量下门控与常开等价（working 维持 + inbound 当拍唤醒），不建睡/醒循环。
 
 ### 3.5 DongJiang（HNF 本体）
 
@@ -244,8 +252,8 @@ n3/n4/n6 直通外露）。
 | P0 | 时序原语库（§2.2）+ 单测 | ✅ 已达成：两侧 ctest 全绿（逐文件独立条目）+ RTL 对拍零失配（两侧 `verify/run.sh`：27 配置 × 3 seed × 10 万拍，累计 858 万拍 / 4155 万次比对） |
 | P1 | Ring + RouterStop + ChannelTap/EjectBuffer | 环上传输 trace 对拍 |
 | P2 | XscChiAdapter + CcSocket + HomeWrapper 外壳 | ✅ 已达成：单测全绿 + socket 对拍 5220 万比对零失配 + **coremark 前端 2 万拍 trace 重放到 CC 边界（26.5 万比对零失配，`make replay`）**（HNF 用行为桩） |
-| P3 | DongJiang 全量（Directory→DataBlock→Backend→Frontend→ChiXbar） | LLC hit/miss/snoop 定向用例对拍 |
-| P4 | S/HI 桥 + 顶层组装 | standalone coremark trace 重放全对 |
+| P3 | DongJiang 全量（Directory→DataBlock→Backend→Frontend→ChiXbar） | ✅ 已达成：五子模块独立对拍全零失配（dir 544万/db 213万/backend 1445万/frontend 766万/chixbar 466万比对）+ 顶层组装替换行为桩，test_wolvic_zj_top 端到端全绿 |
+| P4 | S/HI 桥 + 顶层组装 | P4a ✅（两桥对拍 941 万比对零失配）；P4b 进行中：WolvicZjTop 三边界顶层 + RI tie-off 内收 ✅、C++ FST 直读提取器 ✅、时钟门控 woken 建模 ✅、coremark 前端 2 万拍三边界重放零失配 ✅，全程重放待验 |
 | P5 | DPI-C 集成 + coremark 系统级验证 | difftest 过 + cycleCnt=316,801 |
 
 ## 7. 风险与注意点
@@ -254,4 +262,4 @@ n3/n4/n6 直通外露）。
 - **防死锁机制不能省**：环的 rsvd 令牌、EjectBuffer VIP 末槽、TaskBuffer 超时锁定、目录 lockTable——它们在 coremark 中未必触发，但少一个就可能在某次反压下死锁
 - **同地址三级串行**（TaskBuffer sort → PoS sleep/wakeup → 目录 lockTable）是正确性关键路径，对拍用例必须覆盖
 - **DBID 位宽坑**（zhujiang 16b vs xscache 12b）在适配层显式断言，值域不超 12 位语义
-- 时钟门控全部省略（时序等价，§3.4/3.6 已论证）；若未来对功耗建模再补
+- 时钟门控：稳态睡/醒省略（时序等价，§3.4 已论证）；**上电横扫冻结不可省**（P4b 实证——省略则首笔内存访问早 ~1000 拍，边界立即失配），已建模为 DongJiang `woken` + 横扫/预充 `clk_en` 功能使能；若未来对功耗建模再补睡/醒细节

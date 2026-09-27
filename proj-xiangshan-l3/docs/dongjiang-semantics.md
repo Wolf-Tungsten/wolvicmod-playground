@@ -534,9 +534,21 @@ ChiXbar，hnx 端口与原 HnfStub 行为桩同形（原位替换，桩源码已
 - **集成激励合法性**：非法 ChiInst 经 PriorityMux 落第 33 行产生垃圾行为
   （如 ReadOnce 必须 order=3 且 eca=1——译码表 8 个 ReadOnce 行全部如此）。
   test_zj_l3 据此修正激励（eca=1、order=3、单次 CompAck）。
-- **上电横扫**：目录/数据 SRAM 横扫写约 8.2k 拍才 ready（readDir 反压），
-  集成测试窗口需 ≥2 万拍。
-- 端到端时序实测（单 ReadOnce miss+allocate）：~8200 拍横扫完成后 commit →
+- **上电横扫（P4b 修正版）**：目录/数据 SRAM 横扫**冻结至 DongJiang 首个请求
+  唤醒**——HomeWrapper 的 DoubleCounterClockGate 门控整个 DongJiang 时钟域
+  （`hnx.clock := cg.io.ock`），上电后 cken 一拍即落，横扫计数（SramResetGen）
+  随之冻结；首个 REQ/HPR flit 到达 ChiBuffer 出口（inbound 组合唤醒，零延迟）
+  后横扫才连续跑完（llc 8196 拍 ready、sf 2064 拍、DBIDPool 64 拍预充同理）。
+  实测：hnf_0 首请求 cyc~1038 唤醒 → llc ready 9234 → 首笔 mem.ar 9251；
+  hnf_1 首请求 cyc~9323 唤醒 → ready 19977。两 hnf 独立唤醒。**"时钟门控时序
+  等价于常开"只在稳态成立**（working 维持 + inbound 当拍唤醒）；上电横扫期
+  必须建模。模型：DongJiang 顶层 `woken` 单向锁存（首 hnx_rx_req.valid 置位），
+  横扫/预充计数挂 `clk_en = woken | hnx_rx_req.valid`（SpSram/DpSram/DBIDPool
+  功能使能）；另 ICG 冻结前 resetHold 已移位一次，横扫窗口首拍无条件推进
+  （sram.h rst 更新 `cnt==kRstCycles || clk_en`），否则 ready 晚 1 拍（重放实测）。
+  旧记录"约 8.2k 拍才 ready（从复位起算）"仅对模块级对拍成立（harness 激励
+  即唤醒）。
+- 端到端时序实测（单 ReadOnce miss+allocate，clk_en 恒 1 场景）：~8200 拍横扫完成后 commit →
   ReadReceipt → txReq → 内存 → CompData×2 → CompAck → writeDir → DS save，
   commit/PoS/DataCM 全部回收。
 
