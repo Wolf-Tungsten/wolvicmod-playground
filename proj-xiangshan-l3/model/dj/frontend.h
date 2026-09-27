@@ -13,6 +13,7 @@
 #include "prefab/fastq.h"
 #include "prefab/xsarb.h"
 #include "wolvicmod/core/edge.h"
+#include "wolvicmod/core/expr.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
 #include "wolvicmod/prefab/pipe.h"
@@ -383,10 +384,7 @@ TaskBuffer<N>::TaskBuffer() {
             [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.chi_task_in_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].chi_task_in.assign().reads(alloc_arb.out) = [i](auto src) {
-            auto [out] = src;
-            return out[i];
-        };
+        entries[i].chi_task_in = alloc_arb.out[i];
     }
     // sort：initNid = 同 useAddr 的 valid 数；othRel = 同 useAddr 的 release 任一
     combine(w_valid_all, entries,

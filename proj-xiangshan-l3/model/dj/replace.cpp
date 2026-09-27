@@ -398,10 +398,7 @@ ReplaceCM::ReplaceCM() {
             [](ReplaceEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
-            auto [out] = src;
-            return out[i];
-        };
+        entries[i].alloc = alloc_arb.out[i];
     }
 
     // reqPoS 矩阵

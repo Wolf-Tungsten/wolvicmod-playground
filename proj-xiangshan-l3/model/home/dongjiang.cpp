@@ -212,40 +212,22 @@ DongJiang::DongJiang() {
     };
     backend.fast_resp = fast_resp_arb.out;
     fast_resp_arb.out_rdy = backend.fast_resp_rdy;
-    fe0.fast_resp_rdy.assign().reads(fast_resp_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    fe1.fast_resp_rdy.assign().reads(fast_resp_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
+    fe0.fast_resp_rdy = fast_resp_arb.in_rdy[0];
+    fe1.fast_resp_rdy = fast_resp_arb.in_rdy[1];
 
     // ---- reqDB：fastArb(backend.reqDB, fastRRArb(fe.reqDB_s3), fastRRArb(fe.reqDB_s1)) ----
     reqdb_s3_arb.in.assign().reads(fe0.req_db_s3, fe1.req_db_s3) = [](auto src) {
         auto [a, b] = src;
         return A2VReq{a, b};
     };
-    fe0.req_db_s3_rdy.assign().reads(reqdb_s3_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    fe1.req_db_s3_rdy.assign().reads(reqdb_s3_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
+    fe0.req_db_s3_rdy = reqdb_s3_arb.in_rdy[0];
+    fe1.req_db_s3_rdy = reqdb_s3_arb.in_rdy[1];
     reqdb_s1_arb.in.assign().reads(fe0.req_db_s1, fe1.req_db_s1) = [](auto src) {
         auto [a, b] = src;
         return A2VReq{a, b};
     };
-    fe0.req_db_s1_rdy.assign().reads(reqdb_s1_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    fe1.req_db_s1_rdy.assign().reads(reqdb_s1_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
+    fe0.req_db_s1_rdy = reqdb_s1_arb.in_rdy[0];
+    fe1.req_db_s1_rdy = reqdb_s1_arb.in_rdy[1];
     reqdb_arb.in.assign().reads(backend.req_db, reqdb_s3_arb.out, reqdb_s1_arb.out) =
         [](auto src) {
             auto [a, b, c] = src;
@@ -253,18 +235,9 @@ DongJiang::DongJiang() {
         };
     datablock.req_db = reqdb_arb.out;
     reqdb_arb.out_rdy = datablock.req_db_rdy;
-    backend.req_db_rdy.assign().reads(reqdb_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    reqdb_s3_arb.out_rdy.assign().reads(reqdb_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
-    reqdb_s1_arb.out_rdy.assign().reads(reqdb_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[2];
-    };
+    backend.req_db_rdy = reqdb_arb.in_rdy[0];
+    reqdb_s3_arb.out_rdy = reqdb_arb.in_rdy[1];
+    reqdb_s1_arb.out_rdy = reqdb_arb.in_rdy[2];
 
     // ---- cleanDB：fastArb.validOut(fastRRArb(fe.cleanDB), backend.cleanDB) ----
     cleandb_in_arb.in.assign().reads(fe0.clean_db_s3, fe1.clean_db_s3) = [](auto src) {
@@ -275,14 +248,8 @@ DongJiang::DongJiang() {
         auto [a, b] = src;
         return A2VReq{a, b};
     };
-    cleandb_in_arb.out_rdy.assign().reads(cleandb_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    backend.clean_db_rdy.assign().reads(cleandb_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
+    cleandb_in_arb.out_rdy = cleandb_arb.in_rdy[0];
+    backend.clean_db_rdy = cleandb_arb.in_rdy[1];
     cleandb_arb.out_rdy = true;  // validOut：out.ready := true.B
     datablock.clean_db.assign().reads(cleandb_arb.out) = [](auto src) {
         auto [o] = src;
@@ -298,26 +265,14 @@ DongJiang::DongJiang() {
         auto [a, b] = src;
         return A2VTask{a, b};
     };
-    fe0.fast_data_s3_rdy.assign().reads(task_in_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    fe1.fast_data_s3_rdy.assign().reads(task_in_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
+    fe0.fast_data_s3_rdy = task_in_arb.in_rdy[0];
+    fe1.fast_data_s3_rdy = task_in_arb.in_rdy[1];
     task_arb.in.assign().reads(backend.data_task, task_in_arb.out) = [](auto src) {
         auto [a, b] = src;
         return A2VTask{a, b};
     };
-    backend.data_task_rdy.assign().reads(task_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[0];
-    };
-    task_in_arb.out_rdy.assign().reads(task_arb.in_rdy) = [](auto src) {
-        auto [r] = src;
-        return r[1];
-    };
+    backend.data_task_rdy = task_arb.in_rdy[0];
+    task_in_arb.out_rdy = task_arb.in_rdy[1];
     task_arb.out_rdy = true;  // validOut
     datablock.task = task_arb.out;
 

@@ -23,6 +23,7 @@
 #include "model/flit/zj_flit.h"
 #include "prefab/xsarb.h"
 #include "wolvicmod/core/edge.h"
+#include "wolvicmod/core/expr.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/arb.h"
 #include "wolvicmod/prefab/valid.h"

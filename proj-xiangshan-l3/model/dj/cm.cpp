@@ -201,10 +201,7 @@ SnoopCM::SnoopCM() {
             [](SnoopEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
-            auto [out] = src;
-            return out[i];
-        };
+        entries[i].alloc = alloc_arb.out[i];
     }
     combine(w_tx_snp_in, entries,
             [](SnoopEntry& e) -> wolvicmod::Out<Valid<SnoopFlit>>& { return e.tx_snp; });
@@ -344,10 +341,7 @@ ReadCM::ReadCM() {
             [](ReadEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
-            auto [out] = src;
-            return out[i];
-        };
+        entries[i].alloc = alloc_arb.out[i];
     }
     combine(w_tx_req_in, entries,
             [](ReadEntry& e) -> wolvicmod::Out<Valid<HReqFlit>>& { return e.tx_req; });
@@ -506,10 +500,7 @@ WriteCM::WriteCM() {
             [](WriteEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].alloc.assign().reads(alloc_arb.out) = [i](auto src) {
-            auto [out] = src;
-            return out[i];
-        };
+        entries[i].alloc = alloc_arb.out[i];
     }
     combine(w_tx_req_in, entries,
             [](WriteEntry& e) -> wolvicmod::Out<Valid<HReqFlit>>& { return e.tx_req; });
