@@ -33,6 +33,7 @@ Valid<SramReqBits<T, Ways>> idleReq() {
 TEST_CASE("zj SpSram(1,1): 基本读写，读延迟 1 拍") {
     SpSram<uint32_t, 16, 1, 1, 1> top;  // Setup=1 Latency=1，kReadDelay=1
     top.elaborate();
+    top.clk_en.set(true);
     top.req.set(idleReq<uint32_t, 1>());
 
     // 拍 0：写 addr3 = 0xAAAA
@@ -60,6 +61,7 @@ TEST_CASE("zj SpSram(1,1): 基本读写，读延迟 1 拍") {
 TEST_CASE("zj SpSram(1,2,+outreg)（Directory 配置）: 读延迟恰好 3 拍、intv 回压") {
     SpSram<uint32_t, 16, 2, 1, 2, false, true> top;  // kReadDelay=3, kInterval=2
     top.elaborate();
+    top.clk_en.set(true);
     top.req.set(idleReq<uint32_t, 2>());
 
     // 拍 0：写 addr5 mask=0b11 data{111,222}
@@ -96,6 +98,7 @@ TEST_CASE("zj SpSram(1,2,+outreg)（Directory 配置）: 读延迟恰好 3 拍�
 TEST_CASE("zj SpSram(1,2,+outreg): way 掩码写") {
     SpSram<uint32_t, 16, 2, 1, 2, false, true> top;
     top.elaborate();
+    top.clk_en.set(true);
     top.req.set(idleReq<uint32_t, 2>());
     cycle(top);
 
@@ -135,6 +138,7 @@ TEST_CASE("zj SpSram(1,2,+outreg): way 掩码写") {
 TEST_CASE("zj SpSram(2,2,+outreg)（BeatStorage 配置）: 读延迟恰好 5 拍") {
     SpSram<uint32_t, 16, 1, 2, 2, false, true> top;  // kIsc=2, kReadDelay=5
     top.elaborate();
+    top.clk_en.set(true);
     top.req.set(idleReq<uint32_t, 1>());
 
     // 拍 0：写 addr9 = 0xBEEF（kIsc=2：写提交推迟 1 拍）
@@ -168,6 +172,7 @@ TEST_CASE("zj SpSram(2,2,+outreg)（BeatStorage 配置）: 读延迟恰好 5 拍
 TEST_CASE("zj DpSram(1,1,bypass,+outreg)（replArray 配置）: 读 2 拍、同拍读写同址写优先") {
     DpSram<uint32_t, 16, 1, true, 1, 1, false, true> top;  // kReadDelay=2
     top.elaborate();
+    top.clk_en.set(true);
     top.wreq.set(idleReq<uint32_t, 1>());
     top.rreq.set({false, 0});
 
@@ -215,6 +220,7 @@ TEST_CASE("zj DpSram(1,1,bypass,+outreg)（replArray 配置）: 读 2 拍、同�
 TEST_CASE("zj DpSram(1,1,nobypass,+outreg): 同拍读写同址读新值（对齐 Verilator 下件）") {
     DpSram<uint32_t, 16, 1, false, 1, 1, false, true> top;
     top.elaborate();
+    top.clk_en.set(true);
     top.wreq.set(idleReq<uint32_t, 1>());
     top.rreq.set({false, 0});
 
@@ -248,6 +254,7 @@ TEST_CASE("zj DpSram(1,1,nobypass,+outreg): 同拍读写同址读新值（对齐
 TEST_CASE("zj SpSram(ShouldReset): 复位横扫期间 req_rdy 拉低，之后读出零初值") {
     SpSram<uint32_t, 4, 1, 1, 1, false, false, true> top;  // kRstCycles=4+4=8
     top.elaborate();
+    top.clk_en.set(true);
     top.req.set(idleReq<uint32_t, 1>());
 
     // 拍 0..7：横扫进行（4 拍 resetHold + 4 set 写零），req_rdy 拉低

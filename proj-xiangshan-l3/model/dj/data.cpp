@@ -8,6 +8,7 @@ namespace zj::dj {
 
 BeatStorage::BeatStorage() {
     array.clk = clk;
+    array.clk_en = clk_en;
     resp_pipe.clk = clk;
 
     // reqReady：5bit 移位里 bit4（d1）无请求 → 请求隔 2 拍（对齐 SRAM interval=2）
@@ -86,14 +87,16 @@ DBIDPool::DBIDPool() {
     q0.clk = clk;
     q1.clk = clk;
 
-    // Counter(64).inc() 每拍调用；值 63 的那拍返回真 → rst_done 次拍锁存
-    rst_cnt.update().on(posedge(clk)).reads(rst_cnt) = [](auto src) {
-        auto [rst_cnt] = src;
+    // Counter(64).inc() 每拍调用；值 63 的那拍返回真 → rst_done 次拍锁存。
+    // clk_en=0（门控冻结期）计数保持——HomeWrapper ICG 冻结预充至 DongJiang 唤醒
+    rst_cnt.update().on(posedge(clk)).reads(rst_cnt, clk_en) = [](auto src) {
+        auto [rst_cnt, clk_en] = src;
+        if (!clk_en) return rst_cnt;
         return static_cast<uint8_t>(rst_cnt == 63 ? 0 : rst_cnt + 1);
     };
-    rst_done.update().on(posedge(clk)).reads(rst_done, rst_cnt) = [](auto src) {
-        auto [rst_done, rst_cnt] = src;
-        return rst_done || (rst_cnt == 63);
+    rst_done.update().on(posedge(clk)).reads(rst_done, rst_cnt, clk_en) = [](auto src) {
+        auto [rst_done, rst_cnt, clk_en] = src;
+        return rst_done || (clk_en && rst_cnt == 63);
     };
 
     w_enq_one.assign().reads(enq0, enq1) = [](auto src) {
@@ -161,6 +164,7 @@ DBIDPool::DBIDPool() {
 
 DBIDCtrl::DBIDCtrl() {
     pool.clk = clk;
+    pool.clk_en = clk_en;
 
     w_has_two.assign().reads(pool.deq0, pool.deq1) = [](auto src) {
         auto [pool_deq0, pool_deq1] = src;
@@ -198,6 +202,7 @@ DBIDCtrl::DBIDCtrl() {
 
 DataBuffer::DataBuffer() {
     dat_buf.clk = clk;
+    dat_buf.clk_en = clk_en;
     to_ds_q.clk = clk;
     to_chi_q.clk = clk;
 

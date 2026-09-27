@@ -188,6 +188,7 @@ uint64_t cosimDb(uint32_t seed, uint64_t cycles) {
     VDataBlock ref;
     DataBlock dut;
     dut.elaborate();
+    dut.clk_en.set(true);
     std::mt19937 rng(seed);
     cosim::Stats st;
     cosim::Replay rp;

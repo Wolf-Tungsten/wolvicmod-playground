@@ -525,12 +525,17 @@ DataBlock::DataBlock() {
     data_cm.clk = clk;
     dbid_ctrl.clk = clk;
     dat_buf.clk = clk;
+    dbid_ctrl.clk_en = clk_en;
+    dat_buf.clk_en = clk_en;
     ds_top_arb.clk = clk;
     for (uint32_t i = 0; i < kNrDSBank; ++i) {
         ds_bank_arbs[i].clk = clk;
         ds_resp_pipes[i].clk = clk;
     }
-    for (uint32_t i = 0; i < kNrDSBank * kNrBeat; ++i) beat_storages[i].clk = clk;
+    for (uint32_t i = 0; i < kNrDSBank * kNrBeat; ++i) {
+        beat_storages[i].clk = clk;
+        beat_storages[i].clk_en = clk_en;
+    }
 
     // ---- DS 读交叉分发 ----
     for (uint32_t i = 0; i < kNrDSBank * kNrBeat; ++i) {

@@ -17,6 +17,7 @@ namespace {
 TEST_CASE("dj DBIDPool: 预充 64 拍后双queue出 id，单取从长queue") {
     DBIDPool d;
     d.elaborate();
+    d.clk_en.set(true);
     d.enq0.set({false, 0});
     d.enq1.set({false, 0});
     d.deq0_rdy.set(false);
@@ -59,6 +60,7 @@ TEST_CASE("dj DBIDPool: 预充 64 拍后双queue出 id，单取从长queue") {
 TEST_CASE("dj BeatStorage: 写后读，响应恰好 5 拍") {
     BeatStorage d;
     d.elaborate();
+    d.clk_en.set(true);
     d.read.set({false, {}});
     d.write.set({false, {}});
     cycle(d);  // rst_done 第 1 拍锁存
@@ -104,6 +106,7 @@ TEST_CASE("dj BeatStorage: 写后读，响应恰好 5 拍") {
 TEST_CASE("dj DataBlock: fetch 全流程（DS→CHI 直发）") {
     DataBlock d;
     d.elaborate();
+    d.clk_en.set(true);
     d.tx_dat_rdy.set(true);
     d.rx_dat.set({false, {}});
     d.upd_hn_txn_id.set({false, {}});
@@ -184,6 +187,7 @@ TEST_CASE("dj DataBlock: fetch 全流程（DS→CHI 直发）") {
 TEST_CASE("dj DataBlock: save 后 fetch 数据回路") {
     DataBlock d;
     d.elaborate();
+    d.clk_en.set(true);
     d.tx_dat_rdy.set(true);
     d.rx_dat.set({false, {}});
     d.upd_hn_txn_id.set({false, {}});

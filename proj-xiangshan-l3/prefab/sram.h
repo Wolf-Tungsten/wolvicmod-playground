@@ -130,6 +130,10 @@ public:
     };
 
     IN(bool, clk);
+    // 门控时钟使能（DoubleCounterClockGate 功能等效）：仅作用于上电横扫计数——
+    // HomeWrapper 的 ICG 让横扫冻结至 DongJiang 首个请求唤醒；冻结期其余逻辑
+    // 无活动（req_rdy 因横扫未完成恒 0），唤醒后 clk_en 恒 1 与常开等价。
+    IN(bool, clk_en);
     IN(ValidReq, req);
     OUT(bool, req_rdy);
     OUT(ValidResp, resp);  // Valid 通道（无 rdy）
@@ -197,10 +201,12 @@ private:
             if (kSweepLastWr != 0 && rst.cnt == kSweepLastWr) return kInterval - 1;
             return intv > 0 ? intv - 1 : 0;
         };
-        rst.update().on(posedge(clk)).reads(rst) = [](auto src) {
-            auto [rst] = src;
+        rst.update().on(posedge(clk)).reads(rst, clk_en) = [](auto src) {
+            auto [rst, clk_en] = src;
             RstState next = rst;
-            if (next.cnt > 0) --next.cnt;
+            // 上电后 resetHold 在 ICG 冻结前已移位一次（HomeWrapper cg 的 cken
+            // 初值 true），对应横扫窗口首拍——该拍无条件推进，之后冻结等唤醒
+            if ((next.cnt == kRstCycles || clk_en) && next.cnt > 0) --next.cnt;
             return next;
         };
         resp = holdpipe.deq;
@@ -318,6 +324,7 @@ public:
     };
 
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能（同 SpSram 注释），仅作用于上电横扫计数
     IN(ValidWr, wreq);
     OUT(bool, wreq_rdy);
     IN(ValidRd, rreq);
@@ -413,10 +420,12 @@ private:
             if (kSweepLastWr != 0 && rst.cnt == kSweepLastWr) return kInterval - 1;
             return w_intv > 0 ? w_intv - 1 : 0;
         };
-        rst.update().on(posedge(clk)).reads(rst) = [](auto src) {
-            auto [rst] = src;
+        rst.update().on(posedge(clk)).reads(rst, clk_en) = [](auto src) {
+            auto [rst, clk_en] = src;
             RstState next = rst;
-            if (next.cnt > 0) --next.cnt;
+            // 上电后 resetHold 在 ICG 冻结前已移位一次（HomeWrapper cg 的 cken
+            // 初值 true），对应横扫窗口首拍——该拍无条件推进，之后冻结等唤醒
+            if ((next.cnt == kRstCycles || clk_en) && next.cnt > 0) --next.cnt;
             return next;
         };
         if constexpr (kIsc == 1) {

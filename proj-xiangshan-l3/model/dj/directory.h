@@ -64,6 +64,7 @@ public:
     }
 
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能（横扫冻结，见 prefab/sram.h）
     IN(uint8_t, cfg_bank_id);  // 1bit
     IN(uint8_t, dir_bank);     // 1bit
     IN(Valid<DirRdReq>, read);
@@ -176,6 +177,9 @@ public:
         meta_ram.clk = clk;
         tag_ram.clk = clk;
         repl_ram.clk = clk;
+        meta_ram.clk_en = clk_en;
+        tag_ram.clk_en = clk_en;
+        repl_ram.clk_en = clk_en;
         registerD0();
         registerD2();
         registerD3();
@@ -654,6 +658,7 @@ public:
     static constexpr uint32_t kDirBanks = 2;
 
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能（横扫冻结），透传各 DirectoryBase
     IN(uint8_t, cfg_bank_id);  // 1bit
     // 每 dirBank 一路读口
     IN(Valid<DirRdReq>, read_0);

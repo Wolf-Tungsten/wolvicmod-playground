@@ -52,6 +52,7 @@ inline Beat bytesToBeat(const std::array<uint8_t, kBeatByte>& bs) {
 class BeatStorage : public wolvicmod::Module {
 public:
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能（横扫冻结），透传 DatRam
     IN(Valid<ReadDS>, read);
     OUT(bool, read_rdy);
     IN(Valid<WriteDS>, write);
@@ -84,6 +85,7 @@ public:
 class DBIDPool : public wolvicmod::Module {
 public:
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能（预充冻结，见 prefab/sram.h）
     IN(Valid<uint8_t>, enq0);
     IN(Valid<uint8_t>, enq1);
     OUT(Valid<uint8_t>, deq0);
@@ -114,6 +116,7 @@ public:
     using RespArr = std::array<uint8_t, kNrBeat>;
 
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能，透传 DBIDPool
     IN(Valid<uint8_t>, req);  // Vec(nrBeat, Bool)：各 beat 是否要 dbid
     OUT(bool, req_rdy);
     OUT(RespArr, resp);       // Vec（组合直连，无 valid）
@@ -134,6 +137,7 @@ public:
     using ReplArr = std::array<bool, kNrDataBuf>;
 
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能，透传 DatBuf
     IN(Valid<ReadDB>, read_to_chi);
     OUT(bool, read_to_chi_rdy);
     IN(Valid<ReadDB>, read_to_ds);
@@ -338,6 +342,7 @@ public:
 class DataBlock : public wolvicmod::Module {
 public:
     IN(bool, clk);
+    IN(bool, clk_en);  // 门控时钟使能（横扫/预充冻结），透传 BeatStorage/DBIDCtrl/DataBuffer
     OUT(Valid<DataFlit>, tx_dat);
     IN(bool, tx_dat_rdy);
     IN(Valid<DataFlit>, rx_dat);

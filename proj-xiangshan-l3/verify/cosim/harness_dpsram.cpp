@@ -30,6 +30,7 @@ uint64_t cosimDpSram(const char* cfg, uint32_t seed, uint64_t cycles) {
     VRef ref;
     DpSram<uint32_t, Sets, Ways, Bypass, 1, 1, false, true, false> dut;
     dut.elaborate();
+    dut.clk_en.set(true);
     std::mt19937 rng(seed);
     cosim::Stats st;
     cosim::Replay rp;

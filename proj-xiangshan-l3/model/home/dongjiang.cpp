@@ -37,6 +37,19 @@ DongJiang::DongJiang() {
     task_in_arb.clk = clk;
     task_arb.clk = clk;
 
+    // ---- 门控时钟使能（DoubleCounterClockGate 等效；见头注释）----
+    // inbound = hnx_rx_req.valid（req/hpr 共道，ChiXbar 按 QoS 分流）
+    w_clk_en.assign().reads(woken, hnx_rx_req) = [](auto src) {
+        auto [woken, hnx_rx_req] = src;
+        return woken || hnx_rx_req.valid;
+    };
+    woken.update().on(posedge(clk)).reads(woken, hnx_rx_req) = [](auto src) {
+        auto [woken, hnx_rx_req] = src;
+        return woken || hnx_rx_req.valid;
+    };
+    directory.clk_en = w_clk_en;
+    datablock.clk_en = w_clk_en;
+
     fe0.cfg_ci = ci;
     fe1.cfg_ci = ci;
     backend.cfg_ci = ci;

@@ -14,6 +14,8 @@ Directory::Directory() {
     for (uint32_t i = 0; i < kDirBanks; ++i) {
         llcs[i].clk = clk;
         sfs[i].clk = clk;
+        llcs[i].clk_en = clk_en;
+        sfs[i].clk_en = clk_en;
         llcs[i].cfg_bank_id = cfg_bank_id;
         sfs[i].cfg_bank_id = cfg_bank_id;
         llcs[i].dir_bank = static_cast<uint8_t>(i);

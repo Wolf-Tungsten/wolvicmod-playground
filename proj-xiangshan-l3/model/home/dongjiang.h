@@ -87,6 +87,12 @@ public:
 
     REG(uint8_t, cbusy_reg);  // RegNext({0, posBusy})，3bit
     REG(uint16_t, work_sft);  // max(readDirLatency,readDsLatency)*2 = 10 级移位
+    // HomeWrapper DoubleCounterClockGate 功能等效：上电后 DongJiang 时钟域冻结，
+    // 首个 REQ/HPR flit 到达（inbound 组合唤醒，零延迟）后 woken 单向锁存；
+    // 此后稳态流量下门控与常开等价（working 维持 + inbound 即醒）。仅"上电横扫/
+    // 预充计数"（目录 SRAM / DBIDPool）挂 w_clk_en——冻结期其余逻辑本无活动。
+    REG(bool, woken);
+    WIRE(bool, w_clk_en);
 
     using A2Bool = std::array<bool, 2>;
     using A2VReq = std::array<Valid<dj::ReqDB>, 2>;

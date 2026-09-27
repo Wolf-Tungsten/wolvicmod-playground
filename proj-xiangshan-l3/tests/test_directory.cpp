@@ -62,6 +62,7 @@ TEST_CASE("dj PLRU: 对齐 rocket-chip PLRUTest 真值表（2..6 路）") {
 TEST_CASE("dj DirectoryBase(sf): 复位横扫窗口内 read_rdy 拉低，结束后恢复") {
     SfDir d;
     d.elaborate();
+    d.clk_en.set(true);
     d.cfg_bank_id.set(0);
     d.dir_bank.set(0);
     d.read.set({false, {}});
@@ -81,6 +82,7 @@ TEST_CASE("dj DirectoryBase(sf): 复位横扫窗口内 read_rdy 拉低，结束�
 TEST_CASE("dj DirectoryBase(sf): 读 miss 4 拍出响应，命中 way0，请求隔 2 拍") {
     SfDir d;
     d.elaborate();
+    d.clk_en.set(true);
     d.cfg_bank_id.set(0);
     d.dir_bank.set(0);
     skipReset(d);
@@ -118,6 +120,7 @@ TEST_CASE("dj DirectoryBase(sf): 读 miss 4 拍出响应，命中 way0，请求�
 TEST_CASE("dj DirectoryBase(sf): wriNoHit 出 wResp(toRepl) 并回读命中") {
     SfDir d;
     d.elaborate();
+    d.clk_en.set(true);
     d.cfg_bank_id.set(0);
     d.dir_bank.set(0);
     skipReset(d);
@@ -180,6 +183,7 @@ TEST_CASE("dj DirectoryBase(sf): wriNoHit 出 wResp(toRepl) 并回读命中") {
 TEST_CASE("dj DirectoryBase(sf): reservation 挤占——同集第二个 miss 避让已预留 way") {
     SfDir d;
     d.elaborate();
+    d.clk_en.set(true);
     d.cfg_bank_id.set(0);
     d.dir_bank.set(0);
     skipReset(d);
@@ -216,6 +220,7 @@ TEST_CASE("dj DirectoryBase(sf): reservation 挤占——同集第二个 miss �
 TEST_CASE("dj Directory: 顶层读联动与 wResp 路由") {
     Directory d;
     d.elaborate();
+    d.clk_en.set(true);
     d.cfg_bank_id.set(0);
     d.read_0.set({false, {}});
     d.read_1.set({false, {}});

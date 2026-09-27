@@ -32,6 +32,7 @@ uint64_t cosimSpSram(const char* cfg, uint32_t seed, uint64_t cycles) {
     VRef ref;
     SpSram<uint32_t, Sets, Ways, Setup, Latency, false, OutputReg, ShouldReset> dut;
     dut.elaborate();
+    dut.clk_en.set(true);
     std::mt19937 rng(seed);
     cosim::Stats st;
     cosim::Replay rp;
