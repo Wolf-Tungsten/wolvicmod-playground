@@ -43,6 +43,8 @@ inline void setBits(std::array<uint64_t, N>& w, int hi, int lo, uint64_t v) {
 }
 
 // 宽字段（>64b，如 256b Data）整块写入 w[off + 64*K - 1 : off]，off 任意位对齐。
+// 末字跨界溢出部分（超出 w 总位宽）裁剪——数组按整条向量定容，越界位本不属于
+// 任何字段（曾致 DPI out_pack 末字段栈越界写）。
 template <size_t N, size_t K>
 inline void setWide(std::array<uint64_t, N>& w, int off, const std::array<uint64_t, K>& f) {
     for (size_t i = 0; i < K; i++) {
@@ -53,19 +55,23 @@ inline void setWide(std::array<uint64_t, N>& w, int off, const std::array<uint64
         } else {
             // 低字保留 [sh-1:0]，高字保留 [63:sh]（sh>0 时掩码安全）
             w[word] = (w[word] & ((uint64_t{1} << sh) - 1)) | (f[i] << sh);
-            w[word + 1] = (w[word + 1] & ~((uint64_t{1} << sh) - 1)) | (f[i] >> (64 - sh));
+            if (word + 1 < static_cast<int>(N))
+                w[word + 1] = (w[word + 1] & ~((uint64_t{1} << sh) - 1)) | (f[i] >> (64 - sh));
         }
     }
 }
 
 // 读 w[off + 64*K - 1 : off] 到 K 个字（低位在前）。K 显式指定，N 推导。
+// 越界部分读 0（与 setWide 的裁剪对称）。
 template <size_t K, size_t N>
 inline std::array<uint64_t, K> getWide(const std::array<uint64_t, N>& w, int off) {
     std::array<uint64_t, K> f{};
     for (size_t i = 0; i < K; i++) {
         const int bitPos = off + 64 * static_cast<int>(i);
         const int word = bitPos >> 6, sh = bitPos & 63;
-        f[i] = (sh == 0) ? w[word] : ((w[word] >> sh) | (w[word + 1] << (64 - sh)));
+        f[i] = (sh == 0) ? w[word]
+                         : ((w[word] >> sh) |
+                            ((word + 1 < static_cast<int>(N)) ? (w[word + 1] << (64 - sh)) : 0));
     }
     return f;
 }

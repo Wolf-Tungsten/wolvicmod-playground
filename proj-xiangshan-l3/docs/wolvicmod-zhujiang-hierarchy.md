@@ -231,12 +231,14 @@ n2/n5→shell1；n4→HI 桥、n6→S 桥；RI n3 tie-off 桩内收于 WolvicZjT
 
 ---
 
-## 4. 集成边界与 DPI-C 方案（预留）
+## 4. 集成边界与 DPI-C 方案（已落地 ✅，P5）
 
-- wolvicmod 模型编译为静态库，根模块 `WolvicZjTop` 暴露 `set/eval/get` 接口（对齐 Verilator eval 语义，§5.1 框架规划文档）
-- XiangShan 侧替换点：生成一个 BlackBox（位置等价于 ZhuJiang 实例，`Top.scala:378-382`），Verilog 薄壳把 `DecoupledPortIO` 六通道 + 两路 AXI4 的每拍信号经 DPI-C 函数与 wolvicmod 根模块交互：每拍 `posedge` 前 set 输入 → eval → get 输出
-- 薄壳内做 struct↔位向量 的打包/解包（flit 位宽：REQ 105b / RSP 66b / DAT 375b / HRQ 128b）
-- 备选：不做 DPI，直接把 wolvicmod 模型链接进 difftest emu 的 C++ 侧（Verilator 模型与 wolvicmod 同进程逐拍 tick）——少一层打包，集成更紧，二选一在实施时定
+- wolvicmod 模型编译为静态库 `libzjmodel.a`，根模块 `WolvicZjTop` 暴露 `set/eval/get` 接口（对齐 Verilator eval 语义，§5.1 框架规划文档）
+- XiangShan 侧替换点：chisel BlackBox `WolvicZjBB`（`--wolvic-zj` 开关，`src/main/scala/top/WolvicZjBB.scala`）整体替换 `Zhujiang` 实例（`Top.scala:378-382`）+ `connectCHIToZhuJiang` 的 SocketDevSide + flit remap——边界与 WolvicZjTop 完全一致（L2 CHI 六通道 + memAXI + cfgAXI）
+- **单调用时序方案**：`tests/test_comb_audit.cpp` 常驻审计证明模型边界零组合穿透（根 In→根 Out 无纯组合路径），故 SV 薄壳 `dpi/sv/WolvicZjBB.sv` 每 `posedge` 调一次 DPI `wolvic_zj_step`：set 边沿前输入 → clk 0→1 提交 → 返回新输出（NBA 寄存）；复位期间不调用（模型构造态=复位完成态）
+- 薄壳内做 struct↔位向量 的打包/解包：in_pack 1107 位 / out_pack 1443 位（布局 `dpi/csrc/wolvic_zj_pack.h`，SV `$fatal` 宽度断言 + C++ drift 检查兜底）；rn 侧 flit 位宽：REQ 118b / RSP 66b / DAT 367b / SNP 102b（xscache 扩展字段在壳内丢弃）
+- 注入机制：SV 经 difftest `RTL_INCLUDE`（→ verilator `-y` libdir）；C++ 静态库 `libwolviczj_dpi.a` 经 difftest 新增 `USER_CXXFILES/USER_CXXFLAGS/USER_LDFLAGS` 钩子链接；emu.cpp 零改动（备选"直接链 difftest emu C++ 侧"未采用——DPI 方案不动 difftest 主体，更干净）
+- 调试钩子：环境变量 `WOLVIC_ZJ_TRACE=<path>` 落每拍 in/out pack hex，与 golden trace 对拍定位分叉拍
 
 ## 5. 验证策略（周期对齐怎么保证）
 
@@ -254,7 +256,7 @@ n2/n5→shell1；n4→HI 桥、n6→S 桥；RI n3 tie-off 桩内收于 WolvicZjT
 | P2 | XscChiAdapter + CcSocket + HomeWrapper 外壳 | ✅ 已达成：单测全绿 + socket 对拍 5220 万比对零失配 + **coremark 前端 2 万拍 trace 重放到 CC 边界（26.5 万比对零失配，`make replay`）**（HNF 用行为桩） |
 | P3 | DongJiang 全量（Directory→DataBlock→Backend→Frontend→ChiXbar） | ✅ 已达成：五子模块独立对拍全零失配（dir 544万/db 213万/backend 1445万/frontend 766万/chixbar 466万比对）+ 顶层组装替换行为桩，test_wolvic_zj_top 端到端全绿 |
 | P4 | S/HI 桥 + 顶层组装 | ✅ 已达成：P4a 两桥对拍 941 万比对零失配；P4b WolvicZjTop 三边界顶层 + RI tie-off 内收 + 时钟门控 woken 建模 + **coremark 全程 316,748 拍重放 542 万比对零失配**（`make replay-top`） |
-| P5 | DPI-C 集成 + coremark 系统级验证 | difftest 过 + cycleCnt=316,801 |
+| P5 | DPI-C 集成 + coremark 系统级验证 | ✅ 已达成：BlackBox `WolvicZjBB` 整体替换 + SV 薄壳单调用方案（零组合穿透审计背书）+ difftest `USER_*`/`RTL_INCLUDE` 注入；**coremark `HIT GOOD TRAP`，difftest 663,692 指令零失配，cycleCnt = 316,801 与 RTL 逐拍完全相等**（`make emu WOLVIC=1`，876s） |
 
 ## 7. 风险与注意点
 

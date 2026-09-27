@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(proj_xiangshan_l3 CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # editor IntelliSense (clangd / cpptools)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)  # DPI 静态库链接进 emu（-pie）需要
 
 # wolvicmod 框架（header-only，INTERFACE 库；WOLVICMOD_BUILD_TESTS 作为子目录
 # 构建时默认 OFF）
@@ -20,6 +21,12 @@ add_library(zjmodel STATIC ${ZJ_MODEL_SOURCES})
 target_include_directories(zjmodel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(zjmodel PRIVATE WOLVICMOD_AUDIT=1)
 target_link_libraries(zjmodel PUBLIC wolvicmod)
+
+# DPI-C 集成静态库：emu 链接注入（difftest USER_LDFLAGS），见 dpi/sv/WolvicZjBB.sv。
+# -fPIC：emu 以 -pie 链接时静态库必需。
+add_library(wolviczj_dpi STATIC ${CMAKE_CURRENT_SOURCE_DIR}/dpi/csrc/wolvic_zj_dpi.cpp)
+target_link_libraries(wolviczj_dpi PRIVATE zjmodel)
+set_target_properties(wolviczj_dpi PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # 项目侧预制菜单测：doctest 从 wolvicmod/third_party 引入；
 # 每个 test 源文件一个可执行 + 独立 ctest 条目（ctest -R <模块> 可单跑）。

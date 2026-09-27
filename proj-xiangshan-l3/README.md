@@ -75,6 +75,7 @@ make -C proj-xiangshan-l3 test    # 一键：cmake 配置 + 构建 + ctest
 
 ```bash
 make -C proj-xiangshan-l3 emu                  # 构建 emu（默认 OpenLLC；LLC=ZhuJiang 切换配置）
+make -C proj-xiangshan-l3 emu WOLVIC=1         # 构建 wolvicmod L3 模型版 emu（P5，见 §2.5）
 make -C proj-xiangshan-l3 coremark             # 用现有 emu 跑 coremark
 ```
 
@@ -139,6 +140,25 @@ make -C proj-xiangshan-l3 replay N=50000                # 换窗口长度
 | ZhuJiang | 316,801 | 2.095 | ~313s（EMU_THREADS=8） |
 
 两者 CRC 一致、difftest 均通过。ZhuJiang 周期数多 ~6.7%，符合环形 NoC + 分布式 HNF 的延迟特性。**这两组数据作为 wolvicmod L3 模型的正确性/性能基线。**
+
+### 2.5 wolvicmod L3 模型系统级集成（P5 验收 ✅）
+
+wolvicmod 建的 ZhuJiang 模型（WolvicZjTop）经 DPI-C 整体替换香山 SoC 中的 `Zhujiang` 实例，跑通完整 coremark：
+
+```bash
+make -C proj-xiangshan-l3 emu WOLVIC=1    # 构建 wolvic 版 emu（自动先编 libwolviczj_dpi.a；与 RTL 版共用 .llc-config 印记机制）
+cd proj-xiangshan-l3/XiangShan
+./build/emu -b 0 -e 0 -i ./ready-to-run/coremark-2-iteration.bin --diff ./ready-to-run/riscv64-nemu-interpreter-so
+```
+
+结果：`HIT GOOD TRAP`，difftest 663,692 指令零失配，**cycleCnt = 316,801 与 RTL ZhuJiang 逐拍完全相等**，host time ≈ 876s（EMU_THREADS=16——模型环不在 Verilator 内，不受 UNOPTTHREADS 限制）。
+
+集成结构（详见 `docs/wolvicmod-zhujiang-implementation-plan.md` 步骤 7）：
+
+- **chisel 侧**（XiangShan 子模块 `wolvicmod-l3` 分支）：`--wolvic-zj` 开关 → BlackBox `WolvicZjBB` 替换 `Zhujiang` + SocketDevSide + flit remap，边界与 WolvicZjTop 完全一致（L2 CHI 六通道 + memAXI + cfgAXI）
+- **SV 薄壳** `dpi/sv/WolvicZjBB.sv`：经 difftest `RTL_INCLUDE` 注入；每 posedge 调一次 DPI `wolvic_zj_step`（前提：`tests/test_comb_audit.cpp` 审计证明模型边界零组合穿透）
+- **C++ glue** `dpi/csrc/`：静态库 `libwolviczj_dpi.a`，经 difftest `USER_CXXFILES/USER_CXXFLAGS/USER_LDFLAGS` 钩子（difftest 子模块 `wolvicmod-l3` 分支）链接注入；emu.cpp 零改动
+- 调试钩子：环境变量 `WOLVIC_ZJ_TRACE=<path>` 让 glue 落每拍 in/out pack hex，可与 golden trace 对拍定位分叉拍
 
 ---
 

@@ -9,6 +9,10 @@
 #           [TRACE=fst]       带波形（EMU_TRACE=fst；fst 之外取值见 difftest/verilator.mk）
 #                             trace 标志变化不被 XiangShan make 跟踪，本 Makefile 按
 #                             印记检测：仅 trace 变化时删 build/verilator-compile 重 verilate
+#   make emu WOLVIC=1         构建 wolvicmod L3 模型版 emu（P5）：强制 LLC=ZhuJiang +
+#                             WOLVIC_ZJ=1——chisel BlackBox 替换 ZhuJiang RTL，SV DPI
+#                             薄壳（dpi/sv，经 RTL_INCLUDE 注入）调 libwolviczj_dpi.a
+#                             （先自动构建；difftest USER_LDFLAGS 链接注入）
 #   make coremark             用现有 emu 运行 coremark 仿真
 #   make replay [N=20000]     coremark 前端 N 拍 trace 重放到 CC 边界：
 #                             emu dump FST（需 emu 带 TRACE=fst 构建）→ fst2vcd
@@ -43,16 +47,21 @@ cosim:
 
 # --- XiangShan emu ---
 LLC    ?= OpenLLC
-ET      = $(if $(filter ZhuJiang,$(LLC)),8,16)  # ZhuJiang 下 16 线程会触发 UNOPTTHREADS
+WOLVIC ?=
+ifeq ($(WOLVIC),1)
+override LLC := ZhuJiang
+endif
+# RTL ZhuJiang 下 16 线程触发 UNOPTTHREADS；wolvic 版环已移出 Verilator，同 OpenLLC
+ET      = $(if $(filter ZhuJiang,$(LLC)),$(if $(WOLVIC),16,8),16)
 JOBS   ?= 32
 STAMP  := XiangShan/build/.llc-config
-WANT   := $(LLC) trace=$(strip $(TRACE))
+WANT   := $(if $(WOLVIC),ZhuJiang-wolvic,$(LLC)) trace=$(strip $(TRACE))
 export NOOP_HOME := $(abspath XiangShan)
 
 emu:
 	@cur=$$(cat $(STAMP) 2>/dev/null || echo unknown); \
 	if [[ -f XiangShan/build/emu && "$$cur" != "$(WANT)" ]]; then \
-	  if [[ "$${cur%% *}" != "$(LLC)" ]]; then \
+	  if [[ "$${cur%% *}" != "$(firstword $(WANT))" ]]; then \
 	    echo "==> LLC 不匹配（$$cur → $(WANT)），自动 emu-clean"; \
 	    $(MAKE) -C XiangShan clean; \
 	  else \
@@ -60,7 +69,13 @@ emu:
 	    rm -rf XiangShan/build/verilator-compile; \
 	  fi; \
 	fi
+ifeq ($(WOLVIC),1)
+	cmake -S . -B build
+	cmake --build build -j --target wolviczj_dpi
+endif
 	$(MAKE) -C XiangShan emu CONFIG=DefaultConfig LLC=$(LLC) EMU_THREADS=$(ET) \
+	  $(if $(WOLVIC),WOLVIC_ZJ=1 RTL_INCLUDE=$(abspath dpi/sv) \
+	    USER_LDFLAGS="$(abspath build/libwolviczj_dpi.a) $(abspath build/libzjmodel.a) $(abspath build/wolvicmod/third_party/libfst/libwolvicmod_fst.a) -lz") \
 	  $(if $(strip $(TRACE)),EMU_TRACE=$(strip $(TRACE))) -j$(JOBS)
 	@echo "$(WANT)" > $(STAMP)
 
