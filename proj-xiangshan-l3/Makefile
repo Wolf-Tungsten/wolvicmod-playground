@@ -88,6 +88,15 @@ coremark:
 emu-clean:
 	$(MAKE) -C XiangShan clean
 
+# 把当前 emu 二进制留存到 build/emu-variants/emu-<NAME>（对比实验用；
+# 在本仓 build/ 下，XiangShan make clean 碰不到）。用法：make stash-emu NAME=wolvic-1t
+stash-emu:
+	@[[ -f XiangShan/build/emu ]] || { echo "emu 不存在"; exit 1; }
+	@[[ -n "$(NAME)" ]] || { echo "用法：make stash-emu NAME=<变体名>"; exit 1; }
+	@mkdir -p build/emu-variants
+	cp -L XiangShan/build/emu build/emu-variants/emu-$(NAME)
+	@echo "已留存 build/emu-variants/emu-$(NAME)"
+
 # --- coremark 前端 trace 重放（P2 验收）---
 N ?= 20000
 replay:
