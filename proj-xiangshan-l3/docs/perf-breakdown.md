@@ -265,12 +265,16 @@ coremark 全程回放 `REPLAY_AUDIT=1` 审计、emu 50k difftest。
 `SocketDevSide` + flit remap，配置经六条 alterPartial 覆盖链与 SoC 内
 `zhujiang_opt` 完全一致，拓扑同为 `ZhuJiangNoCTopology` 单核环，CHI
 dataCheck/poison 同关），mill elaborate（firtool 参数对齐 SoC 的
-`-O=release` 等）+ verilator `-O3` 产出独立 DUT，配独立回放 harness
-（`verify/zjrtl/rtl_replay.cpp`）——与 wolvic 侧
-`tests/test_wolvic_top_replay.cpp` 同形状：同一份 coremark 全程 trace
+`-O=release` 等）+ verilator `-O3` 产出独立 DUT 归档。回放由**共栖 A/B
+回放器**承载（`verify/zjrtl/ab_replay.cpp` → `build/zjrtl/zj_ab_replay`）：
+同一二进制链接 verilated RTL 与 WolvicZjTop 裸模型（无 DPI），
+`--dut=rtl|wolvic|both` 运行时选择激活侧，两侧均不开波形；solo 用于性能
+剖析、both 用于等价性交叉验证。本节数字出自其前身（独立
+rtl_replay.cpp + test_wolvic_top_replay.cpp，已被前者取代/后者保留为
+ctest），同形状口径不变：同一份 coremark 全程 trace
 （`build/trace/cm_full.txt`，316,748 拍）、同样的预滚（reset 10 拍 +
-空闲 2000 拍）、同样的 valid 门控与逐字段比对。一键复现：
-`make zjrtl-rtl zjrtl-replay`（已构建时增量只跑 `make zjrtl-replay`）。
+空闲 2000 拍，仅 RTL 侧）、同样的 valid 门控与逐字段比对。一键复现：
+`make zjrtl-replay DUT=rtl` / `DUT=wolvic` / `DUT=both`。
 
 **行为（本轮主要收获）**：两侧各自对同一 trace 全程 **0 失配**（RTL
 5,106,742 项检查、wolvic 5,423,490 项检查）。trace 记录的是 wolvic
@@ -297,6 +301,16 @@ wolvic **2,794k**（13.5×）；IPC 2.55 vs 1.87（CPI 差 1.36×，虚调用/�
 eval1(posedge) 占 70% 且 510 万项比对 0 失配，也排除"DUT 被 DCE 掏空"
 式的假性快。
 
+**共栖复现（2026-09-28，zj_ab_replay 单二进制）**：`--dut=rtl` 全程
+4.24s（13.4 µs/排，eval-only 9.84 µs/排）、`--dut=wolvic` 全程 83.08s
+（262.3 µs/排，eval-only 257.2 µs/排）——与上表独立 harness 数字一致
+（±4% 内为频率波动）；`--dut=both` 同进程同激励驱动两侧，全程各自
+0 失配（RTL 5,106,742 / wolvic 5,423,490 项），both 模式下 RTL eval
+因缓存互扰从 3.12s 涨到 4.67s（wolvic 侧 81.1s≈不变），故剖析一律用
+solo。wolvic 侧分相值得注意：clk0（输入传播）占 eval 的 38%
+（31.3s/81.5s），RTL 侧 clk0 仅 3.5%——框架每次 eval 都走 action 图
+调度，两半拍成本同量级，而 Verilator 的 clk=0 只触发输入锥。
+
 **解读**：
 
 - 孤立看，模型比 RTL 慢 **20.6×**；而 emu 内差距只有 1.24×
@@ -316,7 +330,7 @@ eval1(posedge) 占 70% 且 510 万项比对 0 失配，也排除"DUT 被 DCE 掏
   原始差距会显性化，届时优化杠杆是 action 融合/按模块粗粒度求值
   （§4 方向 1 的下一阶段）。
 
-**产物**：`build/zjrtl/{rtl,obj/zj_rtl_replay}`；perf 采样
+**产物**：`build/zjrtl/{rtl,obj,zj_ab_replay}`（共栖 A/B 回放器）；perf 采样
 `build/perf-zjrtl-replay.data`、`build/perf-wolvic-replay.data`。
 
 ## 5. 数据产物与复现

@@ -131,11 +131,17 @@ replay-top:
 	cmake --build build -j --target test_wolvic_top_replay
 	cd build && ctest -R test_wolvic_top_replay --output-on-failure
 
-# --- 独立 ZhuJiang RTL 回放（孤立 RTL vs wolvicmod 行为/性能对比）---
+# --- 共栖 A/B 回放（孤立 RTL vs wolvicmod 行为/性能对比）---
 # ZhujiangReplayTop（XiangShan/src/test/scala/top/ZhujiangReplayTop.scala）=
 # 与 zhujiang_opt 同配置的 Zhujiang + SocketDevSide/remap，端口即 trace 三边界。
+# zj_ab_replay 同一二进制链接 verilated RTL 与 WolvicZjTop 裸模型（无 DPI 包装），
+# --dut=rtl|wolvic|both 运行时选择激活侧；两侧均不开波形。solo 用于性能剖析，
+# both 用于等价性交叉验证（同进程有缓存互扰）。
 # 产物全部在 build/zjrtl/ 下，不碰 XiangShan/build（emu 构建不受影响）。
 ZJRTL := build/zjrtl
+ABBIN := $(ZJRTL)/zj_ab_replay
+VERILATOR_ROOT ?= $(shell verilator --getenv VERILATOR_ROOT)
+
 zjrtl-rtl:
 	cd XiangShan && mill -i xiangshan.test.runMain top.ZhujiangReplayTopMain \
 	  --config DefaultConfig --issue E.b --num-cores 1 --llc ZhuJiang \
@@ -143,20 +149,51 @@ zjrtl-rtl:
 	  --firtool-opt "-O=release --disable-annotation-unknown --lowering-options=explicitBitcast,disallowLocalVariables,disallowPortDeclSharing,locationInfoStyle=none" \
 	  --target-dir $(abspath $(ZJRTL)/rtl)
 
-zjrtl-replay: $(ZJRTL)/obj/VZhujiangReplayTop.h
-	$(MAKE) -C $(ZJRTL)/obj -f VZhujiangReplayTop.mk -j$(JOBS) \
-	  OPT_FAST="-O3" OPT_SLOW="-O3" zj_rtl_replay
-	$(ZJRTL)/obj/zj_rtl_replay $(if $(TRACE_FILE),$(TRACE_FILE),build/trace/cm_full.txt)
+zjrtl-replay: $(ABBIN)
+	$(ABBIN) --dut=$(or $(DUT),both) $(if $(ROWS),--rows=$(ROWS)) \
+	  $(if $(PREROLL),--preroll=$(PREROLL)) \
+	  $(if $(TRACE_FILE),$(TRACE_FILE),build/trace/cm_full.txt)
 
-$(ZJRTL)/obj/VZhujiangReplayTop.h: $(ZJRTL)/rtl/ZhujiangReplayTop.sv verify/zjrtl/rtl_replay.cpp
-	verilator --cc --exe -O3 --top-module ZhujiangReplayTop \
+# verilate 只产模型归档（--cc，无 --exe）；二进制由下方规则手工链接
+$(ZJRTL)/obj/VZhujiangReplayTop__ALL.a: $(ZJRTL)/rtl/ZhujiangReplayTop.sv
+	rm -rf $(ZJRTL)/obj
+	verilator --cc -O3 --top-module ZhujiangReplayTop \
 	  +define+VERILATOR=1 +define+PRINTF_COND=1 \
 	  +define+SIM_TOP_MODULE_NAME=ZhujiangReplayTop \
 	  -Wno-STMTDLY -Wno-WIDTH -Wno-UNSIGNED -Wno-fatal \
 	  --max-num-width 150000 --x-assign unique --no-timing \
 	  --output-split 30000 --output-split-cfuncs 30000 \
-	  -I$(ZJRTL)/rtl $(ZJRTL)/rtl/*.sv verify/zjrtl/rtl_replay.cpp \
-	  -Mdir $(ZJRTL)/obj -o zj_rtl_replay
+	  -I$(ZJRTL)/rtl $(ZJRTL)/rtl/*.sv \
+	  -Mdir $(ZJRTL)/obj
+	$(MAKE) -C $(ZJRTL)/obj -f VZhujiangReplayTop.mk -j$(JOBS) \
+	  OPT_FAST="-O3" OPT_SLOW="-O3" VZhujiangReplayTop__ALL.a
+
+# verilator 运行时（单线程无波形：verilated.cpp + verilated_threads.cpp——
+# 后者虽只用空线程池，但 verilated.cpp 引用其符号，必须链入）
+VRT_OBJS := $(ZJRTL)/obj/verilated.o $(ZJRTL)/obj/verilated_threads.o
+$(ZJRTL)/obj/verilated%.o: $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a
+	c++ -O3 -I$(VERILATOR_ROOT)/include -I$(VERILATOR_ROOT)/include/vltstd \
+	  -c $(VERILATOR_ROOT)/include/verilated$*.cpp -o $@
+
+# 模型库由 cmake 管理：源码变动后本规则不会自动感知，先跑
+# `cmake --build build -j --target zjmodel` 再链接（与 emu 流程一致）。
+build/libzjmodel.a:
+	cmake -S . -B build
+	cmake --build build -j --target zjmodel
+
+# 链接 A/B 回放器。ab_replay.cpp 的编译 flags 与 zjmodel 库一致
+# （AUDIT/FST 宏、-O3），避免框架 inline 代码跨 TU 的 ODR 分歧。
+$(ABBIN): verify/zjrtl/ab_replay.cpp verify/zjrtl/trace_io.h \
+          $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a $(VRT_OBJS) \
+          build/libzjmodel.a
+	c++ -O3 -DNDEBUG -std=gnu++20 -DWOLVICMOD_AUDIT=1 -DWOLVICMOD_WITH_FST \
+	  -I. -I../wolvicmod/include -I../wolvicmod/third_party \
+	  -I../wolvicmod/third_party/libfst/src \
+	  -I$(VERILATOR_ROOT)/include -I$(VERILATOR_ROOT)/include/vltstd -I$(ZJRTL)/obj \
+	  verify/zjrtl/ab_replay.cpp \
+	  $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a $(VRT_OBJS) \
+	  build/libzjmodel.a build/wolvicmod/third_party/libfst/libwolvicmod_fst.a \
+	  -lz -lpthread -o $@
 
 $(ZJRTL)/rtl/ZhujiangReplayTop.sv:
 	$(MAKE) zjrtl-rtl
