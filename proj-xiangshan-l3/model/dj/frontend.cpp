@@ -579,27 +579,25 @@ PosTable::PosTable() {
             [](PosSet& s) -> wolvicmod::Out<Valid<uint8_t>>& { return s.pos_resp; });
     pos_resp_vec = w_pos_resp_all;
     // alrUsePoS / working / addr_vec2
-    addr_vec2.assign().reads(sets[0].addr_vec) = [this](auto src) {
-        auto [a0] = src;
-        AddrVec2 r;
-        r[0] = a0;
-        for (uint32_t i = 1; i < 4; ++i) r[i] = sets[i].addr_vec.get();
+    addr_vec2.assign().reads(sets[0].addr_vec, sets[1].addr_vec, sets[2].addr_vec,
+                             sets[3].addr_vec) = [](auto src) {
+        auto [a0, a1, a2, a3] = src;
+        AddrVec2 r{a0, a1, a2, a3};
         return r;
     };
-    alr_use_pos.assign().reads(sets[0].state_vec) = [this](auto src) -> uint8_t {
-        auto [s0] = src;
+    alr_use_pos.assign().reads(sets[0].state_vec, sets[1].state_vec, sets[2].state_vec,
+                               sets[3].state_vec) = [](auto src) -> uint8_t {
+        auto [s0, s1, s2, s3] = src;
         uint8_t cnt = 0;
-        for (const auto& st : s0) cnt += st.valid();
-        for (uint32_t i = 1; i < 4; ++i)
-            for (const auto& st : sets[i].state_vec.get()) cnt += st.valid();
+        for (const auto* sv : {&s0, &s1, &s2, &s3})
+            for (const auto& st : *sv) cnt += st.valid();
         return cnt;
     };
-    working.assign().reads(sets[0].state_vec) = [this](auto src) {
-        auto [s0] = src;
-        for (const auto& st : s0)
-            if (st.valid()) return true;
-        for (uint32_t i = 1; i < 4; ++i)
-            for (const auto& st : sets[i].state_vec.get())
+    working.assign().reads(sets[0].state_vec, sets[1].state_vec, sets[2].state_vec,
+                           sets[3].state_vec) = [](auto src) {
+        auto [s0, s1, s2, s3] = src;
+        for (const auto* sv : {&s0, &s1, &s2, &s3})
+            for (const auto& st : *sv)
                 if (st.valid()) return true;
         return false;
     };

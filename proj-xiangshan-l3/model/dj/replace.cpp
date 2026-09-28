@@ -433,12 +433,17 @@ ReplaceCM::ReplaceCM() {
         return r;
     };
     for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].req_pos_rdy.assign().reads(w_hn_txn_ids, req_pos_arbs[0].in_rdy) =
-            [this, i](auto src) {
-                auto [ids, rdy0] = src;
+        entries[i].req_pos_rdy.assign().reads(
+            w_hn_txn_ids, req_pos_arbs[0].in_rdy, req_pos_arbs[1].in_rdy, req_pos_arbs[2].in_rdy,
+            req_pos_arbs[3].in_rdy, req_pos_arbs[4].in_rdy, req_pos_arbs[5].in_rdy,
+            req_pos_arbs[6].in_rdy, req_pos_arbs[7].in_rdy) =
+            [i](auto src) {
+                auto [ids, r0, r1, r2, r3, r4, r5, r6, r7] = src;
                 const uint32_t b = hnIdxDirBank(ids[i]);
                 const uint32_t s = hnIdxPosSet(ids[i]);
-                return req_pos_arbs[b * 4 + s].in_rdy.get()[i];
+                using RdyArr = std::array<bool, kEntries>;
+                const RdyArr* rdys[8] = {&r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7};
+                return (*rdys[b * 4 + s])[i];
             };
     }
 

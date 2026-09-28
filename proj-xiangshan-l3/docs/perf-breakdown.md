@@ -12,12 +12,19 @@
 | 配置 | 线程 | 每拍 wall | 全程 host time | 备注 |
 |---|---|---|---|---|
 | RTL ZhuJiang | 8 | 1.00 µs | **316s** | full；两次独立复现 313s/316s |
-| wolvicmod L3 | 16 | 2.67 µs | 876s | full；**wolvic 版最优点** |
-| wolvicmod L3 | 8 | 3.83 µs | 1212s | full |
-| wolvicmod L3 | 1 | 11.65 µs | ~3690s（推算） | 50k 实测 582.5s 推算 |
+| wolvicmod L3 | 16 | 2.67 µs | 876s | full；**wolvic 版最优点**（优化①前） |
+| wolvicmod L3 | 8 | 3.83 µs | 1212s | full（优化①前） |
+| wolvicmod L3 | 1 | 11.65 µs | ~3690s（推算） | 50k 实测 582.5s 推算（优化①前） |
+| **wolvicmod L3（优化①后）** | 1 | **9.13 µs** | ~2890s（推算） | **50k 实测 456.3s**；dirty-eval + 去间接调用 |
 | RTL ZhuJiang | 1 | 7.23 µs | ~2290s（推算） | 50k 实测 361.6s 推算 |
 
 所有运行 cycleCnt 均为 316,801，指令流一致——差异纯粹是仿真宿主开销。
+
+> **优化①结果（§6）**：wolvic 1T 11.65 → **9.13 µs/拍**，与 RTL 1T（7.23）
+> 的差距从 4.42 收窄到 **1.90 µs/拍**（1.61× → 1.26×），符合 §4 方向①
+> 原预期的 ~9 µs/拍——主贡献不是 dispatch 瘦身，而是脏驱动跳过调度
+> （L3 模型每拍大部分逻辑静止，全被跳过）；模型侧 A/B 实测 2.87×。
+> 剩余差距主要落边界结构桶（方向 2）。
 
 ## 2. 核心拆解：1T 对 1T（无多线程同步干扰）
 
@@ -73,24 +80,73 @@ wolvic 版 MT 扩展性差：8T→16T 仅 1.43×（RTL 8T 近线性 7.2×）。
 
 ## 4. 优化方向（按预期收益排序）
 
-1. **wolvicmod 框架：action 融合/粗粒度求值**（目标 ~2.5 µs/拍的大部）——
-   按模块生成粗粒度求值函数、合并同类型逐信号 action、消除 std::function
-   间接调用层；理论上可把 20.9% 压到小个位数，1T 有望从 11.65 → ~9 µs/拍；
+1. ~~**wolvicmod 框架：action 融合/粗粒度求值**~~ **✅ 已完成（§6）**——
+   1T 11.65 → 9.13 µs/拍，符合原预期（~9）；剩余差距集中在方向 2；
 2. **边界结构**（~2.4 µs/拍）：减少 BlackBox 端口暴露的无关字段（让 Verilator
    能死码消除供给逻辑）、评估 settle 波次是否可收窄；难度高，需 Verilator 侧实验；
-3. **线程数**：当前 `WOLVIC=1` 默认 EMU_THREADS=16 已是最优点（1T 11.65 / 8T
-   3.83 / 16T 2.67 µs/拍），无需调整；更多线程受同步主导预计收益递减；
+3. **线程数**：当前 `WOLVIC=1` 默认 EMU_THREADS=16 已是最优点（优化①前：
+   1T 11.65 / 8T 3.83 / 16T 2.67 µs/拍），无需调整；更多线程受同步主导预计
+   收益递减；优化①后 MT 曲线需重新测量（每拍模型耗时大降，同步占比相对
+   上升，最优点可能前移）；
 4. 不建议动：`--threads-dpi none` 等 Verilator 分区旋钮，风险高收益不确定。
 
-若 1+2 全做成，wolvic 1T 理论上 ≈ 7 µs/拍，与 RTL 1T 持平。
+wolvic 1T 现已 9.13 µs/拍（RTL 1T 7.23）；剩余 1.90 µs/拍差距落在边界结构桶
+（方向 2），该桶已成为唯一的大头。
+
+## 6. 优化①实施：脏驱动求值 + 去间接调用（2026-09-28）
+
+**结果**：wolvic 1T **11.65 → 9.13 µs/拍**（50k 实测 456.3s，difftest 通过）。
+模型侧单独 A/B（test_wolvic_top_replay，31.7 万拍纯模型驱动，同一二进制
+`WOLVICMOD_DIRTY_EVAL` 切换）：全量求值 491s → 脏驱动 **171s（2.87×）**。
+
+两个正交改动（均在 wolvicmod 框架，语义不变）：
+
+**a) 去双层间接调用**（`core/action.h`、`core/edge.h`）：compute lambda 以
+具体类型存进 `AssignAction<T,F>`/`UpdateAction<T,T,F>`（不再包
+`std::function<T()>`），读值→计算→落值整条链内联进唯一的虚调用边界；
+EventSlot/GuardSlot 的读函数从 `std::function<bool()>` 改为无捕获函数指针；
+`intentActive()` 改为非虚拟成员读。
+
+**b) 脏驱动跳过调度**（主贡献，`core/entity.h`、`sim/engine.h`、
+`elab/elaborate.h`）：
+
+- 每个实体绑定 `dirtyGen`（值变化的代际时钟戳），每个 action 记录
+  `lastRunGen`；`dirtyGen > lastRunGen` 才重跑——静止逻辑锥整片跳过；
+- 变化检测四处挂点：Assign 落值（== 比较）、`Reg::commitNext`、
+  `Mem::writeRow`、`In::set`；不可 == 的类型保守传播；
+- `markRan` 取运行后时钟值，拓扑序保证生产者先跑，单遍即可收敛，无过度
+  传播；相位 2 提交后清除链上 intent 标志（跳过时不滞留）；
+- 首轮/未曾运行的 action 恒运行（`lastRunGen==0`），trace 模式回退全量；
+  回退开关：`WOLVICMOD_DIRTY_EVAL=0` 或 `Module::dirtyEvalOff()`。
+
+**语义等价性验证**（全部通过）：
+
+- wolvicmod ctest 16/16；proj ctest 17/17；
+- cosim 对拍：wolvicmod prefab 30 组 + proj 51 组配置×seed 全过；
+- coremark 全程 trace 回放（316,748 拍、5,423,490 项输出检查）**0 失配**，
+  且全程开启读集对账（`REPLAY_AUDIT=1`）；
+- emu 5 万拍窗口 difftest 无失败。
+
+**连带成果——审计插桩抓到模型真实 bug**：脏求值要求读集声明完整（§3.1），
+全量求值下无害的 stealth read 在脏求值下会产生过期值。据此修复两处模型
+缺陷（全量求值时代就已存在的隐性依赖）：
+
+- `model/dj/frontend.cpp`：`pos_table` 的 `addr_vec2`/`alr_use_pos`/`working`
+  只声明 `sets[0]` 却经 `[this]` 捕获偷读 `sets[1..3]`；
+- `model/dj/replace.cpp`：`req_pos_rdy` 只声明 `req_pos_arbs[0].in_rdy` 却
+  按运行时下标偷读全部 8 个仲裁器。
+
+建议：凡启用脏求值的模型，先在 `WOLVICMOD_AUDIT` 构建下跑一遍
+`auditOn()` 确认读集完备。
 
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：
 
 ```
-proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t   # wolvicmod L3, EMU_THREADS=1
-proj-xiangshan-l3/build/emu-variants/emu-rtl-1t      # RTL ZhuJiang, EMU_THREADS=1
+proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t        # wolvicmod L3, EMU_THREADS=1（优化①前）
+proj-xiangshan-l3/build/emu-variants/emu-rtl-1t           # RTL ZhuJiang, EMU_THREADS=1
+proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-dirty  # wolvicmod L3 + 优化①（脏驱动求值）
 ```
 
 **perf 数据**（`proj-xiangshan-l3/build/`）：`perf-wolvic-1t.data`（1T 5万拍）、
@@ -120,3 +176,18 @@ perf record -F 999 -o build/perf-<变体>.data ./build/emu -b 0 -e 0 -C 50000 ..
 # 留存
 make -C proj-xiangshan-l3 stash-emu NAME=<变体名>
 ```
+
+**变体血统校验（务必在采数前做）**：`build/rtl` 不随 `WOLVIC_ZJ` 参数自动再生，
+绕过 proj Makefile（直接 `make -C XiangShan emu`）可能拿到 stale RTL 变体——
+`rm -rf build/verilator-compile` 只重 verilate，不会重新 elaborate RTL。采数前
+用指纹确认二进制血统（本优化期间曾因此误把 RTL 变体的 7.69 µs/拍记为 wolvic
+成绩，后由指纹检查识破）：
+
+```bash
+strings -a <emu> | grep -c DataCM.scala   # wolvic 版 = 0；RTL 版 > 100
+nm <emu> | grep -c wolvic_zj_step         # wolvic 版 = 3（含调用点）；RTL 版 = 0
+cat XiangShan/build/.llc-config           # wolvic 版 = "ZhuJiang-wolvic trace="
+```
+
+正确重建入口是 `make -C proj-xiangshan-l3 emu WOLVIC=1 [ET=<线程数>]`——
+印记不匹配时自动 clean + 重新 elaborate。

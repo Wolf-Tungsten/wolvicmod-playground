@@ -311,6 +311,7 @@ TEST_CASE("coremark full trace replay to WolvicZjTop") {
 
     WolvicZjTop dut;
     dut.elaborate();
+    if (std::getenv("REPLAY_AUDIT") != nullptr) dut.auditOn();  // 读集对账（调试钩子）
     dut.ci.set(0);
 
     for (size_t r = 0; r < g_tr.rows.size(); ++r) {
