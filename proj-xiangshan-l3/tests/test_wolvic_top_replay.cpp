@@ -13,6 +13,7 @@
 // 路径：环境变量 TOP_TRACE 优先，缺省 trace/cm_full.txt（相对 ctest 工作目录）。
 // bits 按 valid 门控比对——difftest RANDOMIZE_REG_INIT 下 valid=0 的 bits 是随机垃圾。
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -314,6 +315,7 @@ TEST_CASE("coremark full trace replay to WolvicZjTop") {
     if (std::getenv("REPLAY_AUDIT") != nullptr) dut.auditOn();  // 读集对账（调试钩子）
     dut.ci.set(0);
 
+    auto t0 = std::chrono::steady_clock::now();
     for (size_t r = 0; r < g_tr.rows.size(); ++r) {
         g_cyc = g_tr.cycs[r];
 
@@ -366,8 +368,12 @@ TEST_CASE("coremark full trace replay to WolvicZjTop") {
 
         if (g_mismatch > 100) break;
     }
+    auto t1 = std::chrono::steady_clock::now();
 
     std::printf("replay: rows=%zu checks=%lu mismatches=%lu\n", g_tr.rows.size(),
                 (unsigned long)g_checks, (unsigned long)g_mismatch);
+    double wall = std::chrono::duration<double>(t1 - t0).count();
+    std::printf("loop: %.3fs over %zu rows = %.1f ns/row\n", wall, g_tr.rows.size(),
+                wall * 1e9 / g_tr.rows.size());
     CHECK(g_mismatch == 0);
 }

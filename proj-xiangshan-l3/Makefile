@@ -130,3 +130,33 @@ replay-top:
 	./build/trace/extract_top_trace build/trace/cm_full.fst -o build/trace/cm_full.txt
 	cmake --build build -j --target test_wolvic_top_replay
 	cd build && ctest -R test_wolvic_top_replay --output-on-failure
+
+# --- 独立 ZhuJiang RTL 回放（孤立 RTL vs wolvicmod 行为/性能对比）---
+# ZhujiangReplayTop（XiangShan/src/test/scala/top/ZhujiangReplayTop.scala）=
+# 与 zhujiang_opt 同配置的 Zhujiang + SocketDevSide/remap，端口即 trace 三边界。
+# 产物全部在 build/zjrtl/ 下，不碰 XiangShan/build（emu 构建不受影响）。
+ZJRTL := build/zjrtl
+zjrtl-rtl:
+	cd XiangShan && mill -i xiangshan.test.runMain top.ZhujiangReplayTopMain \
+	  --config DefaultConfig --issue E.b --num-cores 1 --llc ZhuJiang \
+	  --full-stacktrace --target systemverilog --split-verilog \
+	  --firtool-opt "-O=release --disable-annotation-unknown --lowering-options=explicitBitcast,disallowLocalVariables,disallowPortDeclSharing,locationInfoStyle=none" \
+	  --target-dir $(abspath $(ZJRTL)/rtl)
+
+zjrtl-replay: $(ZJRTL)/obj/VZhujiangReplayTop.h
+	$(MAKE) -C $(ZJRTL)/obj -f VZhujiangReplayTop.mk -j$(JOBS) \
+	  OPT_FAST="-O3" OPT_SLOW="-O3" zj_rtl_replay
+	$(ZJRTL)/obj/zj_rtl_replay $(if $(TRACE_FILE),$(TRACE_FILE),build/trace/cm_full.txt)
+
+$(ZJRTL)/obj/VZhujiangReplayTop.h: $(ZJRTL)/rtl/ZhujiangReplayTop.sv verify/zjrtl/rtl_replay.cpp
+	verilator --cc --exe -O3 --top-module ZhujiangReplayTop \
+	  +define+VERILATOR=1 +define+PRINTF_COND=1 \
+	  +define+SIM_TOP_MODULE_NAME=ZhujiangReplayTop \
+	  -Wno-STMTDLY -Wno-WIDTH -Wno-UNSIGNED -Wno-fatal \
+	  --max-num-width 150000 --x-assign unique --no-timing \
+	  --output-split 30000 --output-split-cfuncs 30000 \
+	  -I$(ZJRTL)/rtl $(ZJRTL)/rtl/*.sv verify/zjrtl/rtl_replay.cpp \
+	  -Mdir $(ZJRTL)/obj -o zj_rtl_replay
+
+$(ZJRTL)/rtl/ZhujiangReplayTop.sv:
+	$(MAKE) zjrtl-rtl
