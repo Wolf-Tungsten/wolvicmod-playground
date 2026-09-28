@@ -347,40 +347,124 @@ module WolvicZjBB (
     };
 
     WolvicZjOut t_out;  // DPI 返回暂存（act region 内被写）
-    WolvicZjOut o_out;  // NBA 提交后的边界输出
+
+    // 输出寄存器按通道拆分（valid 与 bits 再拆开），而非单个 1443b 结构体：
+    // 机制：Verilator 的 NBA 提交按**变量粒度**做变化检测并触发下游组合重估——
+    // 单体结构下任何字段变化都唤醒全部输出消费者（每拍全边界 settle）；
+    // 拆分后只有值真正变化的通道触发自己的下游锥，静止通道（如 boot 后的
+    // cfgAXI、多数拍无传输的 mem 通道）的下游逻辑整片跳过。
+    logic         tx_req_ready_q, tx_rsp_ready_q, tx_dat_ready_q;
+    logic         rx_rsp_valid_q;
+    logic [65:0]  rx_rsp_bits_q;
+    logic         rx_dat_valid_q;
+    logic [366:0] rx_dat_bits_q;
+    logic         rx_snp_valid_q;
+    logic [101:0] rx_snp_bits_q;
+    logic         mem_awvalid_q, mem_wvalid_q, mem_bready_q, mem_arvalid_q, mem_rready_q;
+    logic [79:0]  mem_aw_bits_q;   // id+addr+len+size+burst+lock+cache+prot+qos
+    logic [288:0] mem_w_bits_q;    // data+strb+last
+    logic [79:0]  mem_ar_bits_q;
+    logic         cfg_awvalid_q, cfg_wvalid_q, cfg_bready_q, cfg_arvalid_q, cfg_rready_q;
+    logic [76:0]  cfg_aw_bits_q;   // id 比 mem 侧窄 3 位
+    logic [288:0] cfg_w_bits_q;
+    logic [76:0]  cfg_ar_bits_q;
 
     initial begin
         wolvic_zj_peek(t_out);
-        o_out = t_out;
+        tx_req_ready_q = t_out.tx_req_ready;
+        tx_rsp_ready_q = t_out.tx_rsp_ready;
+        tx_dat_ready_q = t_out.tx_dat_ready;
+        rx_rsp_valid_q = t_out.rx_rsp_valid;
+        rx_rsp_bits_q  = t_out.rx_rsp_bits;
+        rx_dat_valid_q = t_out.rx_dat_valid;
+        rx_dat_bits_q  = t_out.rx_dat_bits;
+        rx_snp_valid_q = t_out.rx_snp_valid;
+        rx_snp_bits_q  = t_out.rx_snp_bits;
+        mem_awvalid_q  = t_out.mem_awvalid;
+        mem_aw_bits_q  = {t_out.mem_awid, t_out.mem_awaddr, t_out.mem_awlen,
+                          t_out.mem_awsize, t_out.mem_awburst, t_out.mem_awlock,
+                          t_out.mem_awcache, t_out.mem_awprot, t_out.mem_awqos};
+        mem_wvalid_q   = t_out.mem_wvalid;
+        mem_w_bits_q   = {t_out.mem_wdata, t_out.mem_wstrb, t_out.mem_wlast};
+        mem_bready_q   = t_out.mem_bready;
+        mem_arvalid_q  = t_out.mem_arvalid;
+        mem_ar_bits_q  = {t_out.mem_arid, t_out.mem_araddr, t_out.mem_arlen,
+                          t_out.mem_arsize, t_out.mem_arburst, t_out.mem_arlock,
+                          t_out.mem_arcache, t_out.mem_arprot, t_out.mem_arqos};
+        mem_rready_q   = t_out.mem_rready;
+        cfg_awvalid_q  = t_out.cfg_awvalid;
+        cfg_aw_bits_q  = {t_out.cfg_awid, t_out.cfg_awaddr, t_out.cfg_awlen,
+                          t_out.cfg_awsize, t_out.cfg_awburst, t_out.cfg_awlock,
+                          t_out.cfg_awcache, t_out.cfg_awprot, t_out.cfg_awqos};
+        cfg_wvalid_q   = t_out.cfg_wvalid;
+        cfg_w_bits_q   = {t_out.cfg_wdata, t_out.cfg_wstrb, t_out.cfg_wlast};
+        cfg_bready_q   = t_out.cfg_bready;
+        cfg_arvalid_q  = t_out.cfg_arvalid;
+        cfg_ar_bits_q  = {t_out.cfg_arid, t_out.cfg_araddr, t_out.cfg_arlen,
+                          t_out.cfg_arsize, t_out.cfg_arburst, t_out.cfg_arlock,
+                          t_out.cfg_arcache, t_out.cfg_arprot, t_out.cfg_arqos};
+        cfg_rready_q   = t_out.cfg_rready;
     end
 
     always @(posedge clock) begin
         if (!reset) begin
             wolvic_zj_step(in_pack, t_out);
-            o_out <= t_out;
+            tx_req_ready_q <= t_out.tx_req_ready;
+            tx_rsp_ready_q <= t_out.tx_rsp_ready;
+            tx_dat_ready_q <= t_out.tx_dat_ready;
+            rx_rsp_valid_q <= t_out.rx_rsp_valid;
+            rx_rsp_bits_q  <= t_out.rx_rsp_bits;
+            rx_dat_valid_q <= t_out.rx_dat_valid;
+            rx_dat_bits_q  <= t_out.rx_dat_bits;
+            rx_snp_valid_q <= t_out.rx_snp_valid;
+            rx_snp_bits_q  <= t_out.rx_snp_bits;
+            mem_awvalid_q  <= t_out.mem_awvalid;
+            mem_aw_bits_q  <= {t_out.mem_awid, t_out.mem_awaddr, t_out.mem_awlen,
+                               t_out.mem_awsize, t_out.mem_awburst, t_out.mem_awlock,
+                               t_out.mem_awcache, t_out.mem_awprot, t_out.mem_awqos};
+            mem_wvalid_q   <= t_out.mem_wvalid;
+            mem_w_bits_q   <= {t_out.mem_wdata, t_out.mem_wstrb, t_out.mem_wlast};
+            mem_bready_q   <= t_out.mem_bready;
+            mem_arvalid_q  <= t_out.mem_arvalid;
+            mem_ar_bits_q  <= {t_out.mem_arid, t_out.mem_araddr, t_out.mem_arlen,
+                               t_out.mem_arsize, t_out.mem_arburst, t_out.mem_arlock,
+                               t_out.mem_arcache, t_out.mem_arprot, t_out.mem_arqos};
+            mem_rready_q   <= t_out.mem_rready;
+            cfg_awvalid_q  <= t_out.cfg_awvalid;
+            cfg_aw_bits_q  <= {t_out.cfg_awid, t_out.cfg_awaddr, t_out.cfg_awlen,
+                               t_out.cfg_awsize, t_out.cfg_awburst, t_out.cfg_awlock,
+                               t_out.cfg_awcache, t_out.cfg_awprot, t_out.cfg_awqos};
+            cfg_wvalid_q   <= t_out.cfg_wvalid;
+            cfg_w_bits_q   <= {t_out.cfg_wdata, t_out.cfg_wstrb, t_out.cfg_wlast};
+            cfg_bready_q   <= t_out.cfg_bready;
+            cfg_arvalid_q  <= t_out.cfg_arvalid;
+            cfg_ar_bits_q  <= {t_out.cfg_arid, t_out.cfg_araddr, t_out.cfg_arlen,
+                               t_out.cfg_arsize, t_out.cfg_arburst, t_out.cfg_arlock,
+                               t_out.cfg_arcache, t_out.cfg_arprot, t_out.cfg_arqos};
+            cfg_rready_q   <= t_out.cfg_rready;
         end
     end
 
     // ---- 输出驱动 ----
-    assign rn_0_tx_req_ready = o_out.tx_req_ready;
-    assign rn_0_tx_rsp_ready = o_out.tx_rsp_ready;
-    assign rn_0_tx_dat_ready = o_out.tx_dat_ready;
+    assign rn_0_tx_req_ready = tx_req_ready_q;
+    assign rn_0_tx_rsp_ready = tx_rsp_ready_q;
+    assign rn_0_tx_dat_ready = tx_dat_ready_q;
 
-    assign rn_0_rx_rsp_valid         = o_out.rx_rsp_valid;
+    assign rn_0_rx_rsp_valid         = rx_rsp_valid_q;
     assign {rn_0_rx_rsp_bits_qos, rn_0_rx_rsp_bits_tgtID, rn_0_rx_rsp_bits_srcID,
             rn_0_rx_rsp_bits_txnID, rn_0_rx_rsp_bits_opcode, rn_0_rx_rsp_bits_respErr,
             rn_0_rx_rsp_bits_resp, rn_0_rx_rsp_bits_fwdState, rn_0_rx_rsp_bits_cBusy,
-            rn_0_rx_rsp_bits_dbID}   = o_out.rx_rsp_bits;
+            rn_0_rx_rsp_bits_dbID}   = rx_rsp_bits_q;
     assign rn_0_rx_rsp_bits_pCrdType = 4'b0;
     assign rn_0_rx_rsp_bits_tagOp    = 2'b0;
     assign rn_0_rx_rsp_bits_traceTag = 1'b0;
 
-    assign rn_0_rx_dat_valid         = o_out.rx_dat_valid;
+    assign rn_0_rx_dat_valid         = rx_dat_valid_q;
     assign {rn_0_rx_dat_bits_qos, rn_0_rx_dat_bits_tgtID, rn_0_rx_dat_bits_srcID,
             rn_0_rx_dat_bits_txnID, rn_0_rx_dat_bits_homeNID, rn_0_rx_dat_bits_opcode,
             rn_0_rx_dat_bits_respErr, rn_0_rx_dat_bits_resp, rn_0_rx_dat_bits_dataSource,
             rn_0_rx_dat_bits_cBusy, rn_0_rx_dat_bits_dbID, rn_0_rx_dat_bits_dataID,
-            rn_0_rx_dat_bits_be, rn_0_rx_dat_bits_data} = o_out.rx_dat_bits;
+            rn_0_rx_dat_bits_be, rn_0_rx_dat_bits_data} = rx_dat_bits_q;
     assign rn_0_rx_dat_bits_ccID     = 2'b0;
     assign rn_0_rx_dat_bits_tagOp    = 2'b0;
     assign rn_0_rx_dat_bits_tag      = 8'b0;
@@ -388,69 +472,37 @@ module WolvicZjBB (
     assign rn_0_rx_dat_bits_traceTag = 1'b0;
     assign rn_0_rx_dat_bits_rsvdc    = 4'b0;
 
-    assign rn_0_rx_snp_valid         = o_out.rx_snp_valid;
+    assign rn_0_rx_snp_valid         = rx_snp_valid_q;
     assign {rn_0_rx_snp_bits_qos, rn_0_rx_snp_bits_srcID, rn_0_rx_snp_bits_txnID,
             rn_0_rx_snp_bits_fwdNID, rn_0_rx_snp_bits_fwdTxnID, rn_0_rx_snp_bits_opcode,
             rn_0_rx_snp_bits_addr, rn_0_rx_snp_bits_doNotGoToSD,
-            rn_0_rx_snp_bits_retToSrc} = o_out.rx_snp_bits;
+            rn_0_rx_snp_bits_retToSrc} = rx_snp_bits_q;
     assign rn_0_rx_snp_bits_ns                = 1'b0;
     assign rn_0_rx_snp_bits_traceTag          = 1'b0;
     assign rn_0_rx_snp_bits_mpam_perfMonGroup = 1'b0;
     assign rn_0_rx_snp_bits_mpam_partID       = 9'b0;
     assign rn_0_rx_snp_bits_mpam_mpamNS       = 1'b0;
 
-    assign ddrc_awvalid = o_out.mem_awvalid;
-    assign ddrc_awid    = o_out.mem_awid;
-    assign ddrc_awaddr  = o_out.mem_awaddr;
-    assign ddrc_awlen   = o_out.mem_awlen;
-    assign ddrc_awsize  = o_out.mem_awsize;
-    assign ddrc_awburst = o_out.mem_awburst;
-    assign ddrc_awlock  = o_out.mem_awlock;
-    assign ddrc_awcache = o_out.mem_awcache;
-    assign ddrc_awprot  = o_out.mem_awprot;
-    assign ddrc_awqos   = o_out.mem_awqos;
-    assign ddrc_wvalid  = o_out.mem_wvalid;
-    assign ddrc_wdata   = o_out.mem_wdata;
-    assign ddrc_wstrb   = o_out.mem_wstrb;
-    assign ddrc_wlast   = o_out.mem_wlast;
-    assign ddrc_bready  = o_out.mem_bready;
-    assign ddrc_arvalid = o_out.mem_arvalid;
-    assign ddrc_arid    = o_out.mem_arid;
-    assign ddrc_araddr  = o_out.mem_araddr;
-    assign ddrc_arlen   = o_out.mem_arlen;
-    assign ddrc_arsize  = o_out.mem_arsize;
-    assign ddrc_arburst = o_out.mem_arburst;
-    assign ddrc_arlock  = o_out.mem_arlock;
-    assign ddrc_arcache = o_out.mem_arcache;
-    assign ddrc_arprot  = o_out.mem_arprot;
-    assign ddrc_arqos   = o_out.mem_arqos;
-    assign ddrc_rready  = o_out.mem_rready;
+    assign {ddrc_awid, ddrc_awaddr, ddrc_awlen, ddrc_awsize, ddrc_awburst,
+            ddrc_awlock, ddrc_awcache, ddrc_awprot, ddrc_awqos} = mem_aw_bits_q;
+    assign ddrc_awvalid = mem_awvalid_q;
+    assign {ddrc_wdata, ddrc_wstrb, ddrc_wlast} = mem_w_bits_q;
+    assign ddrc_wvalid  = mem_wvalid_q;
+    assign ddrc_bready  = mem_bready_q;
+    assign {ddrc_arid, ddrc_araddr, ddrc_arlen, ddrc_arsize, ddrc_arburst,
+            ddrc_arlock, ddrc_arcache, ddrc_arprot, ddrc_arqos} = mem_ar_bits_q;
+    assign ddrc_arvalid = mem_arvalid_q;
+    assign ddrc_rready  = mem_rready_q;
 
-    assign peri_0_awvalid = o_out.cfg_awvalid;
-    assign peri_0_awid    = o_out.cfg_awid;
-    assign peri_0_awaddr  = o_out.cfg_awaddr;
-    assign peri_0_awlen   = o_out.cfg_awlen;
-    assign peri_0_awsize  = o_out.cfg_awsize;
-    assign peri_0_awburst = o_out.cfg_awburst;
-    assign peri_0_awlock  = o_out.cfg_awlock;
-    assign peri_0_awcache = o_out.cfg_awcache;
-    assign peri_0_awprot  = o_out.cfg_awprot;
-    assign peri_0_awqos   = o_out.cfg_awqos;
-    assign peri_0_wvalid  = o_out.cfg_wvalid;
-    assign peri_0_wdata   = o_out.cfg_wdata;
-    assign peri_0_wstrb   = o_out.cfg_wstrb;
-    assign peri_0_wlast   = o_out.cfg_wlast;
-    assign peri_0_bready  = o_out.cfg_bready;
-    assign peri_0_arvalid = o_out.cfg_arvalid;
-    assign peri_0_arid    = o_out.cfg_arid;
-    assign peri_0_araddr  = o_out.cfg_araddr;
-    assign peri_0_arlen   = o_out.cfg_arlen;
-    assign peri_0_arsize  = o_out.cfg_arsize;
-    assign peri_0_arburst = o_out.cfg_arburst;
-    assign peri_0_arlock  = o_out.cfg_arlock;
-    assign peri_0_arcache = o_out.cfg_arcache;
-    assign peri_0_arprot  = o_out.cfg_arprot;
-    assign peri_0_arqos   = o_out.cfg_arqos;
-    assign peri_0_rready  = o_out.cfg_rready;
+    assign {peri_0_awid, peri_0_awaddr, peri_0_awlen, peri_0_awsize, peri_0_awburst,
+            peri_0_awlock, peri_0_awcache, peri_0_awprot, peri_0_awqos} = cfg_aw_bits_q;
+    assign peri_0_awvalid = cfg_awvalid_q;
+    assign {peri_0_wdata, peri_0_wstrb, peri_0_wlast} = cfg_w_bits_q;
+    assign peri_0_wvalid  = cfg_wvalid_q;
+    assign peri_0_bready  = cfg_bready_q;
+    assign {peri_0_arid, peri_0_araddr, peri_0_arlen, peri_0_arsize, peri_0_arburst,
+            peri_0_arlock, peri_0_arcache, peri_0_arprot, peri_0_arqos} = cfg_ar_bits_q;
+    assign peri_0_arvalid = cfg_arvalid_q;
+    assign peri_0_rready  = cfg_rready_q;
 
 endmodule

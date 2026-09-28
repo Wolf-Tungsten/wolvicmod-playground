@@ -16,6 +16,7 @@
 | wolvicmod L3 | 8 | 3.83 µs | 1212s | full（优化①前） |
 | wolvicmod L3 | 1 | 11.65 µs | ~3690s（推算） | 50k 实测 582.5s 推算（优化①前） |
 | **wolvicmod L3（优化①后）** | 1 | **9.13 µs** | ~2890s（推算） | **50k 实测 456.3s**；dirty-eval + 去间接调用 |
+| wolvicmod L3（优化①+②） | 1 | 9.04 µs | — | 50k 实测 452.0s/452.8s；边界拆分，收益噪声级（§7） |
 | RTL ZhuJiang | 1 | 7.23 µs | ~2290s（推算） | 50k 实测 361.6s 推算 |
 
 所有运行 cycleCnt 均为 316,801，指令流一致——差异纯粹是仿真宿主开销。
@@ -82,8 +83,11 @@ wolvic 版 MT 扩展性差：8T→16T 仅 1.43×（RTL 8T 近线性 7.2×）。
 
 1. ~~**wolvicmod 框架：action 融合/粗粒度求值**~~ **✅ 已完成（§6）**——
    1T 11.65 → 9.13 µs/拍，符合原预期（~9）；剩余差距集中在方向 2；
-2. **边界结构**（~2.4 µs/拍）：减少 BlackBox 端口暴露的无关字段（让 Verilator
-   能死码消除供给逻辑）、评估 settle 波次是否可收窄；难度高，需 Verilator 侧实验；
+2. **边界结构**（~2.4 µs/拍）：~~o_out 按通道拆寄存器~~ **已实验证伪（§7）**——
+   边界输出的下游 comb 被调度进 NBA 区、挂时钟位每拍无条件运行，与触发粒度
+   无关；剩余路径（减少 BlackBox 端口暴露的无关字段以助 DCE、或将边界 comb
+   移出 NBA settle 环）均需 Verilator 侧支持，"不改 Verilator"约束下暂无
+   可行大收益路径；
 3. **线程数**：当前 `WOLVIC=1` 默认 EMU_THREADS=16 已是最优点（优化①前：
    1T 11.65 / 8T 3.83 / 16T 2.67 µs/拍），无需调整；更多线程受同步主导预计
    收益递减；优化①后 MT 曲线需重新测量（每拍模型耗时大降，同步占比相对
@@ -139,6 +143,46 @@ EventSlot/GuardSlot 的读函数从 `std::function<bool()>` 改为无捕获函�
 建议：凡启用脏求值的模型，先在 `WOLVICMOD_AUDIT` 构建下跑一遍
 `auditOn()` 确认读集完备。
 
+## 7. 优化②实验：o_out 按通道拆寄存器——收益≈0，机制证伪（2026-09-28）
+
+**假设**：o_out 单体 1443b 结构体每拍 NBA 提交，Verilator 的 NBA 变化检测按
+**变量粒度**触发下游——任何字段变化唤醒全部输出消费者。拆成按通道独立寄存器
+（valid/bits 再拆开）后，静止通道（boot 后的 cfgAXI、无传输拍的 mem 通道）
+的下游锥应整片跳过。
+
+**实施**（`dpi/sv/WolvicZjBB.sv`，纯 SV 内部重组，DPI ABI/C++ glue/端口全不变）：
+`o_out` 拆为 3 个 tx_ready、每 CHI rx 通道 `valid_q`+`bits_q`（rsp 66b/dat 367b/
+snp 102b）、mem/cfg 各 5 个握手位 + 4 个 bits 包，NBA 块逐通道 `<=`，assign 段
+从各 `_q` 解包。冒烟 PASS；emu 50k difftest 通过（IPC 0.842220 一致）。
+
+**结果**：50k 实测两轮 **452.0s / 452.8s（≈9.04 µs/拍）**，对比优化①基线
+456.3s（9.13 µs/拍）——**−0.9%，收益噪声级，假设证伪**。拆分版二进制留存为
+`emu-wolvic-1t-split`。
+
+**机制证伪（生成代码实证，verilator-compile/）**：
+
+- 边界输出的下游组合锥被 Verilator 调度进 **NBA 区**（`nba_comb__TOP__*`，如
+  `rx_dat_valid_q` 的消费者在 `nba_comb__TOP__105`），而 NBA 区 comb 批次的
+  门控是 `(__VnbaTriggered[1]&0x80) | (__VnbaTriggered[0]&1)`——bit0 即
+  **posedge clock 位，每拍必触发**。拆分细化的是 per-信号 trigprevexpr 触发
+  （act 区机制），但 act 触发向量里**根本没有任何边界信号**（grep 实证），
+  边界消费者全在 NBA 区跟随时钟位无条件运行——无论单体还是拆分；
+- 时序消费者（如 L2 `rxdat_pipeline` 的 RAM 写，`nba_sequent__TOP__594`）
+  本就每拍执行（posedge 块语义如此）；
+- 因此"o_out 每拍全量 settle"的成本**不是触发粒度问题，而是调度区域问题**：
+  DPI 调用点在 `always @(posedge)` 内 → 输出只能 NBA 写 → 下游 comb 被迫
+  进入 NBA settle 环并挂到时钟位上。纯 RTL ZhuJiang 无此问题（L3 输出是普通
+  comb/reg，下游锥在 act 区享受细粒度触发）——**这是 BlackBox 边界的固有
+  结构成本，不改 Verilator 调度器无法消除**。
+
+**附带坑（已修）**：SV 注释以 `// Verilator` 开头会被 Verilator 预处理器当作
+元注释（大小写不敏感、允许空格）转成 `/*verilator ...*/` 交给解析器，报
+`syntax error, unexpected '/'`。注释文字不得以 Verilator 开头。
+
+**结论**：方向 2（边界结构）在"不改 Verilator"约束下已证伪一条路径；剩余
+~1.9 µs/拍差距的主要嫌疑转为 NBA settle 环的每拍全量执行本身（需 Verilator
+侧支持输出侧细粒度触发，或将 DPI 调用移出 posedge 块——后者改变语义，不可行）。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：
@@ -147,6 +191,7 @@ EventSlot/GuardSlot 的读函数从 `std::function<bool()>` 改为无捕获函�
 proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t        # wolvicmod L3, EMU_THREADS=1（优化①前）
 proj-xiangshan-l3/build/emu-variants/emu-rtl-1t           # RTL ZhuJiang, EMU_THREADS=1
 proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-dirty  # wolvicmod L3 + 优化①（脏驱动求值）
+proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-split  # 优化① + 边界 o_out 拆分（§7，收益≈0）
 ```
 
 **perf 数据**（`proj-xiangshan-l3/build/`）：`perf-wolvic-1t.data`（1T 5万拍）、
