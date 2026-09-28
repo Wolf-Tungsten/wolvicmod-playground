@@ -17,6 +17,7 @@
 | wolvicmod L3 | 1 | 11.65 µs | ~3690s（推算） | 50k 实测 582.5s 推算（优化①前） |
 | **wolvicmod L3（优化①后）** | 1 | **9.13 µs** | ~2890s（推算） | **50k 实测 456.3s**；dirty-eval + 去间接调用 |
 | wolvicmod L3（优化①+②） | 1 | 9.04 µs | — | 50k 实测 452.0s/452.8s；边界拆分，收益噪声级（§7） |
+| **wolvicmod L3（优化①+②+③）** | 1 | **8.93 µs** | — | **50k 实测 446.6s**；推送派发，IPC 0.842220（§8） |
 | RTL ZhuJiang | 1 | 7.23 µs | ~2290s（推算） | 50k 实测 361.6s 推算 |
 
 所有运行 cycleCnt 均为 316,801，指令流一致——差异纯粹是仿真宿主开销。
@@ -26,6 +27,9 @@
 > 原预期的 ~9 µs/拍——主贡献不是 dispatch 瘦身，而是脏驱动跳过调度
 > （L3 模型每拍大部分逻辑静止，全被跳过）；模型侧 A/B 实测 2.87×。
 > 剩余差距主要落边界结构桶（方向 2）。
+>
+> **优化③结果（§8）**：调度循环自身的轮询扫描反转成推送派发，模型侧再降
+> 1.99×；emu 1T 9.04 → **8.93 µs/拍**，与 RTL 1T 的差距收窄到 **1.70 µs/拍**。
 
 ## 2. 核心拆解：1T 对 1T（无多线程同步干扰）
 
@@ -94,8 +98,8 @@ wolvic 版 MT 扩展性差：8T→16T 仅 1.43×（RTL 8T 近线性 7.2×）。
    上升，最优点可能前移）；
 4. 不建议动：`--threads-dpi none` 等 Verilator 分区旋钮，风险高收益不确定。
 
-wolvic 1T 现已 9.13 µs/拍（RTL 1T 7.23）；剩余 1.90 µs/拍差距落在边界结构桶
-（方向 2），该桶已成为唯一的大头。
+wolvic 1T 现已 8.93 µs/拍（RTL 1T 7.23，优化③后）；剩余 1.70 µs/拍差距落在
+边界结构桶（方向 2），该桶已成为唯一的大头。
 
 ## 6. 优化①实施：脏驱动求值 + 去间接调用（2026-09-28）
 
@@ -197,6 +201,55 @@ snp 102b）、mem/cfg 各 5 个握手位 + 4 个 bits 包，NBA 块逐通道 `<=
 ~1.9 µs/拍差距的主要嫌疑转为 NBA settle 环的每拍全量执行本身（需 Verilator
 侧支持输出侧细粒度触发，或将 DPI 调用移出 posedge 块——后者改变语义，不可行）。
 
+## 8. 优化③实施：推送派发（反向依赖表 + 层级桶就绪队列）（2026-09-28）
+
+**动机**：优化①后模型侧最大开销已不是 action 执行（2.4%），而是
+`Module::eval()` 调度循环本身（7.2% ≈0.65 µs/拍）——每拍遍历整个展平
+action 表逐个比代际戳，即使全场静止也是 O(动作数 × 读集宽)；且 N 条 action
+读同一变量时各比各的（各自 `lastRunGen` 阈值不同，无法共享检测）。
+
+**机制**（wolvicmod 框架：新增 `core/readyq.h`，改 `core/entity.h`、
+`elab/graph.h`、`elab/elaborate.h`、`sim/engine.h`）：把轮询（poll）反转为
+推送（push）——
+
+- 变化在写入点 `==` 检测**一次**，沿 elaboration 期构建的**反向依赖表**
+  （CSR：实体 → 读它的执行项列表）把依赖者推入就绪队列——"相同读变量的脏
+  检测能否 merge"与"增量派发"由此统一成同一个改动：检测合并成单次分发，
+  静止逻辑锥零成本；
+- 就绪队列按**拓扑层级**分桶（层级 = 沿凝结 DAG 的最长路径深度），配层级
+  位图与入队去重标志；相位一按层级升序排空，生产者必先于消费者、每项每轮
+  至多跑一次，空层级只耗一个位图字；排空进行中的新推送只落入更高层级；
+- 自通知边（组合环 SCC 组内环边）不入表——组内传播由组内稳态迭代负责；
+- `markDirty` 在任何调度模式下都推送（去重保证队列有界，超集排空幂等），
+  因此 full/poll/push 切换无需重置钩子；首轮在 elaboration 末尾把全部执行
+  项入队（等效轮询路径的首轮必跑）；
+- 模式开关：`WOLVICMOD_DIRTY_EVAL` 默认 push；`=poll` 选旧轮询路径做 A/B
+  对照；`=0` 全量求值。
+
+**抓到的框架 bug（回放与全部既有测试都过，定向回归测试识破）**：SCC 组成员
+信号变化时会把组伪 id 推回**它自己所在的层级桶**，旧 drain 在桶处理前清位，
+把未处理的自推项清掉但去重标志留在 1——组从此永久不再被唤醒（DataBlock 的
+ready-valid 环 deq0/w_has_two 在预充完成后停止更新）。定位手段：双实例
+push-vs-full 逐半拍全实体比对器（waveFormat 快照），cyc 64 分叉。修复两条：
+drain 改索引循环（活大小）且清位移到桶处理之后；自通知边在构表时过滤。
+回归固化在 `wolvicmod/tests/test_readyq.cpp`（SCC 重复再激活用例 + 混合模型
+300 拍随机激励 push≡full 逐半拍比对；回退任一修复均可复现失败）。
+
+**结果**：
+
+- 模型侧 A/B（test_wolvic_top_replay，31.7 万拍纯模型驱动，同一二进制切
+  环境变量）：poll 166.39s → push **83.55s（1.99×）**；累计相对全量求值
+  491s 为 **5.7×**；
+- emu 50k（①+②+③ 全栈）：**446.6s（8.93 µs/拍）**，difftest 通过
+  （IPC 0.842220）；对比①+②基线 452.0s/452.8s 为 **−1.2%**。收益幅度
+  符合预期——emu 里模型侧占比已只剩 ~9.7%，调度循环大头被消除后总账
+  改善 ~0.1 µs/拍；模型侧 1.99× 的价值主要体现在后续模型规模扩大时
+  （调度成本从 O(动作数) 降为 O(活跃动作数)）。
+
+**验证**（全部通过）：wolvicmod ctest 17/17（新增 test_readyq 三模式等价
+用例）、wolvicmod cosim 30 组、proj ctest 17/17、proj cosim 51 组、
+coremark 全程回放 `REPLAY_AUDIT=1` 审计、emu 50k difftest。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：
@@ -206,6 +259,7 @@ proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t        # wolvicmod L3, EMU_TH
 proj-xiangshan-l3/build/emu-variants/emu-rtl-1t           # RTL ZhuJiang, EMU_THREADS=1
 proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-dirty  # wolvicmod L3 + 优化①（脏驱动求值）
 proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-split  # 优化① + 边界 o_out 拆分（§7，收益≈0）
+proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-push   # 优化①+②+③（推送派发，§8）
 ```
 
 **perf 数据**（`proj-xiangshan-l3/build/`）：`perf-wolvic-1t.data`（1T 5万拍）、
