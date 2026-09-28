@@ -143,6 +143,20 @@ EventSlot/GuardSlot 的读函数从 `std::function<bool()>` 改为无捕获函�
 建议：凡启用脏求值的模型，先在 `WOLVICMOD_AUDIT` 构建下跑一遍
 `auditOn()` 确认读集完备。
 
+**优化①后模型侧剩余成本实测**（9.04 µs/拍 拆分版，perf 50k 采样，
+`build/perf-wolvic-1t-split.data`）：模型+DPI glue 合计 **9.7%**
+（≈0.88 µs/拍；优化①前为 ~2.5 µs/拍 ≈21%）。构成：
+
+- `wolvicmod::Module::eval()` 调度循环独占 **7.2%**（≈0.65 µs/拍）——
+  脏求值后真正的 action 执行只剩 ~2.4%（≈0.22 µs/拍），但每拍仍要遍历
+  整个展平 action 表逐个检查脏戳，**跳过的扫描本身成了模型侧最大开销**；
+- glue（`wzj::packOutputs`/`unpackInputs`、`wolvic_zj_step`）< 0.05%，免费；
+- 占比为下界：`std::` 模板辅助函数未计入（无法按 TU 归属区分）。
+
+注：本次 dwarf 调用图在 -O3 生成代码的深层栈上大面积 unwind 失败
+（`main` 的 Children 仅 0.86%），以上均为 Self 叶子占比（可靠）；
+后续采样不必再加 `--call-graph`。
+
 ## 7. 优化②实验：o_out 按通道拆寄存器——收益≈0，机制证伪（2026-09-28）
 
 **假设**：o_out 单体 1443b 结构体每拍 NBA 提交，Verilator 的 NBA 变化检测按
@@ -195,7 +209,8 @@ proj-xiangshan-l3/build/emu-variants/emu-wolvic-1t-split  # 优化① + 边界 o
 ```
 
 **perf 数据**（`proj-xiangshan-l3/build/`）：`perf-wolvic-1t.data`（1T 5万拍）、
-`perf-rtl-1t.data`、`perf-wolvic.data`（16T 10万拍）、`perf-rtl.data`（8T 10万拍）。
+`perf-rtl-1t.data`、`perf-wolvic.data`（16T 10万拍）、`perf-rtl.data`（8T 10万拍）、
+`perf-wolvic-1t-split.data`（优化①+② 1T 5万拍，带 dwarf 调用图，1.9GB）。
 
 注意：perf.data 按绝对路径解析符号，二进制被覆盖后须用
 `perf report --symfs=<dir>` 指向留存副本（先把留存二进制按记录的绝对路径
