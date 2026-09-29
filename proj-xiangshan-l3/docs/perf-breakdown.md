@@ -1274,6 +1274,31 @@ markDirtyBool 残余 = 预过滤环的 1087 次守卫加载/posedge——层次�
 **产物**：`build/perf-ab-mkd.data/.txt`（①后）、`build/perf-ab-edgebit
 .data/.txt`（②后）。
 
+## 28. emu 端到端复测：8T 对 8T 全程 coremark（2026-09-29）
+
+§25-§27 后首次重测 emu。同线程对比（EMI_THREADS=8 两侧，Verilator
+5.047，coremark-2-iteration + difftest，跑满全程；二进制指纹校验后留存
+`build/emu-variants/emu-rtl-8t-s27` / `emu-wolvic-8t-s27`）：
+
+| 配置 | host wall | 每拍 | cycleCnt / IPC |
+|---|---|---|---|
+| RTL ZhuJiang 8T | 297.6s | 0.940 ms | 316,801 / 2.094981 |
+| wolvic ZhuJiang 8T | **272.9s（-8.3%）** | 0.862 ms | 316,801 / 2.094981 |
+
+**两侧 instrCnt/cycleCnt/IPC 逐值相同**、difftest 全程无失配——行为等
+价性在 emu 路径闭环（同时实证了 §25 的 DPI 沉定 eval 改法）。
+
+历史对照（§1 基线）：wolvic 8T 曾 1212s（对 RTL **慢 3.83×**）→ 现
+273s（**快 1.09×**）；wolvic host time 累计 **-77.5%**。emu 翻转幅度远
+小于孤立 L3 回放（-92%）的原因：emu 每拍成本由 SoC 基线 + difftest 主
+导，L3 只占小头（§2 拆解：两侧共有基线 ~6.44 ms/拍 1T），且 wolvic 侧
+L3 走单调用点串行 DPI——L3 求值的 12× 提速摊到整拍只剩 ~8%。
+
+构建教训（已发生一次）：emu 二进制缺失时指纹检查会跳过 clean，若
+`build/rtl` 残留异变体 RTL 则 verilate 报 MODMISSING（WolvicZjBB）——
+此时须先 `make emu-clean` 再构建；RTL 变体记得显式 `LLC=ZhuJiang`
+（默认 OpenLLC）。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：
