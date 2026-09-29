@@ -1230,6 +1230,50 @@ UpdateAction 里，是被时钟唤醒的空跑：Queue 6.27% → 0.6%、Ring 6.6
 
 **产物**：`build/perf-ab-soa.data/.txt`（本轮后）。
 
+## 27. markDirty 攻坚：守卫直读 + edgeBit 边沿事实位（2026-09-29）
+
+§26 后 markDirtyBool 以 22% 居首。拆成两步：
+
+**① 守卫直读**：预过滤环每 posedge 读 ~1087 个守卫，原来是经
+`bool(*)(const Entity*)` 的间接调用。监视表项改存守卫 bool 存储的
+**直指针**（elaboration 期解析，此时别名化已完成，
+`Signal::valueStorage()` 返回有效存储地址；`Reg<bool>` 为 `&cur_`，
+均稳定）——间接调用变单次加载。全程 eval 1.84 → **1.37s（-25%）**，
+守卫求值桶 4.8% → 0.03%。
+
+**② edgeBit**：prev 机制对 watch-listed 单事件 Update 是冗余的——写入
+点本就只在匹配方向跳变时置位（边沿已知），跳过时的 prev 推进不过是
+"替 run() 记账"。新增 per-execPos 的 **edgeBits 位图**：写入点对激活
+的 watcher 同置 actBit+edgeBit（跳过则零写入，边沿就此消费），run()
+对 watchEdgeBit 槽测试并清除 edgeBit，不读信号、不碰 prev。每拍省
+~2000 次散布 bool 写（降沿全清 + 升沿跳过）与 fired update 的边沿检测
+循环。全程 eval 1.37 → **1.26s（-8%）**，时钟边沿桶 1.4% → 0。
+
+多事件 Update（execPos 位无法区分边沿来源）与 trace 模式保持 prev 机
+制：`traceOn()` 置 `watchTraceMode` 并对全部动作重跑
+`initEventPrev()` 消除快径期间的 prev 停更陈旧。正确性不变量同 §25
+（settle-then-pulse + 每实体每 round 至多一次跳变）。
+
+**结果**（孤立回放全程，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 对 RTL eval 比（孤立 2.98s） |
+|---|---|---|
+| §26 终版 | 1.84s | 0.62× |
+| + ① 守卫直读 | 1.37s（-25%） | 0.46× |
+| + ② edgeBit | **1.26s（累计 -31%）** | **0.42×** |
+
+层分布（perf-ab-edgebit）：harness 37%、引擎 ~29%（Flat 调度 14.0 +
+脏检测残余 11.1 + 其它 2.7）、libc ~14%、HNF 7.3%、prefab 5.0%。
+markDirtyBool 残余 = 预过滤环的 1087 次守卫加载/posedge——层次化簇守
+卫是下一个候选（A② 形态）。
+
+**验证**（两步各自全链通过）：30k+全程 0 失配（5,423,490 检查）、
+`--dut=both`、`REPLAY_AUDIT=1`、wolvicmod/proj ctest 各 17/17、cosim
+51 组 ALL-PASS。WV_STATS 对照：edge+guard 4,967,845 一条不差。
+
+**产物**：`build/perf-ab-mkd.data/.txt`（①后）、`build/perf-ab-edgebit
+.data/.txt`（②后）。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：
