@@ -65,7 +65,7 @@ make -C proj-xiangshan-l3 test    # 一键：cmake 配置 + 构建 + ctest
 
 本目录（含未来模型本体）的建模代码遵循 wolvicmod 的**同名解包约定**（lambda 解包绑定名与读集信号同名同序），见 `../wolvicmod/README.md` §3.9。
 
-**验证组织**（两侧并列、各自独立运行）：`tests/` = 语义文档与快速回归（纯 C++ doctest，毫秒级；每测试文件独立 ctest 条目，`ctest -R test_prefab_<模块>` 单跑）；`verify/` = 与真实 RTL 的等价性证明（mill + chisel + firtool + Verilator，分钟级，`verify/run.sh [模块]` 可单跑）。本侧 verify/ 只覆盖 XiangShan 生态元件（FastQueue/VipArb/QoS 仲裁/Alloc/SpSram/DpSram，17 配置 × 3 seed、528 万拍 / 2914 万次比对，零失配）；chisel3 标准库元件（Queue/ValidPipe/FixedArb/RRArb）的对拍在 `../wolvicmod/verify/`（10 配置 × 3 seed，330 万拍 / 1241 万次比对）。详见两侧 `verify/README.md`。
+**验证组织**（2026-09-29 起收敛为两条端到端路径 + 单测回归网）：`tests/` = 语义文档与快速回归（纯 C++ doctest，毫秒级；每测试文件独立 ctest 条目，`ctest -R test_prefab_<模块>` 单跑）；`verify/` = 两条端到端路径的基建——① 孤立 L3 共栖 A/B 回放（`make zjrtl-replay`，wolvic vs verilated RTL 对同一 coremark trace 逐拍比对）；② XiangShan 集成 emu 对比（`make emu [WOLVIC=1]` + `make coremark`）。详见 `verify/README.md`。预制菜元件级 RTL 对拍基建（verify/cosim + refgen + run.sh）已于 2026-09-29 删除——其对拍结论已固化（零失配记录见 docs/ 各文档），演进中的等价性保障由路径① 承担；wolvicmod 框架仓的 verify/（chisel3 标准库元件对拍）保留不动。
 
 ---
 
