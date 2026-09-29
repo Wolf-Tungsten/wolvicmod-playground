@@ -38,12 +38,12 @@ uint64_t traceEnd() {
 template <class Cfg>
 void dumpBase(const char* tag, const DirectoryBase<Cfg>& b, uint64_t c) {
     std::cout << "    " << tag << " cyc=" << c << " sft(r="
-              << std::bitset<4>(b.sft_read.get()) << ",w=" << std::bitset<4>(b.sft_write.get())
-              << ",p=" << std::bitset<4>(b.sft_repl.get()) << ") set_d3=0x" << std::hex
+              << std::bitset<4>(b.sft.get().read) << ",w=" << std::bitset<4>(b.sft.get().write)
+              << ",p=" << std::bitset<4>(b.sft.get().repl) << ") set_d3=0x" << std::hex
               << b.w_set_d3.get() << " hit_vec=0x" << b.w_hit_vec_d3.get() << " inv_vec=0x"
               << b.w_invalid_vec_d3.get() << " use_d2=0x" << b.w_use_way_d2.get() << " use_d3=0x"
-              << b.use_way_d3.get() << " mes_d2=0x" << b.w_repl_mes_d2.get() << " mes_d3=0x"
-              << b.repl_mes_d3.get() << " sel=0x" << (uint32_t)b.w_sel_way_d3.get() << std::dec
+              << b.d3.get().useWay << " mes_d2=0x" << b.w_repl_mes_d2.get() << " mes_d3=0x"
+              << b.d3.get().replMes << " sel=0x" << (uint32_t)b.w_sel_way_d3.get().way << std::dec
               << "\n";
     std::cout << "      locks:";
     for (uint32_t i = 0; i < DirectoryBase<Cfg>::kLocks; ++i) {

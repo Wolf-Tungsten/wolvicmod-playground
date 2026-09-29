@@ -48,17 +48,21 @@ public:
     OUT(uint32_t, task_code_out);
     OUT(uint32_t, cmt_code_out);
 
-    REG(bool, dec_val_reg);
-    REG(bool, hn_id_val_reg);
-    REG(uint8_t, hn_id_reg);
-    REG(DecMes, dec_mes_reg);
-    REG(DecListArr, dec_list_reg);
-    REG(uint32_t, task_code_reg);
-    REG(uint32_t, cmt_code_reg);
-    WIRE(uint32_t, w_task_inst);
-    WIRE(DecListArr, w_dec_list);
-    WIRE(uint32_t, w_task_code);
-    WIRE(uint32_t, w_cmt_code);
+    // 合并流水状态（perf-breakdown §20：原 7 个独立 reg + 4 条中间 wire）。
+    // stage1 寄存输入；stage2 以 stage1 valid 为使能寄存译码结果——两级同沿
+    // 同拍更新，按行为语义并为一个 struct + 一条 update，译码查表内联。
+    struct St {
+        bool decVal = false;   // stage1: RegNext(dec_mes_in.valid)
+        DecMes mes;            // stage1: RegEnable(dec_mes_in.bits, valid)
+        bool hnIdVal = false;  // stage2: RegNext(decVal)
+        uint8_t hnId = 0;      // stage2: RegEnable(mes.hnTxnID, decVal)
+        DecListArr decList{};  // stage2: RegEnable(译码结果, decVal)
+        uint32_t taskCode = 0;
+        uint32_t cmtCode = 0;
+
+        bool operator==(const St&) const = default;
+    };
+    REG(St, st);
 
     BackendDecode();
 };

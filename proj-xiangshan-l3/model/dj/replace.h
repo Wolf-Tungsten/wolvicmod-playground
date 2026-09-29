@@ -134,16 +134,31 @@ public:
     WIRE(CmTaskInArr, w_snp_in);
     WIRE(CmTaskInArr, w_wri_in);
     WIRE(ReqDbInArr, w_req_db_in);
-    WIRE(ReqPosInArr, w_req_pos_in);
     using RdyArrN = std::array<bool, kEntries>;
     WIRE(RdyArrN, w_alloc_rdy_all);
-    WIRE(RdyArrN, w_sf_resp_hit);   // 供 upd_pos_tag 输出与次态共用
-    WIRE(RdyArrN, w_llc_resp_hit);
     WIRE(RdyArrN, w_req_pos_rdy_all);  // 8 个 reqPos 仲裁器按 (bank,set) 选择后的 per-entry rdy
-    using ReqPosOutArr = std::array<Valid<ReplReqPos>, 8>;
     using TxnIdArr = std::array<uint8_t, kEntries>;
-    WIRE(ReqPosOutArr, w_req_pos_out);
-    WIRE(TxnIdArr, w_hn_txn_ids);
+
+    // 合并线（perf-breakdown §20：行为语义相同、读集相同/高度重叠的离散小信号
+    // 并为 struct，省一条 assign 的派发+读集打包成本）：
+    // dir 响应命中——原 w_sf_resp_hit / w_llc_resp_hit，同做 per-entry 命中检测、
+    // 读集同为 entries+一路 dirResp，且同为 upd_pos_tag 输出与次态所共用。
+    struct DirHits {
+        RdyArrN sf{};
+        RdyArrN llc{};
+
+        bool operator==(const DirHits&) const = default;
+    };
+    WIRE(DirHits, w_dir_hits);
+    // reqPoS 矩阵输入——原 w_hn_txn_ids / w_req_pos_in，同为 reads(entries) 的
+    // per-entry 提取，且共同只喂 reqPoS 矩阵与 rdy 选择这一条组合链。
+    struct ReqPosFeed {
+        TxnIdArr ids{};
+        ReqPosInArr in{};
+
+        bool operator==(const ReqPosFeed&) const = default;
+    };
+    WIRE(ReqPosFeed, w_req_pos_feed);
 
     ReplaceCM();
 };

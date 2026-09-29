@@ -37,45 +37,36 @@ DataCM::DataCM() {
     chi_hi_arb.clk = clk;
     chi_lo_arb.clk = clk;
 
-    task_fire_reg.update().on(posedge(clk)).reads(task) = [](auto src) {
-        auto [task] = src;
-        return task.valid;
-    };
-    task_reg.update().on(posedge(clk)).reads(task, task_reg) = [](auto src) {
-        auto [task, task_reg] = src;
-        return task.valid ? task.bits : task_reg;
+    task_d.update().on(posedge(clk)).reads(task_d, task) = [](auto src) {
+        auto [task_d, task] = src;
+        TaskD next;
+        next.fire = task.valid;
+        next.task = task.valid ? task.bits : task_d.task;
+        return next;
     };
 
     // ---- 条目输出汇集（拍平：per-entry 组合输出 = 单条 assign 的数组值） ----
-    w_alloc_rdy_all.assign().reads(entries) = [](auto src) {
+    w_flags.assign().reads(entries) = [](auto src) {
         auto [entries] = src;
-        RdyArr64 r{};
-        for (uint32_t i = 0; i < kNrDataCM; ++i) r[i] = dcIsFree(entries[i]);
-        return r;
+        Flags f{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            f.allocRdy[i] = dcIsFree(entries[i]);
+            f.readForRepl[i] = dcIsRepl(entries[i]);
+        }
+        return f;
     };
-    w_read_for_repl_all.assign().reads(entries) = [](auto src) {
+    w_views.assign().reads(entries) = [](auto src) {
         auto [entries] = src;
-        RdyArr64 r{};
-        for (uint32_t i = 0; i < kNrDataCM; ++i) r[i] = dcIsRepl(entries[i]);
-        return r;
-    };
-    w_states.assign().reads(entries) = [](auto src) {
-        auto [entries] = src;
-        StateArr a{};
+        Views v{};
         for (uint32_t i = 0; i < kNrDataCM; ++i) {
             EntryState s;
             s.hnTxnID = entries[i].task.hnTxnID;
             s.dataVec = entries[i].dataVec;
             s.dbidVec = entries[i].dbidVec;
-            a[i] = Valid<EntryState>{!dcIsFree(entries[i]), s};
+            v.states[i] = Valid<EntryState>{!dcIsFree(entries[i]), s};
+            v.txBits[i] = entries[i].task.txDat;
         }
-        return a;
-    };
-    w_tx_dat_bits.assign().reads(entries) = [](auto src) {
-        auto [entries] = src;
-        TxBitsArr a{};
-        for (uint32_t i = 0; i < kNrDataCM; ++i) a[i] = entries[i].task.txDat;
-        return a;
+        return v;
     };
     w_resp_in.assign().reads(entries) = [](auto src) {
         auto [entries] = src;
@@ -153,25 +144,24 @@ DataCM::DataCM() {
     };
 
     // ---- reqDB 分配 ----
-    w_has_free_dc.assign().reads(w_alloc_rdy_all) = [](auto src) {
-        auto [rdys] = src;
-        for (bool r : rdys)
-            if (r) return true;
-        return false;
-    };
-    w_free_dcid.assign().reads(w_alloc_rdy_all) = [](auto src) -> uint8_t {
-        auto [rdys] = src;
+    w_free_sel.assign().reads(w_flags) = [](auto src) {
+        auto [flags] = src;
+        Sel s;
         for (uint32_t i = 0; i < kNrDataCM; ++i)
-            if (rdys[i]) return static_cast<uint8_t>(i);
-        return 0;
+            if (flags.allocRdy[i]) {
+                s.has = true;
+                s.dcid = static_cast<uint8_t>(i);
+                break;
+            }
+        return s;
     };
-    req_db_out.assign().reads(req_db_in, w_has_free_dc) = [](auto src) {
-        auto [req_db_in, w_has_free_dc] = src;
-        return Valid<uint8_t>{req_db_in.valid && w_has_free_dc, req_db_in.bits.dataVec};
+    req_db_out.assign().reads(req_db_in, w_free_sel) = [](auto src) {
+        auto [req_db_in, free_sel] = src;
+        return Valid<uint8_t>{req_db_in.valid && free_sel.has, req_db_in.bits.dataVec};
     };
-    req_db_in_rdy.assign().reads(req_db_out_rdy, w_has_free_dc) = [](auto src) {
-        auto [req_db_out_rdy, w_has_free_dc] = src;
-        return req_db_out_rdy && w_has_free_dc;
+    req_db_in_rdy.assign().reads(req_db_out_rdy, w_free_sel) = [](auto src) {
+        auto [req_db_out_rdy, free_sel] = src;
+        return req_db_out_rdy && free_sel.has;
     };
 
     // ---- resp / release（VipArb RR，validOut） ----
@@ -183,36 +173,42 @@ DataCM::DataCM() {
     release = rel_arb.out;
 
     // ---- getChiDat / getDBID ----
-    get_chi_dat_bits.assign().reads(get_chi_dat_dcid, w_tx_dat_bits) = [](auto src) {
-        auto [dcid, tx_bits] = src;
-        return tx_bits[dcid];
+    get_chi_dat_bits.assign().reads(get_chi_dat_dcid, w_views) = [](auto src) {
+        auto [dcid, views] = src;
+        return views.txBits[dcid];
     };
-    get_dbid_dbid.assign().reads(get_dbid_txn_id, get_dbid_data_id, w_states) = [](auto src) {
-        auto [txn_id, data_id, states] = src;
+    get_dbid_dbid.assign().reads(get_dbid_txn_id, get_dbid_data_id, w_views) = [](auto src) {
+        auto [txn_id, data_id, views] = src;
         uint8_t hitId = 0;
         for (uint32_t i = 0; i < kNrDataCM; ++i)
-            if (states[i].valid && states[i].bits.hnTxnID == txn_id) {
+            if (views.states[i].valid && views.states[i].bits.hnTxnID == txn_id) {
                 hitId = static_cast<uint8_t>(i);
                 break;  // PriorityEncoder 取首个匹配
             }
         const uint8_t beat = data_id == 2 ? 1 : 0;
-        return states[hitId].bits.dbidVec[beat];
+        return views.states[hitId].bits.dbidVec[beat];
     };
 
     // ---- repl 选择：critical 优先，其次 dcid 序 ----
-    w_has_repl.assign().reads(w_read_for_repl_all) = [](auto src) {
-        auto [rfs] = src;
-        for (bool r : rfs)
-            if (r) return true;
-        return false;
-    };
-    w_repl_dcid.assign().reads(w_read_for_repl_all, w_ds_in) = [](auto src) -> uint8_t {
-        auto [rfs, ds_in] = src;
+    w_repl_sel.assign().reads(w_flags, w_ds_in) = [](auto src) {
+        auto [flags, ds_in] = src;
+        Sel s;
         for (uint32_t i = 0; i < kNrDataCM; ++i)
-            if (rfs[i] && ds_in[i].bits.critical) return static_cast<uint8_t>(i);
+            if (flags.readForRepl[i]) {
+                s.has = true;
+                break;
+            }
         for (uint32_t i = 0; i < kNrDataCM; ++i)
-            if (rfs[i]) return static_cast<uint8_t>(i);
-        return 0;
+            if (flags.readForRepl[i] && ds_in[i].bits.critical) {
+                s.dcid = static_cast<uint8_t>(i);
+                return s;
+            }
+        for (uint32_t i = 0; i < kNrDataCM; ++i)
+            if (flags.readForRepl[i]) {
+                s.dcid = static_cast<uint8_t>(i);
+                break;
+            }
+        return s;
     };
 
     // ---- QoS 两层仲裁输入（高优层 qos==0xf） ----
@@ -248,19 +244,19 @@ DataCM::DataCM() {
     chi_lo_arb.in = w_chi_in;
 
     // ---- 读通道输出：repl 捆绑 > critical > QoS 高优 > 普通 ----
-    read_to_db.assign().reads(w_has_repl, w_repl_dcid, w_db_in, read_to_ds_rdy, db_hi_arb.out,
+    read_to_db.assign().reads(w_repl_sel, w_db_in, read_to_ds_rdy, db_hi_arb.out,
                               db_lo_arb.out) = [](auto src) {
-        auto [w_has_repl, w_repl_dcid, w_db_in, read_to_ds_rdy, hi_out, lo_out] = src;
-        if (w_has_repl) return Valid<ReadDS>{read_to_ds_rdy, w_db_in[w_repl_dcid].bits};
+        auto [repl_sel, w_db_in, read_to_ds_rdy, hi_out, lo_out] = src;
+        if (repl_sel.has) return Valid<ReadDS>{read_to_ds_rdy, w_db_in[repl_sel.dcid].bits};
         for (uint32_t i = 0; i < kNrDataCM; ++i)
             if (w_db_in[i].valid && w_db_in[i].bits.critical)
                 return Valid<ReadDS>{true, w_db_in[i].bits};
         return hi_out.valid ? hi_out : lo_out;
     };
-    read_to_ds.assign().reads(w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, ds_hi_arb.out,
+    read_to_ds.assign().reads(w_repl_sel, w_ds_in, read_to_db_rdy, ds_hi_arb.out,
                               ds_lo_arb.out) = [](auto src) {
-        auto [w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, hi_out, lo_out] = src;
-        if (w_has_repl) return Valid<ReadDB>{read_to_db_rdy, w_ds_in[w_repl_dcid].bits};
+        auto [repl_sel, w_ds_in, read_to_db_rdy, hi_out, lo_out] = src;
+        if (repl_sel.has) return Valid<ReadDB>{read_to_db_rdy, w_ds_in[repl_sel.dcid].bits};
         for (uint32_t i = 0; i < kNrDataCM; ++i)
             if (w_ds_in[i].valid && w_ds_in[i].bits.critical)
                 return Valid<ReadDB>{true, w_ds_in[i].bits};
@@ -300,95 +296,70 @@ DataCM::DataCM() {
         return !hi_out.valid && read_to_chi_rdy;
     };
 
-    // ---- 条目 read rdy 回接（拍平：数组合一） ----
-    w_db_rdys.assign().reads(w_has_repl, w_repl_dcid, w_db_in, read_to_db_rdy, read_to_ds_rdy,
-                             db_hi_arb.in_rdy, db_lo_arb.in_rdy) = [](auto src) {
-        auto [w_has_repl, w_repl_dcid, w_db_in, read_to_db_rdy, read_to_ds_rdy, hi_rdy, lo_rdy] =
-            src;
-        RdyArr64 r{};
-        uint32_t crit = kNrDataCM;  // 首个 critical 候选（无 → kNrDataCM）
-        for (uint32_t j = 0; j < kNrDataCM; ++j)
-            if (w_db_in[j].valid && w_db_in[j].bits.critical) {
-                crit = j;
-                break;
-            }
-        for (uint32_t i = 0; i < kNrDataCM; ++i) {
-            if (w_has_repl) {
-                r[i] = i == w_repl_dcid && read_to_ds_rdy && read_to_db_rdy;
-            } else if (crit < kNrDataCM) {
-                r[i] = crit == i && read_to_db_rdy;
-            } else {
-                r[i] = hi_rdy[i] || lo_rdy[i];
-            }
-        }
-        return r;
-    };
-    w_ds_rdys.assign().reads(w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, read_to_ds_rdy,
-                             ds_hi_arb.in_rdy, ds_lo_arb.in_rdy) = [](auto src) {
-        auto [w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, read_to_ds_rdy, hi_rdy, lo_rdy] =
-            src;
-        RdyArr64 r{};
-        uint32_t crit = kNrDataCM;
-        for (uint32_t j = 0; j < kNrDataCM; ++j)
-            if (w_ds_in[j].valid && w_ds_in[j].bits.critical) {
-                crit = j;
-                break;
-            }
-        for (uint32_t i = 0; i < kNrDataCM; ++i) {
-            if (w_has_repl) {
-                r[i] = i == w_repl_dcid && read_to_ds_rdy && read_to_db_rdy;
-            } else if (crit < kNrDataCM) {
-                r[i] = crit == i && read_to_ds_rdy;
-            } else {
-                r[i] = hi_rdy[i] || lo_rdy[i];
-            }
-        }
-        return r;
-    };
-    w_chi_rdys.assign().reads(w_chi_in, read_to_chi_rdy, chi_hi_arb.in_rdy, chi_lo_arb.in_rdy) =
-        [](auto src) {
-            auto [w_chi_in, read_to_chi_rdy, hi_rdy, lo_rdy] = src;
-            RdyArr64 r{};
-            uint32_t crit = kNrDataCM;
+    // ---- 64 项控制 FSM（一条 update 循环算全数组 next；NBA：一切判定读旧值） ----
+    // 原 per-entry 端口在此折回：alloc = reqDB fire 且 freeSel.dcid==i；task =
+    // task_d（RegNext 语义，读旧值）；dcid = i；各通道 rdy = 下方内联的
+    // db/ds/chi_rdys[i]（原 w_db_rdys/w_ds_rdys/w_chi_rdys 三条数组 assign，唯一
+    // 消费方即本 update，内联消除；判定逻辑逐位不变）/
+    // resp_arb.in_rdy[i] / rel_arb.in_rdy[i]。
+    entries.update().on(posedge(clk)).reads(entries, upd_hn_txn_id, task_d, clean, ds_wri_db,
+                                            tx_dat_fire, db_wri_ds, req_db_in, req_db_in_rdy,
+                                            w_free_sel, dbid_resp, resp_arb.in_rdy,
+                                            rel_arb.in_rdy, w_repl_sel, w_db_in, w_ds_in,
+                                            w_chi_in, read_to_db_rdy, read_to_ds_rdy,
+                                            read_to_chi_rdy, db_hi_arb.in_rdy, db_lo_arb.in_rdy,
+                                            ds_hi_arb.in_rdy, ds_lo_arb.in_rdy,
+                                            chi_hi_arb.in_rdy, chi_lo_arb.in_rdy) = [](auto src) {
+        auto [entries, upd_hn_txn_id, task_d, clean, ds_wri_db, tx_dat_fire, db_wri_ds,
+              req_db_in, req_db_in_rdy, free_sel, dbid_resp, resp_rdys, rel_rdys, repl_sel,
+              w_db_in, w_ds_in, w_chi_in, read_to_db_rdy, read_to_ds_rdy, read_to_chi_rdy,
+              db_hi_rdy, db_lo_rdy, ds_hi_rdy, ds_lo_rdy, chi_hi_rdy, chi_lo_rdy] = src;
+        // 条目 read 通道 rdy：repl 捆绑 > critical > 两层仲裁 in_rdy（拍平：数组合一）
+        RdyArr64 db_rdys{}, ds_rdys{}, chi_rdys{};
+        {
+            uint32_t critDb = kNrDataCM, critDs = kNrDataCM, critChi = kNrDataCM;
+            for (uint32_t j = 0; j < kNrDataCM; ++j)
+                if (w_db_in[j].valid && w_db_in[j].bits.critical) {
+                    critDb = j;
+                    break;
+                }
+            for (uint32_t j = 0; j < kNrDataCM; ++j)
+                if (w_ds_in[j].valid && w_ds_in[j].bits.critical) {
+                    critDs = j;
+                    break;
+                }
             for (uint32_t j = 0; j < kNrDataCM; ++j)
                 if (w_chi_in[j].valid && w_chi_in[j].bits.critical) {
-                    crit = j;
+                    critChi = j;
                     break;
                 }
             for (uint32_t i = 0; i < kNrDataCM; ++i) {
-                if (crit < kNrDataCM) {
-                    r[i] = crit == i && read_to_chi_rdy;
+                if (repl_sel.has) {
+                    db_rdys[i] = i == repl_sel.dcid && read_to_ds_rdy && read_to_db_rdy;
+                    ds_rdys[i] = db_rdys[i];
                 } else {
-                    r[i] = hi_rdy[i] || lo_rdy[i];
+                    db_rdys[i] = critDb < kNrDataCM ? critDb == i && read_to_db_rdy
+                                                    : db_hi_rdy[i] || db_lo_rdy[i];
+                    ds_rdys[i] = critDs < kNrDataCM ? critDs == i && read_to_ds_rdy
+                                                    : ds_hi_rdy[i] || ds_lo_rdy[i];
                 }
+                chi_rdys[i] = critChi < kNrDataCM ? critChi == i && read_to_chi_rdy
+                                                  : chi_hi_rdy[i] || chi_lo_rdy[i];
             }
-            return r;
-        };
-
-    // ---- 64 项控制 FSM（一条 update 循环算全数组 next；NBA：一切判定读旧值） ----
-    // 原 per-entry 端口在此折回：alloc = reqDB fire 且 w_free_dcid==i；task =
-    // {task_fire_reg, task_reg}（RegNext 语义，读旧值）；dcid = i；各通道 rdy =
-    // w_*_rdys[i] / resp_arb.in_rdy[i] / rel_arb.in_rdy[i]。
-    entries.update().on(posedge(clk)).reads(entries, upd_hn_txn_id, task_fire_reg, task_reg,
-                                            clean, ds_wri_db, tx_dat_fire, db_wri_ds, req_db_in,
-                                            req_db_in_rdy, w_free_dcid, dbid_resp,
-                                            resp_arb.in_rdy, rel_arb.in_rdy, w_db_rdys, w_ds_rdys,
-                                            w_chi_rdys) = [](auto src) {
-        auto [entries, upd_hn_txn_id, task_fire_reg, task_reg, clean, ds_wri_db, tx_dat_fire,
-              db_wri_ds, req_db_in, req_db_in_rdy, w_free_dcid, dbid_resp, resp_rdys, rel_rdys,
-              db_rdys, ds_rdys, chi_rdys] = src;
+        }
         CtrlArr n = entries;
         const bool reqFire = req_db_in.valid && req_db_in_rdy;  // DataCM 级 reqDB fire
-        const uint8_t tdv = task_reg.dataVec;
+        const uint8_t tdv = task_d.task.dataVec;
         for (uint32_t i = 0; i < kNrDataCM; ++i) {
             const DataCtrlV& reg = entries[i];
             const bool isValid = reg.state != ctrl::kFree;
-            const bool allocFire = reqFire && w_free_dcid == i && dcIsFree(reg);
+            const bool allocFire = reqFire && free_sel.dcid == i && dcIsFree(reg);
             // w_set：alloc 命中空闲项、或项非空闲才更新
             if (!allocFire && dcIsFree(reg)) continue;
             DataCtrlV& next = n[i];
             const uint8_t dcid = static_cast<uint8_t>(i);
-            const bool taskHit = isValid && task_fire_reg && task_reg.hnTxnID == reg.task.hnTxnID;
+            const bool taskHit =
+                isValid && task_d.fire && task_d.task.hnTxnID == reg.task.hnTxnID;
             const bool cleanHit =
                 isValid && clean.valid && clean.bits.hnTxnID == reg.task.hnTxnID;
             const bool updHit =
@@ -406,7 +377,7 @@ DataCM::DataCM() {
             const bool relFire = reg.state == ctrl::kClean && rel_rdys[i];
             const bool respFire = reg.state == ctrl::kResp && resp_rdys[i];
 
-            if (taskHit) next.task = task_reg;
+            if (taskHit) next.task = task_d.task;
 
             // dataVec
             if (allocFire) {
@@ -424,7 +395,7 @@ DataCM::DataCM() {
             if (allocFire) {
                 next.s_read = 0;
                 next.w_read = 0;
-            } else if (taskHit && task_reg.dataOp.readToDB()) {
+            } else if (taskHit && task_d.task.dataOp.readToDB()) {
                 next.s_read = tdv;
                 next.w_read = tdv;
             } else {
@@ -438,7 +409,7 @@ DataCM::DataCM() {
             if (allocFire) {
                 next.s_send = 0;
                 next.w_send = 0;
-            } else if (taskHit && task_reg.dataOp.readToCHI()) {
+            } else if (taskHit && task_d.task.dataOp.readToCHI()) {
                 next.s_send = tdv;
                 next.w_send = tdv;
             } else {
@@ -452,7 +423,7 @@ DataCM::DataCM() {
             if (allocFire) {
                 next.s_save = 0;
                 next.w_save = 0;
-            } else if (taskHit && task_reg.dataOp.readToDS()) {
+            } else if (taskHit && task_d.task.dataOp.readToDS()) {
                 next.s_save = tdv;
                 next.w_save = tdv;
             } else {
@@ -495,9 +466,9 @@ DataCM::DataCM() {
                     break;
                 case ctrl::kAlloc:
                     if (taskHit) {
-                        next.state = task_reg.dataOp.repl  ? ctrl::kRepl
-                                     : task_reg.dataOp.read ? ctrl::kRead
-                                     : task_reg.dataOp.send ? ctrl::kSend
+                        next.state = task_d.task.dataOp.repl  ? ctrl::kRepl
+                                     : task_d.task.dataOp.read ? ctrl::kRead
+                                     : task_d.task.dataOp.send ? ctrl::kSend
                                                             : ctrl::kSave;
                     } else if (cleanHit) {
                         next.state = ctrl::kClean;

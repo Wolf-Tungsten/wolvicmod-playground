@@ -116,16 +116,31 @@ public:
     OUT(Valid<RespFlit>, fast_resp_s1);
     IN(bool, fast_resp_s1_rdy);
 
-    REG(bool, valid_reg_s1);
-    REG(ChiTask, task_reg_s1);
-    REG(bool, s_receipt_reg_s1);
-    REG(bool, s_dbid_reg_s1);
-    WIRE(bool, w_should_resp_s1);
-    WIRE(bool, w_block_by_db_s1);
-    WIRE(bool, w_block_pos);
-    WIRE(bool, w_block_dir);
-    WIRE(bool, w_block_resp);
-    WIRE(bool, w_block_any);
+    // 合并 s1 流水状态（perf-breakdown：原 4 个独立 reg 同沿同读 chi_task_s0）。
+    // valid 为 RegNext(valid)；task 为 RegEnable(bits, valid)；sReceipt/sDbid 为
+    // 无条件 RegNext 的译码标志——按行为语义并为一个 struct + 一条 update。
+    struct St {
+        bool valid = false;    // RegNext(chi_task_s0.valid)
+        ChiTask task;          // RegEnable(chi_task_s0.bits, valid)
+        bool sReceipt = false; // RegNext(isRead && (isEO || isRO))
+        bool sDbid = false;    // RegNext(isWrite && !isCopyBackWrite)
+
+        bool operator==(const St&) const = default;
+    };
+    REG(St, st);
+    // 阻塞条件组合链（原 6 条 wire assign，读集高度重叠：st 字段 + 三个 rdy +
+    // pos_block_s1，同为 shouldResp→resp→any 一条链），并为一条 struct assign。
+    struct BlkW {
+        bool shouldResp = false;  // sReceipt || (sDbid && req_db_rdy)
+        bool byDb = false;        // sDbid && !req_db_rdy
+        bool pos = false;         // pos_block_s1 直通
+        bool dir = false;         // memCacheable && !read_dir_rdy
+        bool resp = false;        // byDb || (shouldResp && !fast_resp_rdy)
+        bool any = false;         // pos || dir || resp
+
+        bool operator==(const BlkW&) const = default;
+    };
+    WIRE(BlkW, w_blk);
 
     Block();
 };
@@ -217,17 +232,30 @@ public:
     IN(bool, fast_data_s3_rdy);
     OUT(Valid<ReqDB>, clean_db_s3);
 
-    REG(bool, valid_reg_s3);
-    REG(TaskS1, task_reg_s3);
-    REG(DecList4, dec_list_reg_s3);
-    WIRE(uint32_t, w_chi_inst_s2);
-    WIRE(DecList4, w_dec_list_s2);
-    WIRE(uint32_t, w_state_inst_s3);
-    WIRE(DecList4, w_dec_list_s3);
-    WIRE(uint32_t, w_task_code_s3);
-    WIRE(uint32_t, w_cmt_code_s3);
-    WIRE(bool, w_resp_comp_data_s3);
-    WIRE(bool, w_clean_unuse_db_s3);
+    // 合并 s3 流水状态（perf-breakdown：原 3 个独立 reg 同沿、同以 task_s2.valid
+    // 为使能）。valid 为 RegNext(valid)；task/decList 为 RegEnable(bits / fstDec
+    // 结果, valid)——并为一个 struct + 一条 update，fstDec 查表内联进 update。
+    struct St {
+        bool valid = false;  // RegNext(task_s2.valid)
+        TaskS1 task;         // RegEnable(task_s2.bits, valid)
+        DecList4 decList{};  // RegEnable(fstDec(task_s2), valid)
+
+        bool operator==(const St&) const = default;
+    };
+    REG(St, st);
+    // s3 译码组合链（原 6 条 wire assign：stateInst→secDec→GetDecRes→快路径判定，
+    // 同读 st + resp_dir_s3），并为一条 struct assign。
+    struct DecW {
+        uint32_t stateInst = 0;   // stateInst_s3
+        DecList4 decList{};       // secDec 结果
+        uint32_t taskCode = 0;    // GetDecRes.task
+        uint32_t cmtCode = 0;     // GetDecRes.cmt
+        bool respCompData = false;
+        bool cleanUnuseDb = false;
+
+        bool operator==(const DecW&) const = default;
+    };
+    WIRE(DecW, w_dec);
 
     FrontendDecode();
 };

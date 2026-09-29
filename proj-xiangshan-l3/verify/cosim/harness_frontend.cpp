@@ -299,7 +299,7 @@ int intcmpFrontend(VFrontend& ref, Frontend& dut, uint64_t c) {
         }
     }
     dif("block.validReg", rp.Frontend__DOT__block__DOT__validReg_s1,
-        dut.block.valid_reg_s1.get());
+        dut.block.st.get().valid);
     dif("tb.hasLockReg", rp.Frontend__DOT__reqTaskBuf__DOT__hasLockReg,
         dut.req_task_buf.has_lock_reg.get());
     {
@@ -310,11 +310,11 @@ int intcmpFrontend(VFrontend& ref, Frontend& dut, uint64_t c) {
         dif("tb.vipPtrOH", rvip, dvipl);
     }
     dif("block.sReceipt", rp.Frontend__DOT__block__DOT__sReceiptReg_s1,
-        dut.block.s_receipt_reg_s1.get());
+        dut.block.st.get().sReceipt);
     dif("block.sDBID", rp.Frontend__DOT__block__DOT__sDBIDReg_s1,
-        dut.block.s_dbid_reg_s1.get());
+        dut.block.st.get().sDbid);
     dif("decode.validReg", rp.Frontend__DOT__decode__DOT__validReg_s3,
-        dut.decode.valid_reg_s3.get());
+        dut.decode.st.get().valid);
     if (bad) reported = true;
     return bad;
 }
@@ -544,19 +544,19 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
                       << (int)dut.read_dir.get().valid << " reqs3="
                       << (int)dut.req_db_s3.get().valid << " fresp="
                       << (int)dut.block.fast_resp_s1.get().valid << " blany="
-                      << (int)dut.block.w_block_any.get() << " blpos="
-                      << (int)dut.block.w_block_pos.get() << " bldir="
-                      << (int)dut.block.w_block_dir.get() << " blresp="
-                      << (int)dut.block.w_block_resp.get() << " alrpos="
+                      << (int)dut.block.w_blk.get().any << " blpos="
+                      << (int)dut.block.w_blk.get().pos << " bldir="
+                      << (int)dut.block.w_blk.get().dir << " blresp="
+                      << (int)dut.block.w_blk.get().resp << " alrpos="
                       << (int)dut.alr_use_pos.get() << " | dec: ts2v="
                       << (int)dut.decode.task_s2.get().valid << " v3="
-                      << (int)dut.decode.valid_reg_s3.get() << " rdv="
+                      << (int)dut.decode.st.get().valid << " rdv="
                       << (int)dut.resp_dir.get().valid << " dl=" << std::hex
-                      << (uint32_t)dut.decode.w_dec_list_s3.get()[0]
-                      << (uint32_t)dut.decode.w_dec_list_s3.get()[1] << " tc=0x"
-                      << dut.decode.w_task_code_s3.get() << " cc=0x"
-                      << dut.decode.w_cmt_code_s3.get() << " rcd="
-                      << (int)dut.decode.w_resp_comp_data_s3.get() << std::dec << " | pos: s0v="
+                      << (uint32_t)dut.decode.w_dec.get().decList[0]
+                      << (uint32_t)dut.decode.w_dec.get().decList[1] << " tc=0x"
+                      << dut.decode.w_dec.get().taskCode << " cc=0x"
+                      << dut.decode.w_dec.get().cmtCode << " rcd="
+                      << (int)dut.decode.w_dec.get().respCompData << std::dec << " | pos: s0v="
                       << (int)dut.pos_table.alloc_s0_valid.get() << " blk="
                       << (int)dut.pos_table.w_block_s0.get()[0]
                       << (int)dut.pos_table.w_block_s0.get()[1]
@@ -581,7 +581,7 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
                       << (uint32_t)ref.io_cmtTask_bits_chi_channel << std::dec << " dutcmt: v="
                       << (int)dut.cmt_task.get().valid << " rdv3="
                       << (int)dut.decode.resp_dir_s3.get().valid << " si=0x" << std::hex
-                      << dut.decode.w_state_inst_s3.get() << std::dec << "\n";
+                      << dut.decode.w_dec.get().stateInst << std::dec << "\n";
         }
 
         // ---- 比对（前端通道全展开见 CHECK_FE） ----
@@ -593,7 +593,7 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
         const bool cacheableReq = readDirFire;
         const bool allocFire = dut.pos_table.hn_idx_s1_valid.get();
         const uint8_t allocHn = dut.pos_table.hn_idx_s1.get();
-        const uint64_t allocAddr = dut.block.task_reg_s1.get().addr;
+        const uint64_t allocAddr = dut.block.st.get().task.addr;
 
         cosim::phaseHigh(ref, dut);
 

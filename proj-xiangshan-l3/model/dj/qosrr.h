@@ -29,7 +29,6 @@ public:
 
     MOD(ArbT, hi_arb);
     MOD(ArbT, lo_arb);
-    WIRE(bool, w_has_high);
 
     QosRRArb() {
         hi_arb.clk = clk;
@@ -44,21 +43,19 @@ public:
             return a;
         };
         lo_arb.in = in;
-        w_has_high.assign().reads(hi_arb.out) = [](auto src) {
-            auto [hi_out] = src;
-            return hi_out.valid;
+        // 高优候选存在性直接取 hi_arb.out.valid（原中转线 w_has_high 内联消除，
+        // 三个消费方本就同读 hi_arb.out 或只取其 valid，读集不增）
+        out.assign().reads(hi_arb.out, lo_arb.out) = [](auto src) {
+            auto [hi_out, lo_out] = src;
+            return hi_out.valid ? hi_out : lo_out;
         };
-        out.assign().reads(w_has_high, hi_arb.out, lo_arb.out) = [](auto src) {
-            auto [w_has_high, hi_out, lo_out] = src;
-            return w_has_high ? hi_out : lo_out;
+        hi_arb.out_rdy.assign().reads(hi_arb.out, out_rdy) = [](auto src) {
+            auto [hi_out, out_rdy] = src;
+            return hi_out.valid && out_rdy;
         };
-        hi_arb.out_rdy.assign().reads(w_has_high, out_rdy) = [](auto src) {
-            auto [w_has_high, out_rdy] = src;
-            return w_has_high && out_rdy;
-        };
-        lo_arb.out_rdy.assign().reads(w_has_high, out_rdy) = [](auto src) {
-            auto [w_has_high, out_rdy] = src;
-            return !w_has_high && out_rdy;
+        lo_arb.out_rdy.assign().reads(hi_arb.out, out_rdy) = [](auto src) {
+            auto [hi_out, out_rdy] = src;
+            return !hi_out.valid && out_rdy;
         };
         in_rdy.assign().reads(hi_arb.in_rdy, lo_arb.in_rdy) = [](auto src) {
             auto [hi_rdy, lo_rdy] = src;

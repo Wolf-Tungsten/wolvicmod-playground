@@ -102,73 +102,137 @@ public:
     using SftArr = std::array<SftInfo, 4>;
     using LockArr = std::array<LockEntry, kLocks>;
 
-    REG(uint8_t, sft_read);   // 4bit：fire 从 bit3 进，每拍右移；d1=bit3..d4=bit0
-    REG(uint8_t, sft_write);
-    REG(uint8_t, sft_repl);
-    REG(SftArr, req_sft);
+    // ---- 合并时序状态（perf：同沿同使能、读集高度重叠的离散 reg 并为 struct，
+    // 一条 update；单消费的组合中转内联进 update lambda） ----
+    // 移位流水：三条移位器同拍右移，req 载荷随移位器同拍前进，d0..d4 各阶段
+    // 几乎都同时引用两者 → 并为一条 update。
+    struct Sft {
+        uint8_t read = 0, write = 0, repl = 0;  // 4bit：fire 从 bit3 进；d1=bit3..d4=bit0
+        SftArr req{};                           // 原 req_sft
+
+        bool operator==(const Sft&) const = default;
+    };
+    REG(Sft, sft);
     REG(bool, rst_done);
-    // d2→d3 寄存（en = req(D2)）
-    REG(uint16_t, repl_mes_d3);
-    REG(uint16_t, use_way_d3);
-    REG(uint8_t, unuse_way_d3);
-    REG(uint8_t, repl_way_d3);
-    REG(bool, sel_is_using_d3);
-    // repl 写回前递（d1↔d4 匹配 → 下一拍 d2 用）
-    REG(bool, bp_d1_d4);
-    REG(uint16_t, bp_mes_d4);
-    // d3→d4 寄存（en = req(D3)）
-    REG(bool, read_hit_d4);
-    REG(uint16_t, sel_way_oh_d4);
-    REG(uint16_t, new_repl_mes_d4);
-    REG(DirResp, resp_d4);
+    // d2→d3 寄存（en = req(D2)）：同沿同使能。原 w_repl_way_d2/w_unuse_way_d2/
+    // w_sel_is_using_d2 为本组单消费中转，内联进 update。
+    struct D3 {
+        uint16_t replMes = 0;
+        uint16_t useWay = 0;
+        uint8_t unuseWay = 0;
+        uint8_t replWay = 0;
+        bool selIsUsing = false;
+
+        bool operator==(const D3&) const = default;
+    };
+    REG(D3, d3);
+    // repl 写回前递（d1↔d4 匹配 → 下一拍 d2 用）：同由 w_match.d1d4 驱动，并为一条
+    struct Bp {
+        bool d1d4 = false;
+        uint16_t mes = 0;
+
+        bool operator==(const Bp&) const = default;
+    };
+    REG(Bp, bp);
+    // d3→d4 寄存（en = req(D3)）：同沿同使能。原 w_resp_d3/w_new_repl_mes_d3
+    // 组合链为本组单消费，内联进 update。
+    struct D4 {
+        bool readHit = false;
+        uint16_t selWayOH = 0;
+        uint16_t newReplMes = 0;
+        DirResp resp{};
+
+        bool operator==(const D4&) const = default;
+    };
+    REG(D4, d4);
     REG(LockArr, lock_tab);
     REG(LockArr, rsv_tab);  // 仅 sf 使用（llc 恒零，对齐 WireInit 0）
 
     // ---- d0 线网 ----
-    WIRE(bool, w_wr_hit);
-    WIRE(bool, w_wr_direct);
-    WIRE(bool, w_wr_nohit);
-    WIRE(bool, w_wr_any);
     WIRE(bool, w_wr_fire);
     WIRE(bool, w_read_d0);
     WIRE(bool, w_common_rdy);
-    WIRE(uint16_t, w_req_set_d0);
-    WIRE(uint16_t, w_wri_mask_d0);
-    WIRE(DirMeta, w_wri_meta_d0);
-    WIRE(bool, w_meta_req_v);
-    WIRE(bool, w_meta_req_w);
-    WIRE(bool, w_tag_req_v);
-    WIRE(bool, w_tag_req_w);
-    WIRE(bool, w_meta_fire);
-    WIRE(bool, w_rec_read);
-    WIRE(bool, w_rec_write);
-    WIRE(bool, w_rec_repl);
-    WIRE(bool, w_wreq_v);
-    WIRE(bool, w_wreq_fire);
+    // 写类三分：同读 (w_wr_fire, write)，并为一条（w_wr_any ≡ w_wr_fire，内联消除）
+    struct WrKind {
+        bool hit = false, direct = false, nohit = false;
+
+        bool operator==(const WrKind&) const = default;
+    };
+    WIRE(WrKind, w_wr_kind);
+    // d0 端口仲裁载荷（repl_d0 > write > read 的 set/mask/meta 选择）：同源选择
+    // 信号、同喂 meta/tag RAM 请求，并为一条
+    struct WriD0 {
+        uint16_t set = 0, mask = 0;
+        DirMeta meta = 0;
+
+        bool operator==(const WriD0&) const = default;
+    };
+    WIRE(WriD0, w_wri_d0);
+    // meta/tag 请求 v/w：读集高度重叠（wr_kind/read_d0/repl_d0/rst_done），并为一条
+    struct RamReq {
+        bool metaV = false, metaW = false, tagV = false, tagW = false;
+
+        bool operator==(const RamReq&) const = default;
+    };
+    WIRE(RamReq, w_ram_req);
+    // meta 请求 fire 与三类流水记录（read/write/repl 入移位器）：同一组合链，并为一条
+    struct Rec {
+        bool fire = false, read = false, write = false, repl = false;
+
+        bool operator==(const Rec&) const = default;
+    };
+    WIRE(Rec, w_rec);
+    // d4 repl 写回请求 v/fire：fire 仅多一级 rdy 与，并为一条
+    struct Wreq {
+        bool v = false, fire = false;
+
+        bool operator==(const Wreq&) const = default;
+    };
+    WIRE(Wreq, w_wreq);
     // ---- d2 线网 ----
     WIRE(uint16_t, w_set_d2);
-    WIRE(uint16_t, w_lock_way_d2);
-    WIRE(uint16_t, w_rsv_way_d2);
+    // lock/reservation 命中 way 位图：同读 w_set_d2、同喂 w_use_way_d2，并为一条
+    struct LockRsv {
+        uint16_t lock = 0, rsv = 0;
+
+        bool operator==(const LockRsv&) const = default;
+    };
+    WIRE(LockRsv, w_lock_rsv_d2);
     WIRE(uint16_t, w_use_way_d2);
     WIRE(uint16_t, w_repl_mes_d2);
-    WIRE(uint8_t, w_repl_way_d2);
-    WIRE(uint8_t, w_unuse_way_d2);
-    WIRE(bool, w_sel_is_using_d2);
-    WIRE(bool, w_match_d2_d4);
-    WIRE(bool, w_match_d1_d4);
+    // d2/d1 与 d4 写回的 set 匹配：同读 (req, w_wreq.fire)，并为一条
+    struct Match {
+        bool d2d4 = false, d1d4 = false;
+
+        bool operator==(const Match&) const = default;
+    };
+    WIRE(Match, w_match);
     // ---- d3 线网 ----
     WIRE(uint16_t, w_set_d3);
     WIRE(uint16_t, w_hit_vec_d3);
     WIRE(uint16_t, w_invalid_vec_d3);
-    WIRE(bool, w_hit_d3);
-    WIRE(bool, w_has_invalid_d3);
-    WIRE(bool, w_read_hit_d3);
-    WIRE(uint8_t, w_sel_way_d3);
-    WIRE(uint16_t, w_sel_way_oh_d3);
-    WIRE(uint16_t, w_new_repl_mes_d3);
-    WIRE(DirResp, w_resp_d3);
-    WIRE(bool, w_read_d3);
-    WIRE(bool, w_pend_alloc_d3);
+    // 命中/有空 invalid/读命中：vec→bool 同一组合链，并为一条
+    struct HitD3 {
+        bool hit = false, hasInvalid = false, readHit = false;
+
+        bool operator==(const HitD3&) const = default;
+    };
+    WIRE(HitD3, w_hit_d3);
+    // 选中 way 及其 one-hot：wayOH = 1<<way 单链派生，并为一条
+    struct SelWay {
+        uint8_t way = 0;
+        uint16_t wayOH = 0;
+
+        bool operator==(const SelWay&) const = default;
+    };
+    WIRE(SelWay, w_sel_way_d3);
+    // 读 d3 / sf 待分配（reservation 置位条件）：pendAlloc 由 readD3 派生，并为一条
+    struct PendD3 {
+        bool read = false, pendAlloc = false;
+
+        bool operator==(const PendD3&) const = default;
+    };
+    WIRE(PendD3, w_pend_d3);
     // ---- 锁/预留次态 ----
     WIRE(LockArr, w_lock_next);
     WIRE(LockArr, w_rsv_next);
@@ -199,10 +263,10 @@ private:
 
     void registerD0() {
         // 就绪：resetDone & tagMetaReady(无请求在 d1) & !replWillWrite；read 再让 write
-        w_common_rdy.assign().reads(rst_done, sft_read, sft_write, sft_repl) = [](auto src) {
-            auto [rst_done, sft_read, sft_write, sft_repl] = src;
-            const bool tagMetaReady = (((sft_read | sft_write) >> 3) & 1u) == 0;
-            const bool replWillWrite = (sft_read & sft_repl) != 0;
+        w_common_rdy.assign().reads(rst_done, sft) = [](auto src) {
+            auto [rst_done, sft] = src;
+            const bool tagMetaReady = (((sft.read | sft.write) >> 3) & 1u) == 0;
+            const bool replWillWrite = (sft.read & sft.repl) != 0;
             return rst_done && tagMetaReady && !replWillWrite;
         };
         read_rdy.assign().reads(w_common_rdy, write) = [](auto src) {
@@ -221,125 +285,82 @@ private:
             auto [read, read_rdy] = src;
             return read.valid && read_rdy;
         };
-        w_wr_hit.assign().reads(w_wr_fire, write) = [](auto src) {
+        w_wr_kind.assign().reads(w_wr_fire, write) = [](auto src) {
             auto [w_wr_fire, write] = src;
-            return w_wr_fire && write.bits.hit && !write.bits.directAlloc;
-        };
-        w_wr_direct.assign().reads(w_wr_fire, write) = [](auto src) {
-            auto [w_wr_fire, write] = src;
-            return w_wr_fire && write.bits.directAlloc;
-        };
-        w_wr_nohit.assign().reads(w_wr_fire, write) = [](auto src) {
-            auto [w_wr_fire, write] = src;
-            return w_wr_fire && !write.bits.hit && !write.bits.directAlloc;
-        };
-        w_wr_any.assign().reads(w_wr_hit, w_wr_direct, w_wr_nohit) = [](auto src) {
-            auto [w_wr_hit, w_wr_direct, w_wr_nohit] = src;
-            return w_wr_hit || w_wr_direct || w_wr_nohit;
+            return WrKind{w_wr_fire && write.bits.hit && !write.bits.directAlloc,
+                          w_wr_fire && write.bits.directAlloc,
+                          w_wr_fire && !write.bits.hit && !write.bits.directAlloc};
         };
 
         // d0 端口仲裁：repl_d0(d4 分配写回) > write > read（write_rdy 已保证互斥）
-        w_req_set_d0.assign().reads(sft_read, sft_repl, req_sft, write, read) = [](auto src) {
-            auto [sft_read, sft_repl, req_sft, write, read] = src;
-            if (((sft_read & sft_repl) & 1u) != 0) return setOf(req_sft[0].addr);
-            return write.valid ? setOf(write.bits.addr) : setOf(read.bits.addr);
-        };
-        w_wri_mask_d0.assign().reads(sft_read, sft_repl, sel_way_oh_d4, write) = [](auto src) {
-            auto [sft_read, sft_repl, sel_way_oh_d4, write] = src;
-            return ((sft_read & sft_repl) & 1u) != 0 ? sel_way_oh_d4 : write.bits.wayOH;
-        };
-        w_wri_meta_d0.assign().reads(sft_read, sft_repl, req_sft, write) = [](auto src) {
-            auto [sft_read, sft_repl, req_sft, write] = src;
-            return ((sft_read & sft_repl) & 1u) != 0 ? req_sft[0].meta : write.bits.meta;
+        w_wri_d0.assign().reads(sft, d4, write, read) = [](auto src) {
+            auto [sft, d4, write, read] = src;
+            if (((sft.read & sft.repl) & 1u) != 0)
+                return WriD0{static_cast<uint16_t>(setOf(sft.req[0].addr)), d4.selWayOH,
+                             sft.req[0].meta};
+            const uint16_t set =
+                static_cast<uint16_t>(write.valid ? setOf(write.bits.addr) : setOf(read.bits.addr));
+            return WriD0{set, write.bits.wayOH, write.bits.meta};
         };
 
-        w_meta_req_v.assign().reads(w_wr_any, w_read_d0, sft_read, sft_repl, rst_done) = [](auto src) {
-            auto [w_wr_any, w_read_d0, sft_read, sft_repl, rst_done] = src;
-            const bool repl_d0 = ((sft_read & sft_repl) & 1u) != 0;
-            return (w_wr_any || w_read_d0 || repl_d0) && rst_done;
+        w_ram_req.assign().reads(w_wr_kind, w_wr_fire, w_read_d0, sft, rst_done) = [](auto src) {
+            auto [k, w_wr_fire, w_read_d0, sft, rst_done] = src;
+            const bool repl_d0 = ((sft.read & sft.repl) & 1u) != 0;
+            // 原 w_wr_any ≡ w_wr_fire（fire 时三类必居其一）
+            return RamReq{(w_wr_fire || w_read_d0 || repl_d0) && rst_done,
+                          k.hit || k.direct || repl_d0,
+                          (k.direct || k.nohit || w_read_d0 || repl_d0) && rst_done,
+                          k.direct || repl_d0};
         };
-        w_meta_req_w.assign().reads(w_wr_hit, w_wr_direct, sft_read, sft_repl) = [](auto src) {
-            auto [w_wr_hit, w_wr_direct, sft_read, sft_repl] = src;
-            const bool repl_d0 = ((sft_read & sft_repl) & 1u) != 0;
-            return w_wr_hit || w_wr_direct || repl_d0;
-        };
-        w_tag_req_v.assign().reads(w_wr_direct, w_wr_nohit, w_read_d0, sft_read, sft_repl, rst_done) =
-            [](auto src) {
-                auto [w_wr_direct, w_wr_nohit, w_read_d0, sft_read, sft_repl, rst_done] = src;
-                const bool repl_d0 = ((sft_read & sft_repl) & 1u) != 0;
-                return (w_wr_direct || w_wr_nohit || w_read_d0 || repl_d0) && rst_done;
-            };
-        w_tag_req_w.assign().reads(w_wr_direct, sft_read, sft_repl) = [](auto src) {
-            auto [w_wr_direct, sft_read, sft_repl] = src;
-            const bool repl_d0 = ((sft_read & sft_repl) & 1u) != 0;
-            return w_wr_direct || repl_d0;
-        };
-        w_meta_fire.assign().reads(w_meta_req_v, meta_ram.req_rdy) = [](auto src) {
-            auto [w_meta_req_v, meta_ram_req_rdy] = src;
-            return w_meta_req_v && meta_ram_req_rdy;
-        };
-        w_rec_read.assign().reads(w_meta_fire, w_meta_req_w) = [](auto src) {
-            auto [w_meta_fire, w_meta_req_w] = src;
-            return w_meta_fire && !w_meta_req_w;
-        };
-        w_rec_write.assign().reads(w_meta_fire, w_meta_req_w) = [](auto src) {
-            auto [w_meta_fire, w_meta_req_w] = src;
-            return w_meta_fire && w_meta_req_w;
-        };
-        w_rec_repl.assign().reads(w_meta_fire, w_wr_nohit, sft_read, sft_repl) = [](auto src) {
-            auto [w_meta_fire, w_wr_nohit, sft_read, sft_repl] = src;
-            const bool repl_d0 = ((sft_read & sft_repl) & 1u) != 0;
-            return w_meta_fire && (w_wr_nohit || repl_d0);
+        w_rec.assign().reads(w_ram_req, meta_ram.req_rdy, w_wr_kind, sft) = [](auto src) {
+            auto [q, meta_req_rdy, k, sft] = src;
+            const bool fire = q.metaV && meta_req_rdy;
+            const bool repl_d0 = ((sft.read & sft.repl) & 1u) != 0;
+            return Rec{fire, fire && !q.metaW, fire && q.metaW, fire && (k.nohit || repl_d0)};
         };
 
-        meta_ram.req.assign().reads(w_meta_req_v, w_meta_req_w, w_req_set_d0, w_wri_mask_d0,
-                                    w_wri_meta_d0) = [](auto src) {
-            auto [w_meta_req_v, w_meta_req_w, w_req_set_d0, w_wri_mask_d0, w_wri_meta_d0] = src;
+        meta_ram.req.assign().reads(w_ram_req, w_wri_d0) = [](auto src) {
+            auto [q, w] = src;
             typename MetaRam::ReqBits b;
-            b.write = w_meta_req_w;
-            b.addr = w_req_set_d0;
-            b.mask = w_wri_mask_d0;
-            b.data.fill(w_wri_meta_d0);
-            return Valid<typename MetaRam::ReqBits>{w_meta_req_v, b};
+            b.write = q.metaW;
+            b.addr = w.set;
+            b.mask = w.mask;
+            b.data.fill(w.meta);
+            return Valid<typename MetaRam::ReqBits>{q.metaV, b};
         };
-        tag_ram.req.assign().reads(w_tag_req_v, w_tag_req_w, w_req_set_d0, w_wri_mask_d0,
-                                   w_wr_direct, req_sft, write) = [](auto src) {
-            auto [w_tag_req_v, w_tag_req_w, w_req_set_d0, w_wri_mask_d0, w_wr_direct, req_sft,
-                  write] = src;
+        tag_ram.req.assign().reads(w_ram_req, w_wri_d0, w_wr_kind, sft, write) = [](auto src) {
+            auto [q, w, k, sft, write] = src;
             typename TagRam::ReqBits b;
-            b.write = w_tag_req_w;
-            b.addr = w_req_set_d0;
-            b.mask = w_wri_mask_d0;  // direct→write.wayOH / repl_d0→selWayOHReg_d4，同源
-            const uint32_t tag = w_wr_direct ? static_cast<uint32_t>(tagOf(write.bits.addr))
-                                             : static_cast<uint32_t>(tagOf(req_sft[0].addr));
+            b.write = q.tagW;
+            b.addr = w.set;
+            b.mask = w.mask;  // direct→write.wayOH / repl_d0→selWayOHReg_d4，同源
+            const uint32_t tag = k.direct ? static_cast<uint32_t>(tagOf(write.bits.addr))
+                                          : static_cast<uint32_t>(tagOf(sft.req[0].addr));
             b.data.fill(tag);
-            return Valid<typename TagRam::ReqBits>{w_tag_req_v, b};
+            return Valid<typename TagRam::ReqBits>{q.tagV, b};
         };
 
-        repl_ram.rreq.assign().reads(w_wr_any, w_read_d0, rst_done, write, read) = [](auto src) {
-            auto [w_wr_any, w_read_d0, rst_done, write, read] = src;
+        repl_ram.rreq.assign().reads(w_wr_fire, w_read_d0, rst_done, write, read) = [](auto src) {
+            auto [w_wr_fire, w_read_d0, rst_done, write, read] = src;
             const uint32_t set = write.valid ? setOf(write.bits.addr) : setOf(read.bits.addr);
-            return Valid<uint32_t>{(w_wr_any || w_read_d0) && rst_done, set};
+            return Valid<uint32_t>{(w_wr_fire || w_read_d0) && rst_done, set};
         };
 
         // d4：repl 写回（写类触 PLRU / 分配写回 / 读命中触 PLRU）
-        w_wreq_v.assign().reads(sft_read, sft_write, sft_repl, read_hit_d4) = [](auto src) {
-            auto [sft_read, sft_write, sft_repl, read_hit_d4] = src;
-            const bool wriUpdRepl = ((sft_write >> 0) & 1u) != 0 && ((sft_repl >> 0) & 1u) == 0;
-            const bool updTagMeta = ((sft_read & sft_repl) & 1u) != 0;
-            const bool readHitUpd = ((sft_read >> 0) & 1u) != 0 && read_hit_d4;
-            return wriUpdRepl || updTagMeta || readHitUpd;
+        w_wreq.assign().reads(sft, d4, repl_ram.wreq_rdy) = [](auto src) {
+            auto [sft, d4, wreq_rdy] = src;
+            const bool wriUpdRepl = ((sft.write >> 0) & 1u) != 0 && ((sft.repl >> 0) & 1u) == 0;
+            const bool updTagMeta = ((sft.read & sft.repl) & 1u) != 0;
+            const bool readHitUpd = ((sft.read >> 0) & 1u) != 0 && d4.readHit;
+            const bool v = wriUpdRepl || updTagMeta || readHitUpd;
+            return Wreq{v, v && wreq_rdy};
         };
-        w_wreq_fire.assign().reads(w_wreq_v, repl_ram.wreq_rdy) = [](auto src) {
-            auto [w_wreq_v, repl_ram_wreq_rdy] = src;
-            return w_wreq_v && repl_ram_wreq_rdy;
-        };
-        repl_ram.wreq.assign().reads(w_wreq_v, req_sft, new_repl_mes_d4) = [](auto src) {
-            auto [w_wreq_v, req_sft, new_repl_mes_d4] = src;
+        repl_ram.wreq.assign().reads(w_wreq, sft, d4) = [](auto src) {
+            auto [wq, sft, d4] = src;
             typename ReplRam::WrBits b;
-            b.addr = setOf(req_sft[0].addr);
-            b.data[0] = new_repl_mes_d4;
-            return Valid<typename ReplRam::WrBits>{w_wreq_v, b};
+            b.addr = setOf(sft.req[0].addr);
+            b.data[0] = d4.newReplMes;
+            return Valid<typename ReplRam::WrBits>{wq.v, b};
         };
 
         // 复位完成：三个 SRAM ready 同拍为真后锁存
@@ -350,164 +371,108 @@ private:
         };
 
         // 响应输出（d4）
-        resp.assign().reads(sft_read, resp_d4) = [](auto src) {
-            auto [sft_read, resp_d4] = src;
-            return Valid<DirResp>{((sft_read >> 0) & 1u) != 0, resp_d4};
+        resp.assign().reads(sft, d4) = [](auto src) {
+            auto [sft, d4] = src;
+            return Valid<DirResp>{((sft.read >> 0) & 1u) != 0, d4.resp};
         };
     }
 
     // tag req 掩码与 meta 同源（direct→write.wayOH / repl_d0→selWayOHReg_d4）
     void registerD2() {
-        w_set_d2.assign().reads(req_sft) = [](auto src) {
-            auto [req_sft] = src;
-            return setOf(req_sft[2].addr);
+        w_set_d2.assign().reads(sft) = [](auto src) {
+            auto [sft] = src;
+            return setOf(sft.req[2].addr);
         };
-        w_lock_way_d2.assign().reads(lock_tab, w_set_d2) = [](auto src) {
-            auto [lock_tab, w_set_d2] = src;
-            uint32_t v = 0;
+        w_lock_rsv_d2.assign().reads(lock_tab, rsv_tab, w_set_d2) = [](auto src) {
+            auto [lock_tab, rsv_tab, w_set_d2] = src;
+            uint32_t lv = 0, rv = 0;
             for (const auto& e : lock_tab)
-                if (e.valid && e.set == w_set_d2) v |= (1u << e.way);
-            return static_cast<uint16_t>(v);
-        };
-        w_rsv_way_d2.assign().reads(rsv_tab, w_set_d2) = [](auto src) {
-            auto [rsv_tab, w_set_d2] = src;
-            uint32_t v = 0;
+                if (e.valid && e.set == w_set_d2) lv |= (1u << e.way);
             for (const auto& e : rsv_tab)
-                if (e.valid && e.set == w_set_d2) v |= (1u << e.way);
-            return static_cast<uint16_t>(v);
+                if (e.valid && e.set == w_set_d2) rv |= (1u << e.way);
+            return LockRsv{static_cast<uint16_t>(lv), static_cast<uint16_t>(rv)};
         };
-        w_use_way_d2.assign().reads(w_lock_way_d2, w_rsv_way_d2, w_pend_alloc_d3, w_set_d3,
-                                    w_set_d2, w_sel_way_oh_d3) = [](auto src) {
-            auto [w_lock_way_d2, w_rsv_way_d2, w_pend_alloc_d3, w_set_d3, w_set_d2,
-                  w_sel_way_oh_d3] = src;
-            const bool pend = w_pend_alloc_d3 && (w_set_d3 == w_set_d2);
-            return static_cast<uint16_t>(w_lock_way_d2 | w_rsv_way_d2 |
-                                         (pend ? w_sel_way_oh_d3 : 0));
+        w_use_way_d2.assign().reads(w_lock_rsv_d2, w_pend_d3, w_set_d3, w_set_d2,
+                                    w_sel_way_d3) = [](auto src) {
+            auto [lr, pend, w_set_d3, w_set_d2, sel] = src;
+            const bool p = pend.pendAlloc && (w_set_d3 == w_set_d2);
+            return static_cast<uint16_t>(lr.lock | lr.rsv | (p ? sel.wayOH : 0));
         };
-        w_match_d2_d4.assign().reads(req_sft, w_set_d2, w_wreq_fire) = [](auto src) {
-            auto [req_sft, w_set_d2, w_wreq_fire] = src;
-            return w_wreq_fire && (setOf(req_sft[0].addr) == w_set_d2);
+        w_match.assign().reads(sft, w_set_d2, w_wreq) = [](auto src) {
+            auto [sft, w_set_d2, wq] = src;
+            return Match{wq.fire && (setOf(sft.req[0].addr) == w_set_d2),
+                         wq.fire && (setOf(sft.req[0].addr) == setOf(sft.req[3].addr))};
         };
-        w_match_d1_d4.assign().reads(req_sft, w_wreq_fire) = [](auto src) {
-            auto [req_sft, w_wreq_fire] = src;
-            return w_wreq_fire && (setOf(req_sft[0].addr) == setOf(req_sft[3].addr));
-        };
-        w_repl_mes_d2.assign().reads(w_match_d2_d4, new_repl_mes_d4, bp_d1_d4, bp_mes_d4,
-                                     repl_ram.rresp) = [](auto src) {
-            auto [w_match_d2_d4, new_repl_mes_d4, bp_d1_d4, bp_mes_d4, repl_rresp] = src;
-            if (w_match_d2_d4) return new_repl_mes_d4;
-            if (bp_d1_d4) return bp_mes_d4;
+        w_repl_mes_d2.assign().reads(w_match, d4, bp, repl_ram.rresp) = [](auto src) {
+            auto [m, d4, bp, repl_rresp] = src;
+            if (m.d2d4) return d4.newReplMes;
+            if (bp.d1d4) return bp.mes;
             return repl_rresp.bits.data[0];
-        };
-        w_repl_way_d2.assign().reads(w_repl_mes_d2) = [](auto src) {
-            auto [w_repl_mes_d2] = src;
-            return static_cast<uint8_t>(plruReplaceWay(w_repl_mes_d2, kWays));
-        };
-        w_unuse_way_d2.assign().reads(w_use_way_d2) = [](auto src) {
-            auto [w_use_way_d2] = src;
-            return priorityEnc(~w_use_way_d2 & 0xFFFFu);
-        };
-        w_sel_is_using_d2.assign().reads(w_use_way_d2, w_repl_way_d2) = [](auto src) {
-            auto [w_use_way_d2, w_repl_way_d2] = src;
-            return ((w_use_way_d2 >> w_repl_way_d2) & 1u) != 0;
         };
     }
 
     void registerD3() {
-        w_set_d3.assign().reads(req_sft) = [](auto src) {
-            auto [req_sft] = src;
-            return setOf(req_sft[1].addr);
+        w_set_d3.assign().reads(sft) = [](auto src) {
+            auto [sft] = src;
+            return setOf(sft.req[1].addr);
         };
-        w_hit_vec_d3.assign().reads(tag_ram.resp, meta_ram.resp, req_sft) = [](auto src) {
-            auto [tag_resp, meta_resp, req_sft] = src;
-            const uint32_t tag = static_cast<uint32_t>(tagOf(req_sft[1].addr));
+        w_hit_vec_d3.assign().reads(tag_ram.resp, meta_ram.resp, sft) = [](auto src) {
+            auto [tag_resp, meta_resp, sft] = src;
+            const uint32_t tag = static_cast<uint32_t>(tagOf(sft.req[1].addr));
             uint32_t v = 0;
             for (uint32_t w = 0; w < kWays; ++w)
                 if (tag_resp.bits.data[w] == tag && meta_resp.bits.data[w] != 0) v |= (1u << w);
             return static_cast<uint16_t>(v);
         };
-        w_hit_d3.assign().reads(w_hit_vec_d3) = [](auto src) {
-            auto [w_hit_vec_d3] = src;
-            return w_hit_vec_d3 != 0;
-        };
-        w_invalid_vec_d3.assign().reads(meta_ram.resp, use_way_d3) = [](auto src) {
-            auto [meta_resp, use_way_d3] = src;
+        w_invalid_vec_d3.assign().reads(meta_ram.resp, d3) = [](auto src) {
+            auto [meta_resp, d3] = src;
             uint32_t v = 0;
             for (uint32_t w = 0; w < kWays; ++w)
-                if (meta_resp.bits.data[w] == 0 && ((use_way_d3 >> w) & 1u) == 0) v |= (1u << w);
+                if (meta_resp.bits.data[w] == 0 && ((d3.useWay >> w) & 1u) == 0) v |= (1u << w);
             return static_cast<uint16_t>(v);
         };
-        w_has_invalid_d3.assign().reads(w_invalid_vec_d3) = [](auto src) {
-            auto [w_invalid_vec_d3] = src;
-            return w_invalid_vec_d3 != 0;
+        w_hit_d3.assign().reads(w_hit_vec_d3, w_invalid_vec_d3, sft) = [](auto src) {
+            auto [w_hit_vec_d3, w_invalid_vec_d3, sft] = src;
+            const bool hit = w_hit_vec_d3 != 0;
+            return HitD3{hit, w_invalid_vec_d3 != 0, ((sft.read >> 1) & 1u) != 0 && hit};
         };
-        w_read_hit_d3.assign().reads(sft_read, w_hit_d3) = [](auto src) {
-            auto [sft_read, w_hit_d3] = src;
-            return ((sft_read >> 1) & 1u) != 0 && w_hit_d3;
+        w_sel_way_d3.assign().reads(w_hit_d3, w_hit_vec_d3, w_invalid_vec_d3, d3) = [](auto src) {
+            auto [h, w_hit_vec_d3, w_invalid_vec_d3, d3] = src;
+            uint8_t way;
+            if (h.hit) {
+                way = priorityEnc(w_hit_vec_d3);
+            } else if (h.hasInvalid) {
+                way = priorityEnc(w_invalid_vec_d3);
+            } else if (d3.selIsUsing) {
+                way = d3.unuseWay;
+            } else {
+                way = d3.replWay;
+            }
+            return SelWay{way, static_cast<uint16_t>(1u << way)};
         };
-        w_sel_way_d3.assign().reads(w_hit_d3, w_hit_vec_d3, w_has_invalid_d3, w_invalid_vec_d3,
-                                    sel_is_using_d3, unuse_way_d3, repl_way_d3) = [](auto src) {
-            auto [w_hit_d3, w_hit_vec_d3, w_has_invalid_d3, w_invalid_vec_d3, sel_is_using_d3,
-                  unuse_way_d3, repl_way_d3] = src;
-            if (w_hit_d3) return priorityEnc(w_hit_vec_d3);
-            if (w_has_invalid_d3) return priorityEnc(w_invalid_vec_d3);
-            if (sel_is_using_d3) return unuse_way_d3;
-            return repl_way_d3;
-        };
-        w_sel_way_oh_d3.assign().reads(w_sel_way_d3) = [](auto src) {
-            auto [w_sel_way_d3] = src;
-            return static_cast<uint16_t>(1u << w_sel_way_d3);
-        };
-        w_new_repl_mes_d3.assign().reads(repl_mes_d3, sft_write, sft_repl, req_sft,
-                                         w_sel_way_oh_d3) = [](auto src) {
-            auto [repl_mes_d3, sft_write, sft_repl, req_sft, w_sel_way_oh_d3] = src;
-            const bool wriUpdRepl = ((sft_write >> 1) & 1u) != 0 && ((sft_repl >> 1) & 1u) == 0;
-            const uint32_t oh = wriUpdRepl ? req_sft[1].wriWayOH : w_sel_way_oh_d3;
-            return static_cast<uint16_t>(plruNextState(repl_mes_d3, ohToUInt(oh), kWays));
-        };
-        w_resp_d3.assign().reads(tag_ram.resp, meta_ram.resp, req_sft, w_set_d3, w_sel_way_d3,
-                                 w_sel_way_oh_d3, w_hit_d3, sft_repl, cfg_bank_id,
-                                 dir_bank) = [](auto src) {
-            auto [tag_resp, meta_resp, req_sft, w_set_d3, w_sel_way_d3, w_sel_way_oh_d3, w_hit_d3,
-                  sft_repl, cfg_bank_id, dir_bank] = src;
-            DirResp r;
-            r.addr = catAddr(cfg_bank_id, tag_resp.bits.data[w_sel_way_d3], w_set_d3, kSetBits,
-                             dir_bank);
-            r.wayOH = w_sel_way_oh_d3;
-            r.meta = meta_resp.bits.data[w_sel_way_d3];
-            r.hnTxnID = req_sft[1].hnIdx & 0x7Fu;
-            r.hit = w_hit_d3;
-            r.toRepl = ((sft_repl >> 1) & 1u) != 0;
-            return r;
-        };
-        w_read_d3.assign().reads(sft_read, sft_write, sft_repl) = [](auto src) {
-            auto [sft_read, sft_write, sft_repl] = src;
-            return ((sft_read >> 1) & 1u) != 0 && ((sft_write >> 1) & 1u) == 0 &&
-                   ((sft_repl >> 1) & 1u) == 0;
-        };
-        w_pend_alloc_d3.assign().reads(w_read_d3, w_hit_d3, w_has_invalid_d3) = [](auto src) {
-            auto [w_read_d3, w_hit_d3, w_has_invalid_d3] = src;
-            return Cfg::kHasReservation && w_read_d3 && !w_hit_d3 && w_has_invalid_d3;
+        w_pend_d3.assign().reads(sft, w_hit_d3) = [](auto src) {
+            auto [sft, h] = src;
+            const bool rd = ((sft.read >> 1) & 1u) != 0 && ((sft.write >> 1) & 1u) == 0 &&
+                            ((sft.repl >> 1) & 1u) == 0;
+            return PendD3{rd, Cfg::kHasReservation && rd && !h.hit && h.hasInvalid};
         };
     }
 
     void registerLocks() {
-        w_lock_next.assign().reads(lock_tab, unlock, dir_bank, sft_read, sft_write, sft_repl,
-                                   req_sft, w_set_d3, w_sel_way_d3, w_read_d3,
-                                   w_hit_d3) = [](auto src) {
-            auto [lock_tab, unlock, dir_bank, sft_read, sft_write, sft_repl, req_sft, w_set_d3,
-                  w_sel_way_d3, w_read_d3, w_hit_d3] = src;
-            const bool reqD3 = (((sft_read | sft_write) >> 1) & 1u) != 0;
-            const bool readReplD3 = ((sft_read >> 1) & 1u) != 0 && ((sft_write >> 1) & 1u) == 0 &&
-                                    ((sft_repl >> 1) & 1u) != 0;
+        w_lock_next.assign().reads(lock_tab, unlock, dir_bank, sft, w_set_d3, w_sel_way_d3,
+                                   w_pend_d3, w_hit_d3) = [](auto src) {
+            auto [lock_tab, unlock, dir_bank, sft, w_set_d3, sel, pend, h] = src;
+            const bool reqD3 = (((sft.read | sft.write) >> 1) & 1u) != 0;
+            const bool readReplD3 = ((sft.read >> 1) & 1u) != 0 && ((sft.write >> 1) & 1u) == 0 &&
+                                    ((sft.repl >> 1) & 1u) != 0;
             auto next = lock_tab;
             for (uint32_t i = 0; i < kPosSets; ++i) {
                 for (uint32_t j = 0; j < kLockWays; ++j) {
                     const uint8_t hn = hnIdxOf(dir_bank, i, j);
                     auto& e = next[i * kLockWays + j];
                     const bool unlHit = unlock.valid && unlock.bits == hn;
-                    const bool reqHit = reqD3 && req_sft[1].hnIdx == hn;
-                    const bool setEvt = reqHit && ((w_read_d3 && w_hit_d3) || readReplD3);
+                    const bool reqHit = reqD3 && sft.req[1].hnIdx == hn;
+                    const bool setEvt = reqHit && ((pend.read && h.hit) || readReplD3);
                     if (unlHit) {
                         e.valid = false;
                     } else if (setEvt) {
@@ -516,138 +481,108 @@ private:
                         // → 无条件覆盖（已锁项被重写；RTL 另有 HAssert 假定不发生）
                         e.valid = true;
                         e.set = w_set_d3;
-                        e.way = w_sel_way_d3;
+                        e.way = sel.way;
                     }
                 }
             }
             return next;
         };
         if constexpr (Cfg::kHasReservation) {
-            w_rsv_next.assign().reads(rsv_tab, unlock, dir_bank, w_wr_direct, write, req_sft,
-                                      w_set_d3, w_sel_way_d3, w_pend_alloc_d3) = [](auto src) {
-                auto [rsv_tab, unlock, dir_bank, w_wr_direct, write, req_sft, w_set_d3,
-                      w_sel_way_d3, w_pend_alloc_d3] = src;
+            w_rsv_next.assign().reads(rsv_tab, unlock, dir_bank, w_wr_kind, write, sft, w_set_d3,
+                                      w_sel_way_d3, w_pend_d3) = [](auto src) {
+                auto [rsv_tab, unlock, dir_bank, k, write, sft, w_set_d3, sel, pend] = src;
                 auto next = rsv_tab;
                 for (uint32_t i = 0; i < kPosSets; ++i) {
                     for (uint32_t j = 0; j < kLockWays; ++j) {
                         const uint8_t hn = hnIdxOf(dir_bank, i, j);
                         auto& e = next[i * kLockWays + j];
-                        const bool clr = (w_wr_direct && write.bits.hnIdx == hn) ||
+                        const bool clr = (k.direct && write.bits.hnIdx == hn) ||
                                          (unlock.valid && unlock.bits == hn);
-                        const bool reserve = w_pend_alloc_d3 && req_sft[1].hnIdx == hn;
+                        const bool reserve = pend.pendAlloc && sft.req[1].hnIdx == hn;
                         if (clr) {
                             e.valid = false;
                         } else if (reserve) {
                             e.valid = true;
                             e.set = w_set_d3;
-                            e.way = w_sel_way_d3;
+                            e.way = sel.way;
                         }
                     }
                 }
                 return next;
             };
-            rsv_tab.update().on(posedge(clk)).reads(rsv_tab, w_rsv_next, w_pend_alloc_d3,
-                                                    w_wr_direct, unlock) = [](auto src) {
-                auto [rsv_tab, w_rsv_next, w_pend_alloc_d3, w_wr_direct, unlock] = src;
-                return (w_pend_alloc_d3 || w_wr_direct || unlock.valid) ? w_rsv_next : rsv_tab;
+            rsv_tab.update().on(posedge(clk)).reads(rsv_tab, w_rsv_next, w_pend_d3, w_wr_kind,
+                                                    unlock) = [](auto src) {
+                auto [rsv_tab, w_rsv_next, pend, k, unlock] = src;
+                return (pend.pendAlloc || k.direct || unlock.valid) ? w_rsv_next : rsv_tab;
             };
         } else {
             w_rsv_next = rsv_tab;  // llc：恒零占位（RTL 为 WireInit 0）
         }
-        lock_tab.update().on(posedge(clk)).reads(lock_tab, w_lock_next, sft_read, sft_write,
+        lock_tab.update().on(posedge(clk)).reads(lock_tab, w_lock_next, sft,
                                                  unlock) = [](auto src) {
-            auto [lock_tab, w_lock_next, sft_read, sft_write, unlock] = src;
-            const bool reqD3 = (((sft_read | sft_write) >> 1) & 1u) != 0;
+            auto [lock_tab, w_lock_next, sft, unlock] = src;
+            const bool reqD3 = (((sft.read | sft.write) >> 1) & 1u) != 0;
             return (reqD3 || unlock.valid) ? w_lock_next : lock_tab;
         };
     }
 
     void registerState() {
-        sft_read.update().on(posedge(clk)).reads(sft_read, w_rec_read) = [](auto src) {
-            auto [sft_read, w_rec_read] = src;
-            return static_cast<uint8_t>((w_rec_read << 3) | (sft_read >> 1));
-        };
-        sft_write.update().on(posedge(clk)).reads(sft_write, w_rec_write) = [](auto src) {
-            auto [sft_write, w_rec_write] = src;
-            return static_cast<uint8_t>((w_rec_write << 3) | (sft_write >> 1));
-        };
-        sft_repl.update().on(posedge(clk)).reads(sft_repl, w_rec_repl) = [](auto src) {
-            auto [sft_repl, w_rec_repl] = src;
-            return static_cast<uint8_t>((w_rec_repl << 3) | (sft_repl >> 1));
-        };
-        req_sft.update().on(posedge(clk)).reads(req_sft, sft_read, sft_write, w_wr_fire, w_read_d0,
-                                                write, read) = [](auto src) {
-            auto [req_sft, sft_read, sft_write, w_wr_fire, w_read_d0, write, read] = src;
-            auto next = req_sft;
+        // 移位流水：三条移位器 + req 载荷同拍更新（原 4 条 update）
+        sft.update().on(posedge(clk)).reads(sft, w_rec, w_wr_fire, w_read_d0, write,
+                                            read) = [](auto src) {
+            auto [sft, rec, w_wr_fire, w_read_d0, write, read] = src;
+            Sft next;
+            next.read = static_cast<uint8_t>((rec.read << 3) | (sft.read >> 1));
+            next.write = static_cast<uint8_t>((rec.write << 3) | (sft.write >> 1));
+            next.repl = static_cast<uint8_t>((rec.repl << 3) | (sft.repl >> 1));
+            next.req = sft.req;
             if (w_wr_fire || w_read_d0) {
-                next[3].addr = write.valid ? write.bits.addr : read.bits.addr;
-                next[3].hnIdx = write.valid ? write.bits.hnIdx : read.bits.hnIdx;
-                next[3].wriWayOH = write.valid ? write.bits.wayOH : 0;
-                next[3].meta = write.valid ? write.bits.meta : 0;
+                next.req[3].addr = write.valid ? write.bits.addr : read.bits.addr;
+                next.req[3].hnIdx = write.valid ? write.bits.hnIdx : read.bits.hnIdx;
+                next.req[3].wriWayOH = write.valid ? write.bits.wayOH : 0;
+                next.req[3].meta = write.valid ? write.bits.meta : 0;
             }
-            if (((sft_read | sft_write) != 0) || w_wr_fire || w_read_d0)
-                for (uint32_t i = 1; i < 4; ++i) next[i - 1] = next[i];
+            if (((sft.read | sft.write) != 0) || w_wr_fire || w_read_d0)
+                for (uint32_t i = 1; i < 4; ++i) next.req[i - 1] = next.req[i];
             return next;
         };
-        // d2→d3
-        const auto enD2 = [](uint8_t r, uint8_t w) { return (((r | w) >> 2) & 1u) != 0; };
-        repl_mes_d3.update().on(posedge(clk)).reads(sft_read, sft_write, w_repl_mes_d2,
-                                                    repl_mes_d3) = [=](auto src) {
-            auto [sft_read, sft_write, w_repl_mes_d2, repl_mes_d3] = src;
-            return enD2(sft_read, sft_write) ? w_repl_mes_d2 : repl_mes_d3;
-        };
-        use_way_d3.update().on(posedge(clk)).reads(sft_read, sft_write, w_use_way_d2, use_way_d3) =
-            [=](auto src) {
-                auto [sft_read, sft_write, w_use_way_d2, use_way_d3] = src;
-                return enD2(sft_read, sft_write) ? w_use_way_d2 : use_way_d3;
-            };
-        unuse_way_d3.update().on(posedge(clk)).reads(sft_read, sft_write, w_unuse_way_d2,
-                                                     unuse_way_d3) = [=](auto src) {
-            auto [sft_read, sft_write, w_unuse_way_d2, unuse_way_d3] = src;
-            return enD2(sft_read, sft_write) ? w_unuse_way_d2 : unuse_way_d3;
-        };
-        repl_way_d3.update().on(posedge(clk)).reads(sft_read, sft_write, w_repl_way_d2,
-                                                    repl_way_d3) = [=](auto src) {
-            auto [sft_read, sft_write, w_repl_way_d2, repl_way_d3] = src;
-            return enD2(sft_read, sft_write) ? w_repl_way_d2 : repl_way_d3;
-        };
-        sel_is_using_d3.update().on(posedge(clk)).reads(sft_read, sft_write, w_sel_is_using_d2,
-                                                        sel_is_using_d3) = [=](auto src) {
-            auto [sft_read, sft_write, w_sel_is_using_d2, sel_is_using_d3] = src;
-            return enD2(sft_read, sft_write) ? w_sel_is_using_d2 : sel_is_using_d3;
+        // d2→d3（en = req(D2)）；replWay/unuseWay/selIsUsing 由 mes/useWay 单链
+        // 派生（原 w_repl_way_d2/w_unuse_way_d2/w_sel_is_using_d2），内联
+        d3.update().on(posedge(clk)).reads(sft, d3, w_repl_mes_d2, w_use_way_d2) = [](auto src) {
+            auto [sft, d3, w_repl_mes_d2, w_use_way_d2] = src;
+            const bool en = (((sft.read | sft.write) >> 2) & 1u) != 0;
+            if (!en) return d3;
+            const uint8_t replWay = static_cast<uint8_t>(plruReplaceWay(w_repl_mes_d2, kWays));
+            const uint8_t unuseWay = priorityEnc(~w_use_way_d2 & 0xFFFFu);
+            return D3{w_repl_mes_d2, w_use_way_d2, unuseWay, replWay,
+                      ((w_use_way_d2 >> replWay) & 1u) != 0};
         };
         // 前递寄存
-        bp_d1_d4.update().on(posedge(clk)).reads(w_match_d1_d4) = [](auto src) {
-            auto [w_match_d1_d4] = src;
-            return w_match_d1_d4;
+        bp.update().on(posedge(clk)).reads(w_match, d4, bp) = [](auto src) {
+            auto [m, d4, bp] = src;
+            return Bp{m.d1d4, m.d1d4 ? d4.newReplMes : bp.mes};
         };
-        bp_mes_d4.update().on(posedge(clk)).reads(w_match_d1_d4, new_repl_mes_d4, bp_mes_d4) =
-            [](auto src) {
-                auto [w_match_d1_d4, new_repl_mes_d4, bp_mes_d4] = src;
-                return w_match_d1_d4 ? new_repl_mes_d4 : bp_mes_d4;
-            };
-        // d3→d4
-        const auto enD3 = [](uint8_t r, uint8_t w) { return (((r | w) >> 1) & 1u) != 0; };
-        read_hit_d4.update().on(posedge(clk)).reads(sft_read, sft_write, w_read_hit_d3,
-                                                    read_hit_d4) = [=](auto src) {
-            auto [sft_read, sft_write, w_read_hit_d3, read_hit_d4] = src;
-            return enD3(sft_read, sft_write) ? w_read_hit_d3 : read_hit_d4;
+        // d3→d4（en = req(D3)）；newReplMes/resp 组合链（原 w_new_repl_mes_d3/
+        // w_resp_d3）仅在此被采样，内联
+        d4.update().on(posedge(clk)).reads(sft, d4, d3, tag_ram.resp, meta_ram.resp, w_set_d3,
+                                           w_sel_way_d3, w_hit_d3, cfg_bank_id,
+                                           dir_bank) = [](auto src) {
+            auto [sft, d4, d3, tag_resp, meta_resp, w_set_d3, sel, h, cfg_bank_id, dir_bank] = src;
+            const bool en = (((sft.read | sft.write) >> 1) & 1u) != 0;
+            if (!en) return d4;
+            const bool wriUpdRepl = ((sft.write >> 1) & 1u) != 0 && ((sft.repl >> 1) & 1u) == 0;
+            const uint32_t oh = wriUpdRepl ? sft.req[1].wriWayOH : sel.wayOH;
+            DirResp r;
+            r.addr = catAddr(cfg_bank_id, tag_resp.bits.data[sel.way], w_set_d3, kSetBits,
+                             dir_bank);
+            r.wayOH = sel.wayOH;
+            r.meta = meta_resp.bits.data[sel.way];
+            r.hnTxnID = sft.req[1].hnIdx & 0x7Fu;
+            r.hit = h.hit;
+            r.toRepl = ((sft.repl >> 1) & 1u) != 0;
+            return D4{h.readHit, sel.wayOH,
+                      static_cast<uint16_t>(plruNextState(d3.replMes, ohToUInt(oh), kWays)), r};
         };
-        sel_way_oh_d4.update().on(posedge(clk)).reads(sft_read, sft_write, w_sel_way_oh_d3,
-                                                      sel_way_oh_d4) = [=](auto src) {
-            auto [sft_read, sft_write, w_sel_way_oh_d3, sel_way_oh_d4] = src;
-            return enD3(sft_read, sft_write) ? w_sel_way_oh_d3 : sel_way_oh_d4;
-        };
-        new_repl_mes_d4.update().on(posedge(clk)).reads(sft_read, sft_write, w_new_repl_mes_d3,
-                                                        new_repl_mes_d4) = [=](auto src) {
-            auto [sft_read, sft_write, w_new_repl_mes_d3, new_repl_mes_d4] = src;
-            return enD3(sft_read, sft_write) ? w_new_repl_mes_d3 : new_repl_mes_d4;
-        };
-        resp_d4.update().on(posedge(clk)).reads(sft_read, sft_write, w_resp_d3, resp_d4) =
-            [=](auto src) {
-                auto [sft_read, sft_write, w_resp_d3, resp_d4] = src;
-                return enD3(sft_read, sft_write) ? w_resp_d3 : resp_d4;
-            };
     }
 };
 

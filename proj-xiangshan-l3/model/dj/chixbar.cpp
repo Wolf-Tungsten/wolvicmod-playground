@@ -40,20 +40,14 @@ ChiXbar::ChiXbar() {
         o.bits.src_id = 0;
         return o;
     };
-    tx_req_in_rdy.assign().reads(tx_req_out_rdy) = [](auto src) {
-        auto [rdy] = src;
-        return rdy;
-    };
+    tx_req_in_rdy = tx_req_out_rdy;  // in.ready := out.ready（恒等连接，零成本）
     tx_snp_out.assign().reads(tx_snp_in) = [](auto src) {
         auto [in] = src;
         VSnp o{in.valid, in.bits};
         o.bits.src_id = 0;
         return o;
     };
-    tx_snp_in_rdy.assign().reads(tx_snp_out_rdy) = [](auto src) {
-        auto [rdy] = src;
-        return rdy;
-    };
+    tx_snp_in_rdy = tx_snp_out_rdy;
     tx_rsp_out.assign().reads(tx_rsp_in, c_busy) = [](auto src) {
         auto [in, c_busy] = src;
         VRsp o{in.valid, in.bits};
@@ -61,10 +55,7 @@ ChiXbar::ChiXbar() {
         o.bits.c_busy = c_busy & 7;
         return o;
     };
-    tx_rsp_in_rdy.assign().reads(tx_rsp_out_rdy) = [](auto src) {
-        auto [rdy] = src;
-        return rdy;
-    };
+    tx_rsp_in_rdy = tx_rsp_out_rdy;
     tx_dat_out.assign().reads(tx_dat_in, c_busy) = [](auto src) {
         auto [in, c_busy] = src;
         VDat o{in.valid, in.bits};
@@ -72,10 +63,7 @@ ChiXbar::ChiXbar() {
         o.bits.c_busy = c_busy & 7;
         return o;
     };
-    tx_dat_in_rdy.assign().reads(tx_dat_out_rdy) = [](auto src) {
-        auto [rdy] = src;
-        return rdy;
-    };
+    tx_dat_in_rdy = tx_dat_out_rdy;
 }
 
 }  // namespace zj::dj

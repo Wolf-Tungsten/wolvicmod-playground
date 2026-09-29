@@ -829,6 +829,116 @@ BeatStorage（8×2）。合计 profile 占比 ~12.5%。
 循环（769 次重复 grep、零编辑），被人工中止后由主代理接手——与任务
 本身无关。
 
+## 19. 预制件拍平：Queue 一族融合 + ValidPipe/FastQueue 静止门控（2026-09-29）
+
+**动机**：§18 后的共栖 A/B 回放分层 profile（wolvic solo 全程，perf 符号
+按"宿主类"归因）显示引擎已收敛到 ~30%，最大单点变成预制件原语群
+~23.7%——其中 wolvicmod `Queue` 一族 10.6%（每个 2 深度队列 4 条 NBA
+update + 8 条组合 assign，逐拍派发+逐拍脏检测）、`ValidPipe` 3.4%
+（无门控，每拍整 StageArr 拷贝）、`FastQueue` 2.3%（同为无门控整状态
+拷贝）。引擎调度循环（`Module::eval`）18.2% 与脏检测簿记 ~12% 中的一
+部分也是这些多余 action 的派生开销。
+
+**改法**（端口/语义全部不变，chisel 状态机逐拍等价）：
+
+- **Queue 拍平**（wolvicmod `prefab/queue.h` 重写）：`Mem ram` + 三个
+  指针 reg 合并为单个 `REG(QState)`（ram 数组 + enq_ptr/deq_ptr/
+  maybe_full）；`w_empty/w_full/w_do_enq/w_do_deq/w_ptr_chg` 五条中间
+  wire 取消，空/满/fire 判断在消费点内联（共享一个 `static fire()`
+  帮助函数）；4 条 NBA update 融合为 1 条，并由新增 `w_chg =
+  do_enq || do_deq` 门控——静止拍 compute 与整状态提交全跳过。每实例
+  动作数 **12 → 5**（deq / enq_rdy / count / w_chg / update）。原 Mem
+  "写即脏"变为 REG 提交相等检测，同值写不再传播脏。
+- **ValidPipe 活性门**：新增 `w_live = enq.valid || ∃stage.valid` 门控
+  update——管线全空且入口静止时移位是恒等操作，整条 update 休眠。
+- **FastQueue 静止门**：新增 `w_chg = w_enq_fire || w_deq_fire` 门控
+  update（不 fire 时 next == st，FqState 整拷贝可省）。
+
+**结果**（孤立回放全程 316,748 拍，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 全程 loop | 对 RTL eval 比 |
+|---|---|---|---|
+| §18 终版 | 15.39s | 16.90s | 5.1× |
+| + 本轮 | **11.16s（-27.5%）** | **12.62s（-25.3%）** | **3.7×** |
+
+超出事前估计（-8~12%）：Queue 自身 compute 10.6% → 4.2%，并联动摊薄了
+派发循环与脏检测（action 总数下降）。层分布（perf 占比 ×墙钟）：
+预制件-wolvicmod 2.49s → 0.92s（-63%），Queue 子项 10.55% → 4.19%、
+ValidPipe 3.39% → 2.24%、FastQueue 2.28% → 1.07%。剩余热点前移为
+HNF 业务逻辑（Directory/Commit/TaskBuffer）与 VipArb（4.1%）。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉（两侧各 0 失配）；`REPLAY_AUDIT=1` 全程
+审计回放；wolvicmod ctest 17/17（含 Queue 黑盒单测 + 全元件 audit 巡
+查）；proj ctest 17/17（17.8s → 13.5s）；wolvicmod cosim 30 组；proj
+cosim 51 组。
+
+**产物**：perf 采样 `build/perf-ab-layers.data`（本轮前基线）、
+`build/perf-ab-flatq.data`（本轮后）；分层归因脚本
+`build/bucket_layers.py`（flat 报告 → 层/宿主类聚合，用法见文件头）。
+
+## 20. HNF 离散信号按行为语义合并：struct 化消灭独立 Wire/Reg（2026-09-29）
+
+**动机**：§19 后的层分布显示 HNF 业务逻辑升为最大桶（26.9%），其中大量
+成本不是算术本身，而是离散小信号的**每动作固定成本**（派发 + 读集打包
++ 脏检测）：directory.h 45 WIRE/18 REG、data.h 39/34、commit.h 30/8、
+frontend.h 24/11、replace.h 16/1。方针（与 §19 Queue 拍平同源）：**按
+行为语义把能合并的变量合并成 struct，尽量避免独立的 Wire/Reg**。
+
+**合并准则**：同沿更新、使能同源的 reg 并为一个 struct + 一条 update；
+同一组合链/读集高度重叠的 wire 并为 struct wire；单消费平凡中转线内联；
+读集不相交的不硬并（防误触发）；消费方是子模块端口恒等别名的不并
+（字段提取反而 +动作）；大载荷避免过触发，bool/小数组可放宽。
+
+**改法**（端口/层级/语义全部不变；样板由主代理先做、4 个并行子代理
+分模块推广）：
+
+- **BackendDecode×2**（commit.h/cpp，样板）：7 reg + 4 wire →
+  `St{decVal, mes, hnIdVal, hnId, decList, taskCode, cmtCode}` 1 reg +
+  1 条 update + 4 条输出 assign，两级流水译码查表全内联。
+- **DirectoryBase**（directory.h，llc 67→33 / sf 69→35 动作，全
+  Directory 272→136，-50%）：`Sft`（三移位器+req 载荷）、`D3`/`D4`
+  （d2→d3→d4 同使能流水寄存，d2 级中转线内联）、`Bp`、`WriD0`、
+  `RamReq`、`Rec`、`Match`、`SelWay` 等 12 组；`rst_done`/`lock_tab`/
+  `rsv_tab` 保留（使能各异/大数组）。
+- **data 组**（184→124 动作，-33%）：BeatStorage `St{双移位+rstDone}`
+  ×8 实例；DBIDPool `Rst`/`Cnt`；DataBuffer 26 update → 6（写口提交
+  8 reg→`WrReg`、读控制 4 reg→`RdCtl`、两级流水 12 reg→`ChiPipe`/
+  `DsPipe`）；DataCM `TaskD`/`Flags`/`Views`/`Sel` + 三条 rdy 数组
+  内联进 entries update。
+- **frontend 组**：Block 4 reg→`St` + 6 wire→`BlkW`（15→7 动作）；
+  FrontendDecode 3 reg→`St` + 6 wire→`DecW`（15→6）。
+- **replace + 收尾**：ReplaceCM `DirHits`/`ReqPosFeed` 合并 +
+  `w_req_pos_out` 中转消除 + entries update 读集瘦身（27→17 reads，
+  输出数组 valid ≡ state 由 switch 分支隐含）；ChiXbar 4 条 rdy 直通
+  改恒等别名（14→10）；QosRRArb 删 `w_has_high` 中转（6→5 ×27 实例）；
+  backend 无可并对象跳过。
+- **白盒窥探点同步**（§18 先例）：`verify/cosim/harness_dir.cpp`、
+  `harness_db.cpp`、`harness_frontend.cpp`；tests/ 只触端口零改动。
+
+**结果**（孤立回放全程，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 全程 loop | 对 RTL eval 比 |
+|---|---|---|---|
+| §19 终版 | 11.16s | 12.62s | 3.7× |
+| + 本轮 | **9.93s（-11.0%）** | **11.43s（-9.4%）** | **3.2×** |
+
+对 §18 终版（15.39s）两轮累计 **-35%**。层分布：HNF 桶 26.9% → 24.2%
+（墙钟 3.39s → 2.76s），其中 DirectoryBase 3.5% → 2.0%；引擎派发循环
+16.6% → 14.0%（action 总数下降的联动收益）。剩余热点：Commit
+（compute+commit 6.5%，112 项大数组逐拍提交——大数组按项脏位图是预
+留方向）、VipArb 4.8%、TaskBuffer 2.6%。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉；`REPLAY_AUDIT=1` 全程审计；proj ctest
+17/17（13.5s → 12.7s）；proj cosim 51 组（含三个改动的窥探点
+harness）。本轮无 wolvicmod 框架侧改动，wolvicmod ctest/cosim 沿用 §19
+结论。
+
+**产物**：perf 采样 `build/perf-ab-hnfmerge.data`（本轮后）；
+`build/perf-ab-flatq.data`（§19 后）、`build/perf-ab-layers.data`
+（§19 前基线）。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：

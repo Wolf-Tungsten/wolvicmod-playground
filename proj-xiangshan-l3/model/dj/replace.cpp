@@ -45,42 +45,34 @@ ReplaceCM::ReplaceCM() {
     task_rdy = alloc_arb.in_rdy;
     alloc_arb.out_rdy = w_alloc_rdy_all;
 
-    // ---- per-entry 命中（upd_pos_tag 与次态共用） ----
-    w_sf_resp_hit.assign().reads(entries, resp_dir_sf) = [](auto src) {
-        auto [entries, resp_dir_sf] = src;
-        RdyArrN o{};
-        for (uint32_t i = 0; i < kEntries; ++i)
-            o[i] = entries[i].state == replst::kWaitDir && resp_dir_sf.valid &&
-                   resp_dir_sf.bits.hnTxnID == entries[i].hnTxnID;
-        return o;
-    };
-    w_llc_resp_hit.assign().reads(entries, resp_dir_llc) = [](auto src) {
-        auto [entries, resp_dir_llc] = src;
-        RdyArrN o{};
-        for (uint32_t i = 0; i < kEntries; ++i)
-            o[i] = entries[i].state == replst::kWaitDir && resp_dir_llc.valid &&
-                   resp_dir_llc.bits.hnTxnID == entries[i].hnTxnID;
+    // ---- per-entry 命中（upd_pos_tag 与次态共用；sf/llc 两路读集重叠，并一路） ----
+    w_dir_hits.assign().reads(entries, resp_dir_sf, resp_dir_llc) = [](auto src) {
+        auto [entries, resp_dir_sf, resp_dir_llc] = src;
+        DirHits o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const bool waitDir = entries[i].state == replst::kWaitDir;
+            o.sf[i] = waitDir && resp_dir_sf.valid &&
+                      resp_dir_sf.bits.hnTxnID == entries[i].hnTxnID;
+            o.llc[i] = waitDir && resp_dir_llc.valid &&
+                       resp_dir_llc.bits.hnTxnID == entries[i].hnTxnID;
+        }
         return o;
     };
 
     // ---- per-entry 输出数组（直喂仲裁器/reqPoS 矩阵） ----
-    w_hn_txn_ids.assign().reads(entries) = [](auto src) {
+    // reqPoS 矩阵输入：选中 id + 请求载荷（同为 reads(entries) 提取，并一路）
+    w_req_pos_feed.assign().reads(entries) = [](auto src) {
         auto [entries] = src;
-        TxnIdArr o{};
-        for (uint32_t i = 0; i < kEntries; ++i) o[i] = entries[i].hnTxnID;
-        return o;
-    };
-    w_req_pos_in.assign().reads(entries) = [](auto src) {
-        auto [entries] = src;
-        ReqPosInArr o{};
+        ReqPosFeed o{};
         for (uint32_t i = 0; i < kEntries; ++i) {
             const ReplReg& e = entries[i];
+            o.ids[i] = e.hnTxnID;
             ReplReqPos r;
             const uint8_t db = hnIdxDirBank(e.hnTxnID);
             const uint8_t ps = hnIdxPosSet(e.hnTxnID);
             r.hnIdx = hnIdxOf(db, ps, 0);  // pos.way = DontCare
             r.channel = (e.wriSF && !e.dir.sf.hit && !e.directAllocSF) ? kChSnp : kChReq;
-            o[i] = Valid<ReplReqPos>{e.state == replst::kReqPos, r};
+            o.in[i] = Valid<ReplReqPos>{e.state == replst::kReqPos, r};
         }
         return o;
     };
@@ -103,17 +95,17 @@ ReplaceCM::ReplaceCM() {
         }
         return o;
     };
-    w_upd_tag_in.assign().reads(entries, w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf,
+    w_upd_tag_in.assign().reads(entries, w_dir_hits, resp_dir_sf,
                                 resp_dir_llc) = [](auto src) {
-        auto [entries, sf_hit, llc_hit, resp_dir_sf, resp_dir_llc] = src;
+        auto [entries, hits, resp_dir_sf, resp_dir_llc] = src;
         UpdTagInArr o{};
         for (uint32_t i = 0; i < kEntries; ++i) {
             const ReplReg& e = entries[i];
             UpdPosTag u;
-            u.addrVal = sf_hit[i] ? resp_dir_sf.bits.meta != 0 : resp_dir_llc.bits.meta != 0;
-            u.addr = sf_hit[i] ? resp_dir_sf.bits.addr : resp_dir_llc.bits.addr;
+            u.addrVal = hits.sf[i] ? resp_dir_sf.bits.meta != 0 : resp_dir_llc.bits.meta != 0;
+            u.addr = hits.sf[i] ? resp_dir_sf.bits.addr : resp_dir_llc.bits.addr;
             u.hnIdx = e.replHnTxnID & 0x7F;
-            o[i] = Valid<UpdPosTag>{sf_hit[i] || llc_hit[i], u};
+            o[i] = Valid<UpdPosTag>{hits.sf[i] || hits.llc[i], u};
         }
         return o;
     };
@@ -239,40 +231,44 @@ ReplaceCM::ReplaceCM() {
         for (uint32_t s = 0; s < 4; ++s) {
             const uint32_t m = b * 4 + s;
             auto& arb = req_pos_arbs[m];
-            arb.in.assign().reads(w_req_pos_in, w_hn_txn_ids) = [b, s](auto src) {
-                auto [in, ids] = src;
+            arb.in.assign().reads(w_req_pos_feed) = [b, s](auto src) {
+                auto [feed] = src;
                 ReqPosInArr a;
                 for (uint32_t i = 0; i < kEntries; ++i) {
-                    const bool hit = hnIdxDirBank(ids[i]) == b && hnIdxPosSet(ids[i]) == s;
-                    a[i].valid = in[i].valid && hit;
-                    a[i].bits = in[i].bits;
+                    const bool hit =
+                        hnIdxDirBank(feed.ids[i]) == b && hnIdxPosSet(feed.ids[i]) == s;
+                    a[i].valid = feed.in[i].valid && hit;
+                    a[i].bits = feed.in[i].bits;
                 }
                 return a;
             };
             arb.out_rdy = true;
         }
     }
-    combine(w_req_pos_out, req_pos_arbs,
-            [](ReqPosArbT& a) -> wolvicmod::Out<Valid<ReplReqPos>>& { return a.out; });
-    req_pos_vec.assign().reads(w_req_pos_out) = [](auto src) {
-        auto [outs] = src;
-        ReqPosArr r;
-        for (uint32_t b = 0; b < 2; ++b)
-            for (uint32_t s = 0; s < 4; ++s) r[b][s] = outs[b * 4 + s];
-        return r;
-    };
+    // 8 路仲裁输出直接 reshape 为 (dirBank × posSet)（原 w_req_pos_out 中转线消除）
+    req_pos_vec.assign().reads(req_pos_arbs[0].out, req_pos_arbs[1].out, req_pos_arbs[2].out,
+                               req_pos_arbs[3].out, req_pos_arbs[4].out, req_pos_arbs[5].out,
+                               req_pos_arbs[6].out, req_pos_arbs[7].out) =
+        [](auto src) {
+            auto [o0, o1, o2, o3, o4, o5, o6, o7] = src;
+            const Valid<ReplReqPos>* outs[8] = {&o0, &o1, &o2, &o3, &o4, &o5, &o6, &o7};
+            ReqPosArr r;
+            for (uint32_t b = 0; b < 2; ++b)
+                for (uint32_t s = 0; s < 4; ++s) r[b][s] = *outs[b * 4 + s];
+            return r;
+        };
     // per-entry reqPos rdy：按本项 (bank,set) 从对应仲裁器的 in_rdy 选
     w_req_pos_rdy_all.assign().reads(
-        w_hn_txn_ids, req_pos_arbs[0].in_rdy, req_pos_arbs[1].in_rdy, req_pos_arbs[2].in_rdy,
+        w_req_pos_feed, req_pos_arbs[0].in_rdy, req_pos_arbs[1].in_rdy, req_pos_arbs[2].in_rdy,
         req_pos_arbs[3].in_rdy, req_pos_arbs[4].in_rdy, req_pos_arbs[5].in_rdy,
         req_pos_arbs[6].in_rdy, req_pos_arbs[7].in_rdy) =
         [](auto src) {
-            auto [ids, r0, r1, r2, r3, r4, r5, r6, r7] = src;
+            auto [feed, r0, r1, r2, r3, r4, r5, r6, r7] = src;
             const RdyArrN* rdys[8] = {&r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7};
             RdyArrN o{};
             for (uint32_t i = 0; i < kEntries; ++i) {
-                const uint32_t b = hnIdxDirBank(ids[i]);
-                const uint32_t s = hnIdxPosSet(ids[i]);
+                const uint32_t b = hnIdxDirBank(feed.ids[i]);
+                const uint32_t s = hnIdxPosSet(feed.ids[i]);
                 o[i] = (*rdys[b * 4 + s])[i];
             }
             return o;
@@ -311,16 +307,16 @@ ReplaceCM::ReplaceCM() {
     };
 
     // ---- 64 项状态（一条 update 循环；w_set = allocFire || 非空闲） ----
+    // 读集不含各 w_*_in 输出数组：其次态只用到 valid，而 valid ≡ state==本态，
+    // 由 switch 分支隐含（fire 条件退化为纯 rdy）。
     entries.update().on(posedge(clk)).reads(
-        entries, alloc_arb.out, pos_resp_vec, w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf,
-        resp_dir_llc, cfg_ci, w_upd_id_in, w_resp_in, w_req_db_in, req_db_arb.in_rdy, w_wri_in,
-        wri_arb.in_rdy, w_snp_in, snp_arb.in_rdy, cm_resp, w_data_task_in, data_task_arb.in_rdy,
-        data_resp, w_clean_in, clean_arb.in_rdy, write_dir_done, w_req_pos_in,
-        w_req_pos_rdy_all, w_wdir_in, wdir_arb.in_rdy) = [](auto src) {
-        auto [entries, alloc_out, pos_resp, sf_hit, llc_hit, resp_dir_sf, resp_dir_llc, cfg_ci,
-              upd_id_in, resp_in, req_db_in, req_db_rdy, wri_in, wri_rdy, snp_in, snp_rdy,
-              cm_resp, data_task_in, data_task_rdy, data_resp, clean_in, clean_rdy,
-              write_dir_done, req_pos_in, req_pos_rdy, wdir_in, wdir_rdy] = src;
+        entries, alloc_arb.out, pos_resp_vec, w_dir_hits, resp_dir_sf, resp_dir_llc, cfg_ci,
+        req_db_arb.in_rdy, wri_arb.in_rdy, snp_arb.in_rdy, cm_resp, data_task_arb.in_rdy,
+        data_resp, clean_arb.in_rdy, write_dir_done, w_req_pos_rdy_all,
+        wdir_arb.in_rdy) = [](auto src) {
+        auto [entries, alloc_out, pos_resp, hits, resp_dir_sf, resp_dir_llc, cfg_ci, req_db_rdy,
+              wri_rdy, snp_rdy, cm_resp, data_task_rdy, data_resp, clean_rdy, write_dir_done,
+              req_pos_rdy, wdir_rdy] = src;
         EntryArr n = entries;
         for (uint32_t i = 0; i < kEntries; ++i) {
             const ReplReg& reg = entries[i];
@@ -343,7 +339,8 @@ ReplaceCM::ReplaceCM() {
             const bool wriDoneHit = reg.state == replst::kWaitWriDir && write_dir_done.valid &&
                                     write_dir_done.bits == reg.hnTxnID;
 
-            // 状态机（fire 条件 = 输出 valid && 仲裁 rdy；upd_id/resp 的 rdy 恒真）
+            // 状态机（fire 条件 = 输出 valid && 仲裁 rdy；输出 valid ≡ state==本态，
+            // 由所在分支隐含，故只读 rdy；upd_id/resp 的 rdy 恒真）
             switch (reg.state) {
                 case replst::kFree:
                     if (allocFire) {
@@ -354,13 +351,13 @@ ReplaceCM::ReplaceCM() {
                     }
                     break;
                 case replst::kReqPos:
-                    if (req_pos_in[i].valid && req_pos_rdy[i]) next.state = replst::kWaitPos;
+                    if (req_pos_rdy[i]) next.state = replst::kWaitPos;
                     break;
                 case replst::kWaitPos:
                     next.state = posRespHit ? replst::kWriDir : replst::kReqPos;
                     break;
                 case replst::kWriDir:
-                    if (wdir_in[i].valid && wdir_rdy[i]) {
+                    if (wdir_rdy[i]) {
                         const bool isDirectAllocSF =
                             reg.wriSF && !reg.dir.sf.hit && reg.directAllocSF;
                         next.state = isReplDIR ? replst::kWaitDir
@@ -372,8 +369,8 @@ ReplaceCM::ReplaceCM() {
                     if (wriDoneHit) next.state = replst::kRespCmt;
                     break;
                 case replst::kWaitDir:
-                    if (sf_hit[i] || llc_hit[i]) {
-                        if (sf_hit[i]) {
+                    if (hits.sf[i] || hits.llc[i]) {
+                        if (hits.sf[i]) {
                             next.state = replst::kRespCmt;
                         } else {
                             const bool needReplLLC = resp_dir_llc.bits.meta != 0;
@@ -386,28 +383,24 @@ ReplaceCM::ReplaceCM() {
                         }
                     }
                     break;
-                case replst::kUpdateId:
-                    if (upd_id_in[i].valid) next.state = replst::kWrite;
-                    break;
+                case replst::kUpdateId: next.state = replst::kWrite; break;
                 case replst::kRespCmt:
-                    if (resp_in[i].valid) {
-                        if (isReplSF) {
-                            next.state = reg.needSnp ? replst::kReqDB : replst::kCleanPosR;
-                        } else if (isReplLLC) {
-                            next.state = replst::kCleanPosR;
-                        } else {
-                            next.state = replst::kFree;
-                        }
+                    if (isReplSF) {
+                        next.state = reg.needSnp ? replst::kReqDB : replst::kCleanPosR;
+                    } else if (isReplLLC) {
+                        next.state = replst::kCleanPosR;
+                    } else {
+                        next.state = replst::kFree;
                     }
                     break;
                 case replst::kReqDB:
-                    if (req_db_in[i].valid && req_db_rdy[i]) next.state = replst::kSnoop;
+                    if (req_db_rdy[i]) next.state = replst::kSnoop;
                     break;
                 case replst::kWrite:
-                    if (wri_in[i].valid && wri_rdy[i]) next.state = replst::kWaitRWri;
+                    if (wri_rdy[i]) next.state = replst::kWaitRWri;
                     break;
                 case replst::kSnoop:
-                    if (snp_in[i].valid && snp_rdy[i]) next.state = replst::kWaitRSnp;
+                    if (snp_rdy[i]) next.state = replst::kWaitRSnp;
                     break;
                 case replst::kWaitRWri:
                     if (cmRespHit)
@@ -423,17 +416,17 @@ ReplaceCM::ReplaceCM() {
                     break;
                 case replst::kCopyId: next.state = replst::kReqPos; break;
                 case replst::kSaveData:
-                    if (data_task_in[i].valid && data_task_rdy[i]) next.state = replst::kWaitResp;
+                    if (data_task_rdy[i]) next.state = replst::kWaitResp;
                     break;
                 case replst::kWaitResp:
                     if (dataRespHit)
                         next.state = reg.alrReplSF ? replst::kCleanPosT : replst::kRespCmt;
                     break;
                 case replst::kCleanPosT:
-                    if (clean_in[i].valid && clean_rdy[i]) next.state = replst::kCleanPosR;
+                    if (clean_rdy[i]) next.state = replst::kCleanPosR;
                     break;
                 case replst::kCleanPosR:
-                    if (clean_in[i].valid && clean_rdy[i]) next.state = replst::kFree;
+                    if (clean_rdy[i]) next.state = replst::kFree;
                     break;
                 default: break;
             }
@@ -446,7 +439,7 @@ ReplaceCM::ReplaceCM() {
             }
 
             // llcRespHit 副作用：toLan / ds
-            if (llc_hit[i]) {
+            if (hits.llc[i]) {
                 next.replToLan = ciOf(resp_dir_llc.bits.addr) == cfg_ci;
                 DsIdx nds;
                 nds.set(resp_dir_llc.bits.addr, ohToUInt(resp_dir_llc.bits.wayOH));
@@ -454,7 +447,7 @@ ReplaceCM::ReplaceCM() {
             }
 
             // sfRespHit 副作用
-            if (sf_hit[i]) {
+            if (hits.sf[i]) {
                 next.needSnp = resp_dir_sf.bits.meta != 0;
                 next.alrReplSF = true;
                 next.dir.sf.wayOH = resp_dir_sf.bits.wayOH;

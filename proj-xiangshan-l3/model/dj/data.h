@@ -70,12 +70,25 @@ public:
     MOD(DatRam, array);
     MOD(RespPipeT, resp_pipe);
 
-    REG(uint8_t, sft_read);   // 5bit，d1=bit4 … d5=bit0
-    REG(uint8_t, sft_write);
-    REG(bool, rst_done);
+    // 合并拍内状态（perf §20：原 3 个独立 reg + 2 条 fire 中转 wire）。
+    // sftRead/sftWrite 同沿每拍移位、rstDone 同沿锁存，三者并为一个 struct +
+    // 一条 update；read/write fire 语义同源（valid&&rdy）、消费方高度重叠
+    // （st update 与 resp_pipe.enq），并为一条 struct wire。
+    struct St {
+        uint8_t sftRead = 0;  // 5bit，d1=bit4 … d5=bit0
+        uint8_t sftWrite = 0;
+        bool rstDone = false;
+
+        bool operator==(const St&) const = default;
+    };
+    struct Fires {
+        bool rd = false, wr = false;
+
+        bool operator==(const Fires&) const = default;
+    };
+    REG(St, st);
+    WIRE(Fires, w_fires);
     WIRE(bool, w_req_ready);
-    WIRE(bool, w_read_fire);
-    WIRE(bool, w_write_fire);
 
     BeatStorage();
 };
@@ -97,13 +110,25 @@ public:
     MOD(IdQ, q0);
     MOD(IdQ, q1);
 
-    REG(uint8_t, rst_cnt);  // Counter(64)，到 63 后 rst_done 锁存
-    REG(bool, rst_done);
-    WIRE(bool, w_enq_one);
-    WIRE(bool, w_enq_two);
+    // 预充状态（原 rst_cnt/rst_done）：同沿同使能（clk_en 门控）的计数器与
+    // 完成锁存，并为一个 struct + 一条 update。
+    struct Rst {
+        uint8_t cnt = 0;  // Counter(64)，到 63 后 done 锁存
+        bool done = false;
+
+        bool operator==(const Rst&) const = default;
+    };
+    // enq/deq 的"来一个/来两个"判定（原 w_enq_one/two、w_deq_one/two）：各自
+    // 读集完全相同（两端口 valid / 两端口 rdy），各并为一个 struct。
+    struct Cnt {
+        bool one = false, two = false;
+
+        bool operator==(const Cnt&) const = default;
+    };
+    REG(Rst, rst);
+    WIRE(Cnt, w_enq_cnt);
     WIRE(bool, w_enq_sel_q0);
-    WIRE(bool, w_deq_one);
-    WIRE(bool, w_deq_two);
+    WIRE(Cnt, w_deq_cnt);
     WIRE(bool, w_deq_sel_q0);
 
     DBIDPool();
@@ -160,40 +185,50 @@ public:
 
     REG(MaskArr, mask_vec);  // 每 dbid 已收字节掩码
     REG(ReplArr, repl_vec);
-    REG(uint8_t, r_chi_sft);  // 2bit 读请求移位
-    REG(uint8_t, r_ds_sft);
-    // 写口寄存（valid+1 提交）
-    REG(bool, wval_reg);
-    REG(bool, ds_wri_reg);
-    REG(bool, repl_reg);
-    REG(uint32_t, mask_reg);
-    REG(uint64_t, be_reg);
-    REG(bool, read_or_snp_reg);
-    REG(uint8_t, waddr_reg);
-    REG(ByteRow, wdata_reg);
-    // 读口两级信息链（fire → +1 rreq → +2 enq）
-    REG(uint8_t, chi_dbid_d1);
-    REG(uint8_t, chi_dbid_d2);
-    REG(uint8_t, chi_beat_d1);
-    REG(uint8_t, chi_beat_d2);
-    REG(uint8_t, chi_dcid_d1);
-    REG(uint8_t, chi_dcid_d2);
-    REG(uint8_t, ds_dcid_d1);
-    REG(uint8_t, ds_dcid_d2);
-    REG(uint8_t, ds_beat_d1);
-    REG(uint8_t, ds_beat_d2);
-    REG(DsIdx, ds_ds_d1);
-    REG(DsIdx, ds_ds_d2);
-    REG(bool, rreq_val_reg);
-    REG(uint8_t, rreq_addr_reg);
+    // 读侧控制（原 r_chi_sft/r_ds_sft/rreq_val_reg/rreq_addr_reg）：两条 2bit 读
+    // 请求移位与 datBuf 读口请求寄存同沿更新、使能同源（读 fire），并为一个
+    // struct + 一条 update。
+    struct RdCtl {
+        uint8_t chiSft = 0, dsSft = 0;  // 2bit 读请求移位
+        bool rreqVal = false;           // datBuf 读口：RegNext(chiFire||dsFire)
+        uint8_t rreqAddr = 0;           // RegEnable(dbid, fires)（DS 优先）
+
+        bool operator==(const RdCtl&) const = default;
+    };
+    // 写口提交寄存组（原 wval/ds_wri/repl/mask/be/read_or_snp/waddr/wdata_reg）：
+    // 全部同沿采样 dsResp/fromCHI 侧输入（valid+1 提交），并为一个 struct +
+    // 一条 update，各字段保持原 RegNext/RegEnable 语义；w_wri_val/w_wri_dbid/
+    // w_read_or_snp 三条中转线唯一消费方即本组，已内联进 update lambda。
+    struct WrReg {
+        bool wval = false, dsWri = false, repl = false, readOrSnp = false;
+        uint32_t mask = 0;
+        uint64_t be = 0;
+        uint8_t waddr = 0;
+        ByteRow wdata{};
+
+        bool operator==(const WrReg&) const = default;
+    };
+    // 读数据回送信息链（fire → +1 → +2 两级，对齐 rresp）：chi/ds 各自的 d1/d2
+    // 寄存器同沿、使能分别同源（chiFire / enD1(chiSft)），各并为一个 struct。
+    struct ChiPipe {
+        uint8_t dbidD1 = 0, dbidD2 = 0, beatD1 = 0, beatD2 = 0, dcidD1 = 0, dcidD2 = 0;
+
+        bool operator==(const ChiPipe&) const = default;
+    };
+    struct DsPipe {
+        uint8_t dcidD1 = 0, dcidD2 = 0, beatD1 = 0, beatD2 = 0;
+        DsIdx dsD1{}, dsD2{};
+
+        bool operator==(const DsPipe&) const = default;
+    };
+    REG(RdCtl, rd_ctl);
+    REG(WrReg, wr);
+    REG(ChiPipe, chi_pipe);
+    REG(DsPipe, ds_pipe);
 
     WIRE(bool, w_rd_chi_fire);
     WIRE(bool, w_rd_ds_fire);
-    WIRE(bool, w_has_free_chi);
-    WIRE(bool, w_has_free_ds);
-    WIRE(bool, w_wri_val);
-    WIRE(uint8_t, w_wri_dbid);
-    WIRE(bool, w_read_or_snp);
+    // w_has_free_chi/w_has_free_ds 为单消费方中转线，已内联进 read_to_*_rdy。
 
     DataBuffer();
 };
@@ -258,8 +293,15 @@ public:
     using CtrlArr = std::array<DataCtrlV, kNrDataCM>;
     REG(CtrlArr, entries);
 
-    REG(bool, task_fire_reg);
-    REG(DataTask, task_reg);
+    // task 输入延迟一拍（原 task_fire_reg/task_reg）：RegNext(valid) 与
+    // RegEnable(bits, valid) 同沿同源，并为一个 struct + 一条 update。
+    struct TaskD {
+        bool fire = false;
+        DataTask task;
+
+        bool operator==(const TaskD&) const = default;
+    };
+    REG(TaskD, task_d);
 
     // 仲裁：resp/release 各一路 RR（VipArb）；三读通道各两层（QoS 高优 + 普通）
     using RespArbT = VipArb<uint8_t, kNrDataCM>;
@@ -289,19 +331,35 @@ public:
     WIRE(DbInArr, w_db_in);
     WIRE(DsInArr, w_ds_in);
     WIRE(DsInArr, w_chi_in);
-    WIRE(RdyArr64, w_alloc_rdy_all);
-    WIRE(RdyArr64, w_read_for_repl_all);
-    WIRE(TxBitsArr, w_tx_dat_bits);
-    WIRE(StateArr, w_states);
-    // 条目 read 通道 rdy 回接（原 entries[i].read_to_*_rdy 输入）
-    WIRE(RdyArr64, w_db_rdys);
-    WIRE(RdyArr64, w_ds_rdys);
-    WIRE(RdyArr64, w_chi_rdys);
-    // 仲裁结果与选择
-    WIRE(bool, w_has_repl);
-    WIRE(uint8_t, w_repl_dcid);
-    WIRE(uint8_t, w_free_dcid);
-    WIRE(bool, w_has_free_dc);
+    // 条目派生标志（原 w_alloc_rdy_all/w_read_for_repl_all）：同读 entries 的
+    // 两个 64 位标志数组，并为一条 struct wire。
+    struct Flags {
+        RdyArr64 allocRdy{}, readForRepl{};
+
+        bool operator==(const Flags&) const = default;
+    };
+    // 条目查询视图（原 w_states/w_tx_dat_bits）：同读 entries 的 getDBID /
+    // getChiDat 查询载荷，并为一条 struct wire。
+    struct Views {
+        StateArr states;
+        TxBitsArr txBits;
+
+        bool operator==(const Views&) const = default;
+    };
+    WIRE(Flags, w_flags);
+    WIRE(Views, w_views);
+    // 空闲项 / repl 项选择（原 w_has_free_dc+w_free_dcid、w_has_repl+
+    // w_repl_dcid）：has 与 dcid 同读集同消费方，各并为一个 struct。
+    struct Sel {
+        bool has = false;
+        uint8_t dcid = 0;
+
+        bool operator==(const Sel&) const = default;
+    };
+    WIRE(Sel, w_free_sel);
+    WIRE(Sel, w_repl_sel);
+    // 条目 read 通道 rdy 回接（原 w_db_rdys/w_ds_rdys/w_chi_rdys 三条数组
+    // assign）：唯一消费方是 entries update，已内联进该 lambda。
 
     DataCM();
 };

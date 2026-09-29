@@ -48,104 +48,78 @@ ReqToChiTask::ReqToChiTask() {
 // ---------------- Block ----------------
 
 Block::Block() {
-    valid_reg_s1.update().on(posedge(clk)).reads(chi_task_s0) = [](auto src) {
-        auto [chi_task_s0] = src;
-        return chi_task_s0.valid;
+    // s1 流水寄存器：valid/task/sReceipt/sDbid 同沿同读 chi_task_s0，一条 update
+    st.update().on(posedge(clk)).reads(st, chi_task_s0) = [](auto src) {
+        auto [st, chi_task_s0] = src;
+        St n = st;
+        n.valid = chi_task_s0.valid;
+        if (chi_task_s0.valid) n.task = chi_task_s0.bits;
+        n.sReceipt = chi_task_s0.bits.chi.isRead() &&
+                     (chi_task_s0.bits.chi.isEO() || chi_task_s0.bits.chi.isRO());
+        n.sDbid = chi_task_s0.bits.chi.isWrite() && !chi_task_s0.bits.chi.isCopyBackWrite();
+        return n;
     };
-    task_reg_s1.update().on(posedge(clk)).reads(chi_task_s0, task_reg_s1) = [](auto src) {
-        auto [chi_task_s0, task_reg_s1] = src;
-        return chi_task_s0.valid ? chi_task_s0.bits : task_reg_s1;
-    };
-    s_receipt_reg_s1.update().on(posedge(clk)).reads(chi_task_s0) = [](auto src) {
-        auto [chi_task_s0] = src;
-        return chi_task_s0.bits.chi.isRead() &&
-               (chi_task_s0.bits.chi.isEO() || chi_task_s0.bits.chi.isRO());
-    };
-    s_dbid_reg_s1.update().on(posedge(clk)).reads(chi_task_s0) = [](auto src) {
-        auto [chi_task_s0] = src;
-        return chi_task_s0.bits.chi.isWrite() && !chi_task_s0.bits.chi.isCopyBackWrite();
-    };
-    w_should_resp_s1.assign().reads(s_receipt_reg_s1, s_dbid_reg_s1, req_db_s1_rdy) =
+    // 阻塞条件组合链（shouldResp/byDb/pos/dir/resp/any 一条 assign 全算）
+    w_blk.assign().reads(st, pos_block_s1, req_db_s1_rdy, read_dir_s1_rdy, fast_resp_s1_rdy) =
         [](auto src) {
-            auto [s_receipt_reg_s1, s_dbid_reg_s1, req_db_s1_rdy] = src;
-            return s_receipt_reg_s1 || (s_dbid_reg_s1 && req_db_s1_rdy);
+            auto [st, pos_block_s1, req_db_s1_rdy, read_dir_s1_rdy, fast_resp_s1_rdy] = src;
+            BlkW w;
+            w.shouldResp = st.sReceipt || (st.sDbid && req_db_s1_rdy);
+            w.byDb = st.sDbid && !req_db_s1_rdy;
+            w.pos = pos_block_s1;
+            w.dir = st.task.chi.memCacheable() && !read_dir_s1_rdy;
+            w.resp = w.byDb || (w.shouldResp && !fast_resp_s1_rdy);
+            w.any = w.pos || w.dir || w.resp;
+            return w;
         };
-    w_block_by_db_s1.assign().reads(s_dbid_reg_s1, req_db_s1_rdy) = [](auto src) {
-        auto [s_dbid_reg_s1, req_db_s1_rdy] = src;
-        return s_dbid_reg_s1 && !req_db_s1_rdy;
+    retry_s1.assign().reads(st, w_blk) = [](auto src) {
+        auto [st, w_blk] = src;
+        return st.valid && w_blk.any;
     };
-    w_block_pos.assign().reads(pos_block_s1) = [](auto src) {
-        auto [pos_block_s1] = src;
-        return pos_block_s1;
-    };
-    w_block_dir.assign().reads(task_reg_s1, read_dir_s1_rdy) = [](auto src) {
-        auto [task_reg_s1, read_dir_s1_rdy] = src;
-        return task_reg_s1.chi.memCacheable() && !read_dir_s1_rdy;
-    };
-    w_block_resp.assign().reads(w_block_by_db_s1, w_should_resp_s1, fast_resp_s1_rdy) =
-        [](auto src) {
-            auto [w_block_by_db_s1, w_should_resp_s1, fast_resp_s1_rdy] = src;
-            return w_block_by_db_s1 || (w_should_resp_s1 && !fast_resp_s1_rdy);
-        };
-    w_block_any.assign().reads(w_block_pos, w_block_dir, w_block_resp) = [](auto src) {
-        auto [w_block_pos, w_block_dir, w_block_resp] = src;
-        return w_block_pos || w_block_dir || w_block_resp;
-    };
-    retry_s1.assign().reads(valid_reg_s1, w_block_any) = [](auto src) {
-        auto [valid_reg_s1, w_block_any] = src;
-        return valid_reg_s1 && w_block_any;
-    };
-    task_s1.assign().reads(valid_reg_s1, w_block_any, task_reg_s1, hn_idx_s1, req_db_s1,
-                           req_db_s1_rdy, fast_resp_s1, fast_resp_s1_rdy) = [](auto src) {
-        auto [valid_reg_s1, w_block_any, task_reg_s1, hn_idx_s1, req_db_s1, req_db_s1_rdy,
-              fast_resp_s1, fast_resp_s1_rdy] = src;
+    task_s1.assign().reads(st, w_blk, hn_idx_s1, req_db_s1, req_db_s1_rdy, fast_resp_s1,
+                           fast_resp_s1_rdy) = [](auto src) {
+        auto [st, w_blk, hn_idx_s1, req_db_s1, req_db_s1_rdy, fast_resp_s1,
+              fast_resp_s1_rdy] = src;
         TaskS1 t;
-        t.chi = task_reg_s1.chi;
-        t.addr = task_reg_s1.addr;
-        t.qos = task_reg_s1.qos;
+        t.chi = st.task.chi;
+        t.addr = st.task.addr;
+        t.qos = st.task.qos;
         t.hnIdx = hn_idx_s1;
         t.alr.reqDB = req_db_s1.valid && req_db_s1_rdy;
         t.alr.sData = false;
         t.alr.sDBID = fast_resp_s1.valid && fast_resp_s1_rdy &&
                       fast_resp_s1.bits.opcode == kDBIDResp;
-        return Valid<TaskS1>{valid_reg_s1 && !w_block_any, t};
+        return Valid<TaskS1>{st.valid && !w_blk.any, t};
     };
-    read_dir_s1.assign().reads(valid_reg_s1, task_reg_s1, w_block_pos, w_block_resp,
-                               hn_idx_s1) = [](auto src) {
-        auto [valid_reg_s1, task_reg_s1, w_block_pos, w_block_resp, hn_idx_s1] = src;
+    read_dir_s1.assign().reads(st, w_blk, hn_idx_s1) = [](auto src) {
+        auto [st, w_blk, hn_idx_s1] = src;
         DirRdReq r;
-        r.addr = task_reg_s1.addr;
+        r.addr = st.task.addr;
         r.hnIdx = hn_idx_s1;
-        return Valid<DirRdReq>{valid_reg_s1 && task_reg_s1.chi.memCacheable() &&
-                                   !(w_block_pos || w_block_resp),
+        return Valid<DirRdReq>{st.valid && st.task.chi.memCacheable() &&
+                                   !(w_blk.pos || w_blk.resp),
                                r};
     };
-    req_db_s1.assign().reads(valid_reg_s1, s_dbid_reg_s1, fast_resp_s1_rdy, w_block_pos,
-                             w_block_dir, hn_idx_s1) = [](auto src) {
-        auto [valid_reg_s1, s_dbid_reg_s1, fast_resp_s1_rdy, w_block_pos, w_block_dir,
-              hn_idx_s1] = src;
+    req_db_s1.assign().reads(st, w_blk, fast_resp_s1_rdy, hn_idx_s1) = [](auto src) {
+        auto [st, w_blk, fast_resp_s1_rdy, hn_idx_s1] = src;
         ReqDB r;
         r.hnTxnID = hn_idx_s1;
         r.dataVec = kFullVec;
-        return Valid<ReqDB>{valid_reg_s1 && s_dbid_reg_s1 && fast_resp_s1_rdy &&
-                                !(w_block_pos || w_block_dir),
+        return Valid<ReqDB>{st.valid && st.sDbid && fast_resp_s1_rdy &&
+                                !(w_blk.pos || w_blk.dir),
                             r};
     };
-    fast_resp_s1.assign().reads(valid_reg_s1, w_should_resp_s1, w_block_pos, w_block_dir,
-                                s_receipt_reg_s1, s_dbid_reg_s1, task_reg_s1,
-                                hn_idx_s1) = [](auto src) {
-        auto [valid_reg_s1, w_should_resp_s1, w_block_pos, w_block_dir, s_receipt_reg_s1,
-              s_dbid_reg_s1, task_reg_s1, hn_idx_s1] = src;
+    fast_resp_s1.assign().reads(st, w_blk, hn_idx_s1) = [](auto src) {
+        auto [st, w_blk, hn_idx_s1] = src;
         RespFlit f{};
-        f.qos = task_reg_s1.qos;
-        f.src_id = task_reg_s1.chi.getNoC();
-        f.tgt_id = task_reg_s1.chi.nodeId;
-        f.txn_id = task_reg_s1.chi.txnID;
+        f.qos = st.task.qos;
+        f.src_id = st.task.chi.getNoC();
+        f.tgt_id = st.task.chi.nodeId;
+        f.txn_id = st.task.chi.txnID;
         f.dbid = hn_idx_s1;
         f.resp_err = 0;
-        f.opcode = s_receipt_reg_s1 ? kReadReceipt : kDBIDResp;
-        return Valid<RespFlit>{valid_reg_s1 && w_should_resp_s1 && !(w_block_pos || w_block_dir),
-                               f};
+        f.opcode = st.sReceipt ? kReadReceipt : kDBIDResp;
+        return Valid<RespFlit>{st.valid && w_blk.shouldResp && !(w_blk.pos || w_blk.dir), f};
     };
 }
 
@@ -395,135 +369,105 @@ PosTable::PosTable() {
 // ---------------- FrontendDecode ----------------
 
 FrontendDecode::FrontendDecode() {
-    valid_reg_s3.update().on(posedge(clk)).reads(task_s2) = [](auto src) {
-        auto [task_s2] = src;
-        return task_s2.valid;
+    // s3 流水寄存器：valid/task/decList 同沿、同以 task_s2.valid 为使能；
+    // fstDec（chiInst_s2 → decList_s2 查表）内联，valid 分支内 bit17 恒 1
+    st.update().on(posedge(clk)).reads(st, task_s2) = [](auto src) {
+        auto [st, task_s2] = src;
+        St n = st;
+        n.valid = task_s2.valid;
+        if (task_s2.valid) {
+            n.task = task_s2.bits;
+            uint32_t ci = task_s2.bits.chi.getChiInst();
+            ci = (ci & ~(1u << 17)) | (1u << 17);
+            n.decList = DecList4{static_cast<uint8_t>(dc::decChi(ci)), 0, 0, 0};
+        }
+        return n;
     };
-    task_reg_s3.update().on(posedge(clk)).reads(task_s2, task_reg_s3) = [](auto src) {
-        auto [task_s2, task_reg_s3] = src;
-        return task_s2.valid ? task_s2.bits : task_reg_s3;
-    };
-    // fstDec：chiInst_s2 → decList_s2（组合）
-    w_chi_inst_s2.assign().reads(task_s2) = [](auto src) {
-        auto [task_s2] = src;
-        uint32_t ci = task_s2.bits.chi.getChiInst();
-        // valid 由 task_s2.valid 门控
-        ci = (ci & ~(1u << 17)) | (static_cast<uint32_t>(task_s2.valid) << 17);
-        return ci;
-    };
-    w_dec_list_s2.assign().reads(w_chi_inst_s2) = [](auto src) {
-        auto [w_chi_inst_s2] = src;
-        std::array<uint8_t, 4> l{0, 0, 0, 0};
-        l[0] = static_cast<uint8_t>(dc::decChi(w_chi_inst_s2));
-        return l;
-    };
-    dec_list_reg_s3.update().on(posedge(clk)).reads(task_s2, w_dec_list_s2, dec_list_reg_s3) =
-        [](auto src) {
-            auto [task_s2, w_dec_list_s2, dec_list_reg_s3] = src;
-            return task_s2.valid ? w_dec_list_s2 : dec_list_reg_s3;
-        };
-    // stateInst_s3 / secDec / GetDecRes
-    w_state_inst_s3.assign().reads(resp_dir_s3, valid_reg_s3, task_reg_s3) = [](auto src) {
-        auto [resp_dir_s3, valid_reg_s3, task_reg_s3] = src;
+    // s3 译码组合链：stateInst → secDec → GetDecRes → respCompData / cleanUnuseDB
+    w_dec.assign().reads(st, resp_dir_s3) = [](auto src) {
+        auto [st, resp_dir_s3] = src;
+        DecW w;
         if (!resp_dir_s3.valid) {
             // Lit(valid -> true.B)：仅 valid=1，src/oth/llcState=0
-            return (1u << 4) | (static_cast<uint32_t>(valid_reg_s3) << 4);
+            w.stateInst = (1u << 4) | (static_cast<uint32_t>(st.valid) << 4);
+        } else {
+            const auto& d = resp_dir_s3.bits;
+            const uint32_t srcHit = d.sf.hit && d.sf.meta != 0;
+            const uint32_t othHit = 0;  // nrSfMetas=1 → othVec 恒 0
+            const uint32_t llcState = d.llc.hit ? d.llc.meta : 0;
+            w.stateInst = (static_cast<uint32_t>(st.valid) << 4) | (srcHit << 3) |
+                          (othHit << 2) | llcState;
         }
-        const auto& d = resp_dir_s3.bits;
-        const uint32_t srcHit = d.sf.hit && d.sf.meta != 0;
-        const uint32_t othHit = 0;  // nrSfMetas=1 → othVec 恒 0
-        const uint32_t llcState = d.llc.hit ? d.llc.meta : 0;
-        return (static_cast<uint32_t>(valid_reg_s3) << 4) | (srcHit << 3) | (othHit << 2) |
-               llcState;
+        w.decList = st.decList;
+        w.decList[1] = static_cast<uint8_t>(dc::decState(w.decList[0], w.stateInst));
+        w.taskCode = dc::getTaskCode(w.decList[0], w.decList[1]);
+        w.cmtCode =
+            dc::getCommitCode(w.decList[0], w.decList[1], w.decList[2], w.decList[3]);
+        w.respCompData = st.valid && !dc::tcIsValid(w.taskCode) &&
+                         dc::ccSendResp(w.cmtCode) && dc::ccChannel(w.cmtCode) == 1 &&
+                         dc::ccOpcode(w.cmtCode) == kCompDataOp;
+        const bool sfHit = resp_dir_s3.valid && resp_dir_s3.bits.sf.hit;
+        const bool llcHit = resp_dir_s3.valid && resp_dir_s3.bits.llc.hit;
+        w.cleanUnuseDb = st.valid && st.task.alr.reqDB && !st.task.chi.isFullSize() &&
+                         !(sfHit || llcHit);
+        return w;
     };
-    w_dec_list_s3.assign().reads(w_state_inst_s3, dec_list_reg_s3) = [](auto src) {
-        auto [w_state_inst_s3, dec_list_reg_s3] = src;
-        auto l = dec_list_reg_s3;
-        l[1] = static_cast<uint8_t>(dc::decState(l[0], w_state_inst_s3));
-        return l;
-    };
-    w_task_code_s3.assign().reads(w_dec_list_s3) = [](auto src) {
-        auto [w_dec_list_s3] = src;
-        return dc::getTaskCode(w_dec_list_s3[0], w_dec_list_s3[1]);
-    };
-    w_cmt_code_s3.assign().reads(w_dec_list_s3) = [](auto src) {
-        auto [w_dec_list_s3] = src;
-        return dc::getCommitCode(w_dec_list_s3[0], w_dec_list_s3[1], w_dec_list_s3[2],
-                                 w_dec_list_s3[3]);
-    };
-    w_resp_comp_data_s3.assign().reads(valid_reg_s3, w_task_code_s3, w_cmt_code_s3) =
-        [](auto src) {
-            auto [valid_reg_s3, w_task_code_s3, w_cmt_code_s3] = src;
-            return valid_reg_s3 && !dc::tcIsValid(w_task_code_s3) &&
-                   dc::ccSendResp(w_cmt_code_s3) && dc::ccChannel(w_cmt_code_s3) == 1 &&
-                   dc::ccOpcode(w_cmt_code_s3) == kCompDataOp;
-        };
 
     // cmtTask_s3 组装
-    cmt_task_s3.assign().reads(valid_reg_s3, task_reg_s3, resp_dir_s3, w_dec_list_s3,
-                               w_task_code_s3, w_cmt_code_s3, req_db_s3, req_db_s3_rdy,
-                               fast_data_s3, fast_data_s3_rdy) = [](auto src) {
-        auto [valid_reg_s3, task_reg_s3, resp_dir_s3, w_dec_list_s3, w_task_code_s3,
-              w_cmt_code_s3, req_db_s3, req_db_s3_rdy, fast_data_s3, fast_data_s3_rdy] = src;
+    cmt_task_s3.assign().reads(st, resp_dir_s3, w_dec, req_db_s3, req_db_s3_rdy, fast_data_s3,
+                               fast_data_s3_rdy) = [](auto src) {
+        auto [st, resp_dir_s3, w_dec, req_db_s3, req_db_s3_rdy, fast_data_s3,
+              fast_data_s3_rdy] = src;
         CommitTask t;
-        t.hnTxnID = task_reg_s3.hnIdx;
-        t.qos = task_reg_s3.qos;
-        t.chi = task_reg_s3.chi;
+        t.hnTxnID = st.task.hnIdx;
+        t.qos = st.task.qos;
+        t.chi = st.task.chi;
         t.dir = resp_dir_s3.valid ? resp_dir_s3.bits : DirMsg{};
-        t.alr = task_reg_s3.alr;
-        t.alr.reqDB = (req_db_s3.valid && req_db_s3_rdy) || task_reg_s3.alr.reqDB;
+        t.alr = st.task.alr;
+        t.alr.reqDB = (req_db_s3.valid && req_db_s3_rdy) || st.task.alr.reqDB;
         t.alr.sData = fast_data_s3.valid && fast_data_s3_rdy;
-        t.decList = w_dec_list_s3;
-        t.task = w_task_code_s3;
-        t.cmt = dc::tcIsValid(w_task_code_s3) ? 0 : w_cmt_code_s3;
+        t.decList = w_dec.decList;
+        t.task = w_dec.taskCode;
+        t.cmt = dc::tcIsValid(w_dec.taskCode) ? 0 : w_dec.cmtCode;
         const uint32_t way = resp_dir_s3.valid ? ohToUInt(resp_dir_s3.bits.llc.wayOH) : 0;
-        t.ds.set(task_reg_s3.addr, way);
-        return Valid<CommitTask>{valid_reg_s3, t};
+        t.ds.set(st.task.addr, way);
+        return Valid<CommitTask>{st.valid, t};
     };
 
     // reqDB_s3 / fastData_s3 快路径
-    req_db_s3.assign().reads(w_resp_comp_data_s3, task_reg_s3) = [](auto src) {
-        auto [w_resp_comp_data_s3, task_reg_s3] = src;
+    req_db_s3.assign().reads(w_dec, st) = [](auto src) {
+        auto [w_dec, st] = src;
         ReqDB r;
-        r.hnTxnID = task_reg_s3.hnIdx;
-        r.dataVec = task_reg_s3.chi.dataVec;
-        return Valid<ReqDB>{w_resp_comp_data_s3, r};
+        r.hnTxnID = st.task.hnIdx;
+        r.dataVec = st.task.chi.dataVec;
+        return Valid<ReqDB>{w_dec.respCompData, r};
     };
-    fast_data_s3.assign().reads(w_resp_comp_data_s3, req_db_s3_rdy, task_reg_s3,
-                                w_cmt_code_s3, resp_dir_s3) = [](auto src) {
-        auto [w_resp_comp_data_s3, req_db_s3_rdy, task_reg_s3, w_cmt_code_s3, resp_dir_s3] =
-            src;
+    fast_data_s3.assign().reads(w_dec, req_db_s3_rdy, st, resp_dir_s3) = [](auto src) {
+        auto [w_dec, req_db_s3_rdy, st, resp_dir_s3] = src;
         DataTask t{};
-        t.hnTxnID = task_reg_s3.hnIdx;
+        t.hnTxnID = st.task.hnIdx;
         t.dataOp.read = true;
         t.dataOp.send = true;
-        t.dataVec = task_reg_s3.chi.dataVec;
+        t.dataVec = st.task.chi.dataVec;
         t.qos = 0;  // fastData.bits.qos 在 RTL 中属 DontCare（下件为 0）
         const uint32_t way = resp_dir_s3.valid ? ohToUInt(resp_dir_s3.bits.llc.wayOH) : 0;
-        t.ds.set(task_reg_s3.addr, way);
-        t.txDat.dbid = task_reg_s3.hnIdx;
-        t.txDat.resp = static_cast<uint8_t>(dc::ccResp(w_cmt_code_s3));
+        t.ds.set(st.task.addr, way);
+        t.txDat.dbid = st.task.hnIdx;
+        t.txDat.resp = static_cast<uint8_t>(dc::ccResp(w_dec.cmtCode));
         t.txDat.opcode = kCompDataOp;
-        t.txDat.txn_id = task_reg_s3.chi.txnID;
-        t.txDat.src_id = task_reg_s3.chi.getNoC();
-        t.txDat.tgt_id = task_reg_s3.chi.nodeId;
-        return Valid<DataTask>{w_resp_comp_data_s3 && req_db_s3_rdy, t};
+        t.txDat.txn_id = st.task.chi.txnID;
+        t.txDat.src_id = st.task.chi.getNoC();
+        t.txDat.tgt_id = st.task.chi.nodeId;
+        return Valid<DataTask>{w_dec.respCompData && req_db_s3_rdy, t};
     };
 
     // cleanUnuseDB
-    w_clean_unuse_db_s3.assign().reads(valid_reg_s3, task_reg_s3, resp_dir_s3) = [](auto src) {
-        auto [valid_reg_s3, task_reg_s3, resp_dir_s3] = src;
-        const bool sfHit = resp_dir_s3.valid && resp_dir_s3.bits.sf.hit;
-        const bool llcHit = resp_dir_s3.valid && resp_dir_s3.bits.llc.hit;
-        return valid_reg_s3 && task_reg_s3.alr.reqDB && !task_reg_s3.chi.isFullSize() &&
-               !(sfHit || llcHit);
-    };
-    clean_db_s3.assign().reads(w_clean_unuse_db_s3, task_reg_s3) = [](auto src) {
-        auto [w_clean_unuse_db_s3, task_reg_s3] = src;
+    clean_db_s3.assign().reads(w_dec, st) = [](auto src) {
+        auto [w_dec, st] = src;
         ReqDB r;
-        r.hnTxnID = task_reg_s3.hnIdx;
-        r.dataVec = (~task_reg_s3.chi.dataVec) & 0x3;
-        return Valid<ReqDB>{w_clean_unuse_db_s3, r};
+        r.hnTxnID = st.task.hnIdx;
+        r.dataVec = (~st.task.chi.dataVec) & 0x3;
+        return Valid<ReqDB>{w_dec.cleanUnuseDb, r};
     };
 }
 

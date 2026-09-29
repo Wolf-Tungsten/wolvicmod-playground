@@ -51,6 +51,7 @@ public:
     REG(FqState, st);
     WIRE(bool, w_enq_fire);
     WIRE(bool, w_deq_fire);
+    WIRE(bool, w_chg);
 
     FastQueue() {
         w_enq_fire.assign().reads(enq, st) = [](auto src) {
@@ -60,6 +61,12 @@ public:
         w_deq_fire.assign().reads(st, deq_rdy) = [](auto src) {
             auto [st, deq_rdy] = src;
             return st.count > 0 && deq_rdy;
+        };
+        // 静止门（perf-breakdown §19）：两侧都不 fire 时 next == st，整条
+        // update（含 FqState 整拷贝）休眠。
+        w_chg.assign().reads(w_enq_fire, w_deq_fire) = [](auto src) {
+            auto [w_enq_fire, w_deq_fire] = src;
+            return w_enq_fire || w_deq_fire;
         };
 
         deq.assign().reads(st) = [](auto src) {
@@ -86,7 +93,7 @@ public:
             return N - st.count;
         };
 
-        st.update().on(wolvicmod::posedge(clk)).reads(st, enq, w_enq_fire, w_deq_fire) = [](auto src) {
+        st.update().on(wolvicmod::posedge(clk)).en(w_chg).reads(st, enq, w_enq_fire, w_deq_fire) = [](auto src) {
             auto [st, enq, w_enq_fire, w_deq_fire] = src;
             FqState next = st;
             if (w_enq_fire && w_deq_fire) {

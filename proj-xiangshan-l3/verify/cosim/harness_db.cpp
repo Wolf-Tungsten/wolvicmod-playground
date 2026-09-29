@@ -310,7 +310,7 @@ uint64_t cosimDb(uint32_t seed, uint64_t cycles) {
 
         if (c == dumpAt()) {
             for (uint32_t i = 0; i < kNrDataCM; ++i) {
-                const auto st = dut.data_cm.w_states.get()[i];
+                const auto st = dut.data_cm.w_views.get().states[i];
                 if (st.valid)
                     std::cout << "  [dump] dcid=" << i << " txn=0x" << std::hex
                               << (uint32_t)st.bits.hnTxnID << " dv=" << (uint32_t)st.bits.dataVec
@@ -329,20 +329,21 @@ uint64_t cosimDb(uint32_t seed, uint64_t cycles) {
                       << (uint32_t)dut.tx_dat.get().bits.data_id << ",d0=0x"
                       << dut.tx_dat.get().bits.data[0] << ",be=0x" << dut.tx_dat.get().bits.be
                       << ")" << std::dec << " resp(v=" << (int)ref.io_resp_valid << ")\n";
-            // datBuf 写口白盒：本拍提交的写（wval_reg）与 mask 组成
-            if (dut.dat_buf.wval_reg.get()) {
-                std::cout << "    [buf] wr dbid=" << (uint32_t)dut.dat_buf.waddr_reg.get()
-                          << " dsWri=" << (int)dut.dat_buf.ds_wri_reg.get()
-                          << " repl=" << (int)dut.dat_buf.repl_reg.get() << " maskReg=0x"
-                          << std::hex << dut.dat_buf.mask_reg.get() << " beReg=0x"
-                          << dut.dat_buf.be_reg.get() << " ros=" << (int)dut.dat_buf.read_or_snp_reg.get()
-                          << " d0=0x" << ((uint64_t)dut.dat_buf.wdata_reg.get()[3] << 24 |
-                                          (uint64_t)dut.dat_buf.wdata_reg.get()[2] << 16 |
-                                          (uint64_t)dut.dat_buf.wdata_reg.get()[1] << 8 |
-                                          dut.dat_buf.wdata_reg.get()[0])
+            // datBuf 写口白盒：本拍提交的写（wr.wval）与 mask 组成
+            if (dut.dat_buf.wr.get().wval) {
+                std::cout << "    [buf] wr dbid=" << (uint32_t)dut.dat_buf.wr.get().waddr
+                          << " dsWri=" << (int)dut.dat_buf.wr.get().dsWri
+                          << " repl=" << (int)dut.dat_buf.wr.get().repl << " maskReg=0x"
+                          << std::hex << dut.dat_buf.wr.get().mask << " beReg=0x"
+                          << dut.dat_buf.wr.get().be << " ros=" << (int)dut.dat_buf.wr.get().readOrSnp
+                          << " d0=0x" << ((uint64_t)dut.dat_buf.wr.get().wdata[3] << 24 |
+                                          (uint64_t)dut.dat_buf.wr.get().wdata[2] << 16 |
+                                          (uint64_t)dut.dat_buf.wr.get().wdata[1] << 8 |
+                                          dut.dat_buf.wr.get().wdata[0])
                           << std::dec << "\n";
             }
-            if (dut.dat_buf.w_wri_val.get()) {
+            // 原 w_wri_val 窥探点：中转线已内联，按定义由 dsResp/fromCHI 重算
+            if (dut.dat_buf.ds_resp.get().valid || dut.dat_buf.from_chi.get().valid) {
                 std::cout << "    [buf] wrIn dsResp(v=" << (int)dut.dat_buf.ds_resp.get().valid
                           << ",dbid=" << (uint32_t)dut.dat_buf.ds_resp.get().bits.dbid
                           << ") fromCHI(v=" << (int)dut.dat_buf.from_chi.get().valid
@@ -356,7 +357,7 @@ uint64_t cosimDb(uint32_t seed, uint64_t cycles) {
                       << ",dbid=" << (uint32_t)dut.data_cm.read_to_chi.get().bits.dbid
                       << ") buf.rdy=" << (int)dut.dat_buf.read_to_chi_rdy.get()
                       << " tochiq.free=" << dut.dat_buf.to_chi_q.free_num.get()
-                      << " rchi_sft=" << (uint32_t)dut.dat_buf.r_chi_sft.get() << "\n";
+                      << " rchi_sft=" << (uint32_t)dut.dat_buf.rd_ctl.get().chiSft << "\n";
         }
 
         // ---- 比对 ----

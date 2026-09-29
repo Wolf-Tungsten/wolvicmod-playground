@@ -25,81 +25,55 @@ constexpr uint8_t kErrOk = 0, kErrExOk = 1, kErrDerr = 2, kErrNderr = 3;
 
 template <bool Third>
 BackendDecode<Third>::BackendDecode() {
-    dec_val_reg.update().on(posedge(clk)).reads(dec_mes_in) = [](auto src) {
-        auto [dec_mes_in] = src;
-        return dec_mes_in.valid;
-    };
-    dec_mes_reg.update().on(posedge(clk)).reads(dec_mes_in, dec_mes_reg) = [](auto src) {
-        auto [dec_mes_in, dec_mes_reg] = src;
-        return dec_mes_in.valid ? dec_mes_in.bits : dec_mes_reg;
-    };
-
-    // taskInst.valid := decValReg & 原 valid（其余字段透传）
-    w_task_inst.assign().reads(dec_val_reg, dec_mes_reg) = [](auto src) {
-        auto [dec_val_reg, dec_mes_reg] = src;
-        uint32_t ti = dec_mes_reg.taskInst;
-        const bool v = dec_val_reg && dc::tiValid(ti);
-        ti = (ti & ~(1u << 18)) | (static_cast<uint32_t>(v) << 18);
-        return ti;
-    };
-    // thirdDec：查 decList(2)；fourthDec：查 decList(3)
-    w_dec_list.assign().reads(w_task_inst, dec_mes_reg) = [](auto src) {
-        auto [w_task_inst, dec_mes_reg] = src;
-        auto list = dec_mes_reg.decList;
-        if constexpr (Third) {
-            list[2] = static_cast<uint8_t>(dc::decTask(list[0], list[1], w_task_inst));
-        } else {
-            list[3] =
-                static_cast<uint8_t>(dc::decSec(list[0], list[1], list[2], w_task_inst));
-        }
-        return list;
-    };
-    w_task_code.assign().reads(w_dec_list) = [](auto src) {
-        auto [w_dec_list] = src;
-        if constexpr (Third) {
-            return dc::getSecTaskCode(w_dec_list[0], w_dec_list[1], w_dec_list[2]);
-        } else {
-            return 0u;
-        }
-    };
-    w_cmt_code.assign().reads(w_dec_list) = [](auto src) {
-        auto [w_dec_list] = src;
-        return dc::getCommitCode(w_dec_list[0], w_dec_list[1], w_dec_list[2], w_dec_list[3]);
-    };
-
-    hn_id_val_reg.update().on(posedge(clk)).reads(dec_val_reg) = [](auto src) {
-        auto [dec_val_reg] = src;
-        return dec_val_reg;
-    };
-    hn_id_reg.update().on(posedge(clk)).reads(dec_val_reg, dec_mes_reg, hn_id_reg) =
-        [](auto src) {
-            auto [dec_val_reg, dec_mes_reg, hn_id_reg] = src;
-            return dec_val_reg ? dec_mes_reg.hnTxnID : hn_id_reg;
-        };
     // RTL backend/Decode.scala：io.hnTxnIdOut.valid := RegNext(decValReg)、
     // bits := RegEnable(decMesReg.hnTxnID, decValReg)——与 code 输出同拍（第二级）。
-    hn_txn_id_out.assign().reads(hn_id_val_reg, hn_id_reg) = [](auto src) {
-        auto [v, id] = src;
-        return Valid<uint8_t>{v, id};
+    hn_txn_id_out.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        return Valid<uint8_t>{st.hnIdVal, st.hnId};
     };
-    dec_list_out = dec_list_reg;
-    task_code_out = task_code_reg;
-    cmt_code_out = cmt_code_reg;
-    dec_list_reg.update().on(posedge(clk)).reads(dec_val_reg, w_dec_list, dec_list_reg) =
-        [](auto src) {
-            auto [dec_val_reg, w_dec_list, dec_list_reg] = src;
-            return dec_val_reg ? w_dec_list : dec_list_reg;
-        };
-    task_code_reg.update().on(posedge(clk)).reads(dec_val_reg, w_task_code, task_code_reg) =
-        [](auto src) {
-            auto [dec_val_reg, w_task_code, task_code_reg] = src;
-            return dec_val_reg ? w_task_code : task_code_reg;
-        };
-    cmt_code_reg.update().on(posedge(clk)).reads(dec_val_reg, w_cmt_code, cmt_code_reg) =
-        [](auto src) {
-            auto [dec_val_reg, w_cmt_code, cmt_code_reg] = src;
-            return dec_val_reg ? w_cmt_code : cmt_code_reg;
-        };
+    dec_list_out.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        return st.decList;
+    };
+    task_code_out.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        return st.taskCode;
+    };
+    cmt_code_out.assign().reads(st) = [](auto src) {
+        auto [st] = src;
+        return st.cmtCode;
+    };
+
+    st.update().on(posedge(clk)).reads(st, dec_mes_in) = [](auto src) {
+        auto [st, dec_mes_in] = src;
+        St next = st;
+        // stage1：寄存输入
+        next.decVal = dec_mes_in.valid;
+        if (dec_mes_in.valid) next.mes = dec_mes_in.bits;
+        // stage2：使能 = 当前 stage1 valid；译码查表内联（原 w_task_inst/
+        // w_dec_list/w_task_code/w_cmt_code 组合链，仅在 decVal 时被采样）。
+        next.hnIdVal = st.decVal;
+        if (st.decVal) {
+            uint32_t ti = st.mes.taskInst;
+            const bool v = dc::tiValid(ti);
+            ti = (ti & ~(1u << 18)) | (static_cast<uint32_t>(v) << 18);
+            auto list = st.mes.decList;
+            if constexpr (Third) {  // thirdDec：查 decList(2)
+                list[2] = static_cast<uint8_t>(dc::decTask(list[0], list[1], ti));
+            } else {  // fourthDec：查 decList(3)
+                list[3] = static_cast<uint8_t>(dc::decSec(list[0], list[1], list[2], ti));
+            }
+            next.hnId = st.mes.hnTxnID;
+            next.decList = list;
+            if constexpr (Third) {
+                next.taskCode = dc::getSecTaskCode(list[0], list[1], list[2]);
+            } else {
+                next.taskCode = 0;
+            }
+            next.cmtCode = dc::getCommitCode(list[0], list[1], list[2], list[3]);
+        }
+        return next;
+    };
 }
 
 // ---------------- Commit ----------------
