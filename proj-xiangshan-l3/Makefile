@@ -1,7 +1,7 @@
 # proj-xiangshan-l3 一键入口
 #
 #   make test                 项目侧单元测试（ctest，逐文件独立条目）
-#   make emu [LLC=ZhuJiang]   构建 XiangShan emu（默认 DefaultConfig + OpenLLC）
+#   make emu                  构建 XiangShan emu（默认 DefaultConfig + ZhuJiang L3）
 #           [TRACE=fst]       带波形（EMU_TRACE=fst；fst 之外取值见 difftest/verilator.mk）
 #                             trace 标志变化不被 XiangShan make 跟踪，本 Makefile 按
 #                             印记检测：仅 trace 变化时删 build/verilator-compile 重 verilate
@@ -39,13 +39,13 @@ test:
 	cd build && ctest --output-on-failure
 
 # --- XiangShan emu ---
-LLC    ?= OpenLLC
+LLC    ?= ZhuJiang
 WOLVIC ?=
 ifeq ($(WOLVIC),1)
 override LLC := ZhuJiang
 endif
-# RTL ZhuJiang 下 16 线程触发 UNOPTTHREADS；wolvic 版环已移出 Verilator，同 OpenLLC
-ET      = $(if $(filter ZhuJiang,$(LLC)),$(if $(WOLVIC),16,8),16)
+# RTL ZhuJiang 下 16 线程触发 UNOPTTHREADS；wolvic 版虽不受限，默认同 8 保持两侧可比
+ET      = $(if $(filter ZhuJiang,$(LLC)),8,16)
 JOBS   ?= 32
 STAMP  := XiangShan/build/.llc-config
 WANT   := $(if $(WOLVIC),ZhuJiang-wolvic,$(LLC)) trace=$(strip $(TRACE))
