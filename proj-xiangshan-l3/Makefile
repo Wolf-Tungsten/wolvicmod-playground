@@ -121,7 +121,8 @@ replay-top:
 	  build/wolvicmod/third_party/libfst/libwolvicmod_fst.a -lz \
 	  -o build/trace/extract_top_trace
 	./build/trace/extract_top_trace build/trace/cm_full.fst -o build/trace/cm_full.txt
-	cmake --build build -j --target test_wolvic_top_replay	cd build && ctest -R test_wolvic_top_replay --output-on-failure
+	cmake --build build -j --target test_wolvic_top_replay
+	cd build && ctest -R test_wolvic_top_replay --output-on-failure
 
 # --- 共栖 A/B 回放（孤立 RTL vs wolvicmod 行为/性能对比）---
 # ZhujiangReplayTop（XiangShan/src/test/scala/top/ZhujiangReplayTop.scala）=
@@ -161,11 +162,12 @@ $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a: $(ZJRTL)/rtl/ZhujiangReplayTop.sv
 	  OPT_FAST="-O3" OPT_SLOW="-O3" VZhujiangReplayTop__ALL.a
 
 # verilator 运行时（单线程无波形：verilated.cpp + verilated_threads.cpp——
-# 后者虽只用空线程池，但 verilated.cpp 引用其符号，必须链入）
+# 后者虽只用空线程池，但 verilated.cpp 引用其符号，必须链入）。
+# 注意不能用 verilated%.o 模式规则：verilated.o 的词干为空，GNU make 不匹配。
 VRT_OBJS := $(ZJRTL)/obj/verilated.o $(ZJRTL)/obj/verilated_threads.o
-$(ZJRTL)/obj/verilated%.o: $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a
+$(VRT_OBJS): $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a
 	c++ -O3 -I$(VERILATOR_ROOT)/include -I$(VERILATOR_ROOT)/include/vltstd \
-	  -c $(VERILATOR_ROOT)/include/verilated$*.cpp -o $@
+	  -c $(VERILATOR_ROOT)/include/$(@F:.o=.cpp) -o $@
 
 # 模型库由 cmake 管理：源码变动后本规则不会自动感知，先跑
 # `cmake --build build -j --target zjmodel` 再链接（与 emu 流程一致）。
