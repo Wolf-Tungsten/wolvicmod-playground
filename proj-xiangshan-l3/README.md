@@ -1,17 +1,24 @@
 # proj-xiangshan-l3：XiangShan ZhuJiang L3 的 wolvicmod 建模与对比
 
 用 wolvicmod 建模 XiangShan（昆明湖 V3）的 ZhuJiang L3，与真实 RTL 做
-行为/性能对比。两条对比路径：
+行为/性能对比。
+
+**所有 make 命令都在 `proj-xiangshan-l3/` 目录下执行**（playground 根目
+录没有 Makefile；从根目录用 `make -C proj-xiangshan-l3 ...` 等价）。下
+文一律写 `make xxx`。
+
+两条对比路径：
 
 ## ① 孤立 L3 回放（wolvic vs verilated RTL，同一 coremark trace）
 
-按顺序三步：**造 RTL → 造 trace → 跑回放**。
+按顺序三步：**造 RTL → 造 trace → 跑回放**。trace 与 RTL 都不随库
+（`build/` 已入 .gitignore），删除全部 build 目录后按本流程一次跑通。
 
-### 第 1 步：生成回放用 RTL（一次性）
+### 第 1 步：生成回放用 RTL
 
 ```bash
-make -C proj-xiangshan-l3 zjrtl-rtl   # mill 生成 ZhujiangReplayTop（与
-                                      # 整机内 zhujiang_opt 同配置，端口即三边界）
+make zjrtl-rtl   # mill 生成 ZhujiangReplayTop（与整机内 zhujiang_opt
+                 # 同配置，端口即三边界）→ build/zjrtl/rtl/
 ```
 
 ### 第 2 步：生成 trace（`build/trace/cm_full.txt`）
@@ -19,8 +26,8 @@ make -C proj-xiangshan-l3 zjrtl-rtl   # mill 生成 ZhujiangReplayTop（与
 trace 来自**整机 RTL emu 跑 coremark 时抓的波形**：
 
 ```bash
-make -C proj-xiangshan-l3 emu TRACE=fst   # 重建带 FST 波形的 emu（只重 verilate，~23min）
-make -C proj-xiangshan-l3 replay-top      # 抓全程波形 → 提取 trace → 自动校验
+make emu TRACE=fst   # 构建带 FST 波形的 RTL emu（首次全量 ~25-35min）
+make replay-top      # 抓全程波形 → 提取 trace → 自动校验
 ```
 
 `replay-top` 内部三步：
@@ -37,13 +44,13 @@ make -C proj-xiangshan-l3 replay-top      # 抓全程波形 → 提取 trace →
 注意：`--dump-wave` 只在 `-b/-e` 窗口内 dump；trace 里 bits 仅在
 valid=1 时有意义（difftest 开 `RANDOMIZE_REG_INIT`，valid=0 时 RTL 的
 bits 是随机初值，比对器按 don't-care 处理）。**RTL 侧行为变化后必须重
-做本步**；trace 已随库提供，日常无需再生。
+做本步**。
 
 ### 第 3 步：跑回放
 
 ```bash
-make -C proj-xiangshan-l3 zjrtl-replay DUT=both    # 等价性对拍（逐拍三边界交叉验证）
-make -C proj-xiangshan-l3 zjrtl-replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
+make zjrtl-replay DUT=both    # 等价性对拍（逐拍三边界交叉验证）
+make zjrtl-replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
 ```
 
 `REPLAY_AUDIT=1 <二进制>` 开读集审计。
@@ -55,15 +62,20 @@ make -C proj-xiangshan-l3 zjrtl-replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤�
 ## ② 整机 emu（XiangShan + wolvic L3 vs XiangShan + RTL L3，difftest）
 
 ```bash
-make -C proj-xiangshan-l3 emu              # RTL ZhuJiang L3 版（8 线程）
-make -C proj-xiangshan-l3 emu WOLVIC=1     # wolvicmod L3 版（8 线程，同线程可比）
-make -C proj-xiangshan-l3 coremark         # 跑当前 emu 的 coremark + difftest
-make -C proj-xiangshan-l3 stash-emu NAME=x # 留存二进制到 build/emu-variants/ 供对比
+make emu              # RTL ZhuJiang L3 版（8 线程）
+make emu WOLVIC=1     # wolvicmod L3 版（8 线程，同线程可比）
+make coremark         # 跑当前 emu 的 coremark + difftest
+make stash-emu NAME=x # 留存二进制到 build/emu-variants/ 供对比
 ```
 
 切换配置由 `.llc-config` 印记自动 clean 重建；当前对比结果（全程 coremark
 + difftest，2026-09-29）：**wolvic 272.9s vs RTL 297.6s**，cycleCnt/IPC
 逐值相等（docs/perf-breakdown.md §28）。
+
+## 依赖
+
+Verilator 5.047、mill（launcher 自动钉 0.12.17）、OpenJDK 21、
+`libsqlite3-dev`（emu 需要）、zlib/zstd。子仓库版本见下表。
 
 ## 子仓库版本
 
@@ -83,6 +95,6 @@ rocket-chip/utility 不需要初始化（顶层自有副本）。
 
 ## 其它
 
-- `make -C proj-xiangshan-l3 test`：单测回归网（ctest 17 条）
+- `make test`：单测回归网（ctest 17 条）
 - 环境搭建、L3 边界探查、历史基线：`docs/xiangshan-l3-notes.md`
 - 性能优化全记录：`docs/perf-breakdown.md`

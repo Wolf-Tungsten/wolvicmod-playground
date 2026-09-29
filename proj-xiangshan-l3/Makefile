@@ -101,7 +101,7 @@ replay:
 	  --diff ./ready-to-run/riscv64-nemu-interpreter-so
 	fst2vcd build/trace/cc_front.fst 2>/dev/null | \
 	  python3 verify/trace/extract_cc_trace.py --start 0 --end $(N) -o build/trace/cc_front.txt
-	cmake --build build -j --target test_trace_replay
+	cmake -S . -B build && cmake --build build -j --target test_trace_replay
 	cd build && ctest -R test_trace_replay --output-on-failure
 
 # --- coremark 全程 trace 重放到 WolvicZjTop 三边界（P4b 验收）---
@@ -115,14 +115,13 @@ replay-top:
 	cd XiangShan && ./build/emu -b 0 -e $(FULLN) -C $(FULLN) --dump-wave \
 	  --wave-path ../build/trace/cm_full.fst -i ./ready-to-run/coremark-2-iteration.bin \
 	  --diff ./ready-to-run/riscv64-nemu-interpreter-so
-	cmake --build build -j  # 确保 libwolvicmod_fst.a 存在
+	cmake -S . -B build && cmake --build build -j  # 确保 libwolvicmod_fst.a 存在
 	g++ -O2 -std=c++17 -I ../wolvicmod/third_party/libfst/src \
 	  verify/trace/extract_top_trace.cpp \
 	  build/wolvicmod/third_party/libfst/libwolvicmod_fst.a -lz \
 	  -o build/trace/extract_top_trace
 	./build/trace/extract_top_trace build/trace/cm_full.fst -o build/trace/cm_full.txt
-	cmake --build build -j --target test_wolvic_top_replay
-	cd build && ctest -R test_wolvic_top_replay --output-on-failure
+	cmake --build build -j --target test_wolvic_top_replay	cd build && ctest -R test_wolvic_top_replay --output-on-failure
 
 # --- 共栖 A/B 回放（孤立 RTL vs wolvicmod 行为/性能对比）---
 # ZhujiangReplayTop（XiangShan/src/test/scala/top/ZhujiangReplayTop.scala）=
@@ -172,7 +171,7 @@ $(ZJRTL)/obj/verilated%.o: $(ZJRTL)/obj/VZhujiangReplayTop__ALL.a
 # `cmake --build build -j --target zjmodel` 再链接（与 emu 流程一致）。
 build/libzjmodel.a:
 	cmake -S . -B build
-	cmake --build build -j --target zjmodel
+	cmake --build build -j --target zjmodel --target wolvicmod_fst
 
 # 链接 A/B 回放器。ab_replay.cpp 的编译 flags 与 zjmodel 库一致
 # （AUDIT/FST 宏、-O3），避免框架 inline 代码跨 TU 的 ODR 分歧。
