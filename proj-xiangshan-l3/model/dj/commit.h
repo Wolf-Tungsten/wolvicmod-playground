@@ -66,100 +66,6 @@ public:
 using BackendDecodeThird = BackendDecode<true>;
 using BackendDecodeFourth = BackendDecode<false>;
 
-// ---------------- CommitEntry ----------------
-
-class CommitEntry : public wolvicmod::Module {
-public:
-    using DecListArr = std::array<uint8_t, 4>;
-
-    struct Flag {
-        // intl.s / intl.w
-        bool sDecode = false, sReqDB = false, sCmTask = false, sDataTask = false,
-             sWriDir = false;
-        bool wCmResp = false, wReplResp = false, wDataResp = false;
-        // chi.s / chi.w
-        bool sDbid = false, sResp = false;
-        bool wXCB0 = false, wXCB1 = false, wCompAck = false;
-
-        bool operator==(const Flag&) const = default;
-    };
-    struct AlrGet {
-        bool compAck = false, ncbWrD0 = false, ncbWrD1 = false;
-
-        bool operator==(const AlrGet&) const = default;
-    };
-
-    static constexpr uint8_t kFree = 0, kFstTask = 1, kSecTask = 2, kCommit = 3, kClean = 4;
-
-    IN(bool, clk);
-    IN(uint8_t, cfg_ci);  // 本配置行为未用（保持接口一致）
-    IN(uint8_t, cfg_bank_id);
-    IN(uint8_t, hn_txn_id);  // 7bit，elab 常量
-    IN(uint8_t, hn_idx);     // 7bit，elab 常量
-    IN(Valid<CommitTask>, alloc);  // HnTxnID 藏在 task 里？——RTL 为 CommitTask with HasHnTxnID
-    OUT(Valid<DecMes>, trd_dec_out);
-    IN(bool, trd_dec_out_rdy);
-    OUT(Valid<DecMes>, fth_dec_out);
-    IN(bool, fth_dec_out_rdy);
-    IN(Valid<DecListArr>, dec_list_in);
-    IN(uint32_t, task_code_in);
-    IN(uint32_t, cmt_code_in);
-    OUT(Valid<RespFlit>, tx_rsp);
-    IN(bool, tx_rsp_rdy);
-    IN(Valid<RespFlit>, rx_rsp);
-    IN(Valid<DataFlit>, rx_dat);
-    OUT(Valid<CMTask>, cm_task_snp);
-    IN(bool, cm_task_snp_rdy);
-    OUT(Valid<CMTask>, cm_task_wri);
-    IN(bool, cm_task_wri_rdy);
-    OUT(Valid<CMTask>, cm_task_read);
-    IN(bool, cm_task_read_rdy);
-    IN(Valid<CMResp>, cm_resp);
-    OUT(Valid<ReplTask>, repl_task);
-    IN(bool, repl_task_rdy);
-    IN(Valid<uint8_t>, repl_resp);
-    OUT(Valid<ReqDBQos>, req_db);
-    IN(bool, req_db_rdy);
-    OUT(Valid<DataTask>, data_task);
-    IN(bool, data_task_rdy);
-    IN(Valid<uint8_t>, data_resp);
-    OUT(Valid<PosClean>, clean_pos);
-    IN(bool, clean_pos_rdy);
-    OUT(uint8_t, state_out);
-
-    // 整项化：6 个字段寄存器合并为一个（w_set 门控组与每拍直通组在同一条
-    // update 内按各自条件写各字段），省 5 次逐动作的派发/边沿检测/提交开销。
-    struct V {
-        CommitTask task;
-        Flag flag;
-        AlrGet alrGet;
-        uint32_t inst = 0;    // TaskInst 打包（19b）
-        uint8_t state = 0;    // 3b
-        uint8_t respErr = 0;  // 2b
-
-        bool operator==(const V&) const = default;
-    };
-    REG(V, v);
-
-    // 派生线网（大量小 wire 跟随 RTL 结构）
-    WIRE(bool, w_rx_rsp_hit);
-    WIRE(bool, w_rx_dat_hit);
-    WIRE(bool, w_comp_ack_hit);
-    WIRE(bool, w_xcb_hit0);
-    WIRE(bool, w_xcb_hit1);
-    WIRE(bool, w_cm_resp_hit);
-    WIRE(bool, w_alloc_hit);
-    WIRE(bool, w_valid);
-    WIRE(Flag, w_flag_next);
-    WIRE(uint32_t, w_inst_next);
-    WIRE(CommitTask, w_task_next);
-    WIRE(uint8_t, w_state_next);
-    WIRE(uint8_t, w_resp_err_next);
-    WIRE(AlrGet, w_alr_get_next);
-    WIRE(bool, w_set);
-
-    CommitEntry();
-};
 
 // ---------------- Commit（顶层：112 entry + 两级译码 + 输出仲裁） ----------------
 
@@ -194,7 +100,49 @@ public:
     OUT(Valid<PosClean>, clean_pos);
     IN(bool, clean_pos_rdy);
 
-    MOD_ARRAY(CommitEntry, kEntries, entries);
+    // ---- 拍平的表项（原 CommitEntry 子模块，112 实例并入数组） ----
+    struct Flag {
+        // intl.s / intl.w
+        bool sDecode = false, sReqDB = false, sCmTask = false, sDataTask = false,
+             sWriDir = false;
+        bool wCmResp = false, wReplResp = false, wDataResp = false;
+        // chi.s / chi.w
+        bool sDbid = false, sResp = false;
+        bool wXCB0 = false, wXCB1 = false, wCompAck = false;
+
+        bool operator==(const Flag&) const = default;
+    };
+    struct AlrGet {
+        bool compAck = false, ncbWrD0 = false, ncbWrD1 = false;
+
+        bool operator==(const AlrGet&) const = default;
+    };
+    struct V {
+        CommitTask task;
+        Flag flag;
+        AlrGet alrGet;
+        uint32_t inst = 0;    // TaskInst 打包（19b）
+        uint8_t state = 0;    // 3b
+        uint8_t respErr = 0;  // 2b
+
+        bool operator==(const V&) const = default;
+    };
+    static constexpr uint8_t kFree = 0, kFstTask = 1, kSecTask = 2, kCommit = 3, kClean = 4;
+    // entry i 的 hnTxnID/hnIdx（同一数值）：bank*64 + set*16 + way
+    static constexpr uint8_t hnIdOf(uint32_t i) {
+        return static_cast<uint8_t>((i / 56) * 64 + ((i % 56) / 14) * 16 + (i % 14));
+    }
+    using EntryArr = std::array<V, kEntries>;
+    using BoolArrN = std::array<bool, kEntries>;
+    using U8ArrN = std::array<uint8_t, kEntries>;
+    using U32ArrN = std::array<uint32_t, kEntries>;
+    using TaskArrN = std::array<CommitTask, kEntries>;
+    using FlagArrN = std::array<Flag, kEntries>;
+    using AlrArrN = std::array<AlrGet, kEntries>;
+    using DecListArr = std::array<uint8_t, 4>;
+    using DecListInArr = std::array<Valid<DecListArr>, kEntries>;
+
+    REG(EntryArr, entries);
     MOD(BackendDecodeThird, trd_dec);
     MOD(BackendDecodeFourth, fth_dec);
 
@@ -218,7 +166,7 @@ public:
     MOD(DataTaskArbT, data_task_arb);
     MOD(CleanArbT, clean_arb);
 
-    // 汇集线
+    // 汇集线（拍平后由数组化 assign 驱动）
     using DecInArr = std::array<Valid<DecMes>, kEntries>;
     using TxRspInArr = std::array<Valid<RespFlit>, kEntries>;
     using CmTaskInArr = std::array<Valid<CMTask>, kEntries>;
@@ -236,6 +184,24 @@ public:
     WIRE(ReplInArr, w_repl_in);
     WIRE(DataTaskInArr, w_data_task_in);
     WIRE(CleanInArr, w_clean_in);
+
+    // per-entry 派生/次态数组
+    WIRE(BoolArrN, w_valid);
+    WIRE(BoolArrN, w_alloc_hit);
+    WIRE(BoolArrN, w_comp_ack_hit);
+    WIRE(BoolArrN, w_xcb_hit0);
+    WIRE(BoolArrN, w_xcb_hit1);
+    WIRE(BoolArrN, w_cm_resp_hit);
+    WIRE(DecListInArr, w_dec_list_in);
+    WIRE(U32ArrN, w_task_code_in);
+    WIRE(U32ArrN, w_cmt_code_in);
+    WIRE(U8ArrN, w_state_next);
+    WIRE(TaskArrN, w_task_next);
+    WIRE(FlagArrN, w_flag_next);
+    WIRE(U32ArrN, w_inst_next);
+    WIRE(AlrArrN, w_alr_get_next);
+    WIRE(U8ArrN, w_resp_err_next);
+    WIRE(BoolArrN, w_set);
 
     Commit();
 };

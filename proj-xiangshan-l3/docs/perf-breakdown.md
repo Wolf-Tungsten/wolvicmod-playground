@@ -739,6 +739,47 @@ s0/s1 流水 + 几个 mux——C 模型里一句 for 循环。CommitEntry 同理
 ctest 17/17；wolvicmod cosim 30 组；proj cosim 51 组；`REPLAY_AUDIT=1`
 全程审计回放。
 
+## 17. 建模层整项化（续）：TaskBuffer 拍平 + Commit 全拍平（2026-09-29）
+
+**动机**：§16 的延续——同一病灶的另两处。TaskBuffer（req 16 + hpr 8
+实例/bank）：TaskEntry 子模块 + TaskBuffer 里 per-entry 的
+init_nid/oth_rel/s0_rdy 驱动 assign（每实例 ~16 个动作）。Commit：112 个
+CommitEntry 实例，每实例 ~35 个动作（命中检测、次态线网、15 路输出端口
+经 combine 接仲裁器）——全部是在 C 模型里用 for 循环就能表达的逻辑。
+
+**改法**（对外端口逐位不变；仲裁器 Alloc/VipArb/QosRR 与 BackendDecode
+子模块不动）：
+
+- **TaskBuffer 拍平**：TaskEntry 类删除；`EntryV{task, nid, retryNum,
+  timeout, validD1}` 数组并为 `REG(EntryArr)` 一条 update 循环；
+  init_nid/oth_rel 的 N² 统计、s0_rdy/lockIdx 的锁定判定全部进循环内联
+  （N≤16 的顺序比较远比框架动作便宜）；`w_alloc_rdy_all`/`w_s0_in`/
+  `w_lock_all` 由 entries 数组直算。RegNext 语义（timeout、validD1）全部
+  读旧值，与原版逐位对应。
+- **Commit 全拍平**：CommitEntry 类删除；112 项状态并为
+  `REG(std::array<V, 112>)` 一条 update；15 路 per-entry 输出变成数组
+  wire（一条 assign 循环 112 项）直喂仲裁器，per-entry rdy 从各仲裁器的
+  in_rdy 数组直读；命中检测/译码回灌/六组次态逻辑全部数组化；死端口
+  `state_out` 删除。广播输入（rx_rsp/cm_resp 等）变化今天本来就唤醒全部
+  112 个实例的同构小 assign，数组合并后总计算量不变、派发次数 -95%+。
+- cosim harness_frontend 窥探点同步（TaskEntry 寄存器 → entries 数组成员）。
+
+**结果**（孤立回放，taskset -c 2）：
+
+| 阶段 | 30k eval | 全程 eval | 全程 loop |
+|---|---|---|---|
+| §16 终版 | 2.554s | 25.10 / 24.58s | 26.62 / 26.10s |
+| + TaskBuffer 拍平 | 2.227s（-12.8%） | — | — |
+| + Commit 全拍平 | 1.970s（再 -11.6%） | **20.53 / 20.51s** | **22.05 / 22.03s** |
+
+全程 eval **-17%**（对 §16）；累计对 491s 全量基线 **~23.9×**，对 RTL
+差距 ~5.9× → **~4.8×**。两轮整项化（§16+§17）合计：eval 35.3–37.4 →
+20.5s，**-44%**。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉（两侧各 0 失配）；proj ctest 17/17；
+wolvicmod cosim 30 组；proj cosim 51 组；`REPLAY_AUDIT=1` 全程审计回放。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：

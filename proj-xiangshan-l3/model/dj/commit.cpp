@@ -102,471 +102,11 @@ BackendDecode<Third>::BackendDecode() {
         };
 }
 
-// ---------------- CommitEntry ----------------
-
-CommitEntry::CommitEntry() {
-    // ---- 基本派生 ----
-    w_valid.assign().reads(v) = [](auto src) {
-        auto [v] = src;
-        return v.state != kFree;
-    };
-    w_rx_rsp_hit.assign().reads(rx_rsp, hn_txn_id) = [](auto src) {
-        auto [rx_rsp, hn_txn_id] = src;
-        return rx_rsp.valid && rx_rsp.bits.txn_id == hn_txn_id;
-    };
-    w_rx_dat_hit.assign().reads(rx_dat, hn_txn_id) = [](auto src) {
-        auto [rx_dat, hn_txn_id] = src;
-        return rx_dat.valid && rx_dat.bits.txn_id == hn_txn_id;
-    };
-    w_comp_ack_hit.assign().reads(w_rx_rsp_hit, w_rx_dat_hit, rx_rsp, rx_dat) = [](auto src) {
-        auto [w_rx_rsp_hit, w_rx_dat_hit, rx_rsp, rx_dat] = src;
-        return (w_rx_rsp_hit && rx_rsp.bits.opcode == kCompAck) ||
-               (w_rx_dat_hit && rx_dat.bits.opcode == kNCBWrDataCompAck);
-    };
-    w_xcb_hit0.assign().reads(w_rx_dat_hit, rx_dat) = [](auto src) {
-        auto [w_rx_dat_hit, rx_dat] = src;
-        const uint8_t op = rx_dat.bits.opcode;
-        return w_rx_dat_hit && rx_dat.bits.data_id == 0 &&
-               (op == kNonCopyBackWriteData || op == kNCBWrDataCompAck ||
-                op == kCopyBackWriteData);
-    };
-    w_xcb_hit1.assign().reads(w_rx_dat_hit, rx_dat) = [](auto src) {
-        auto [w_rx_dat_hit, rx_dat] = src;
-        const uint8_t op = rx_dat.bits.opcode;
-        return w_rx_dat_hit && rx_dat.bits.data_id == 2 &&
-               (op == kNonCopyBackWriteData || op == kNCBWrDataCompAck ||
-                op == kCopyBackWriteData);
-    };
-    w_cm_resp_hit.assign().reads(w_valid, cm_resp, hn_txn_id) = [](auto src) {
-        auto [w_valid, cm_resp, hn_txn_id] = src;
-        return w_valid && cm_resp.valid && cm_resp.bits.hnTxnID == hn_txn_id;
-    };
-    w_alloc_hit.assign().reads(alloc, hn_txn_id) = [](auto src) {
-        auto [alloc, hn_txn_id] = src;
-        return alloc.valid && alloc.bits.hnTxnID == hn_txn_id;
-    };
-    state_out.assign().reads(v) = [](auto src) {
-        auto [v] = src;
-        return v.state;
-    };
-
-    // ---- alrGet / respErr 跟踪 ----
-    w_alr_get_next.assign().reads(v, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1,
-                                  clean_pos, clean_pos_rdy) = [](auto src) {
-        auto [v, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1, clean_pos, clean_pos_rdy] =
-            src;
-        const AlrGet& alr_get_reg = v.alrGet;
-        AlrGet n = alr_get_reg;
-        if (clean_pos.valid && clean_pos_rdy) {
-            n = AlrGet{};
-        } else {
-            n.compAck = w_comp_ack_hit || alr_get_reg.compAck;
-            n.ncbWrD0 = w_xcb_hit0 || alr_get_reg.ncbWrD0;
-            n.ncbWrD1 = w_xcb_hit1 || alr_get_reg.ncbWrD1;
-        }
-        return n;
-    };
-    w_resp_err_next.assign().reads(v, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1,
-                                   rx_dat, clean_pos, clean_pos_rdy) = [](auto src) {
-        auto [v, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1, rx_dat, clean_pos,
-              clean_pos_rdy] = src;
-        const uint8_t& resp_err_reg = v.respErr;
-        uint8_t n = resp_err_reg;
-        if (clean_pos.valid && clean_pos_rdy) {
-            n = kErrOk;
-        } else if (resp_err_reg != kErrDerr && resp_err_reg != kErrNderr) {
-            const bool cmIsErr = cm_resp.bits.respErr == kErrDerr || cm_resp.bits.respErr == kErrNderr;
-            if (w_cm_resp_hit && cmIsErr) {
-                n = cm_resp.bits.respErr;
-            } else if (w_xcb_hit0 || w_xcb_hit1) {
-                n = rx_dat.bits.resp_err;
-            }
-        }
-        return n;
-    };
-    // ---- 输出通道 ----
-    req_db.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
-        auto [w_valid, v, hn_txn_id] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        ReqDBQos r;
-        r.hnTxnID = hn_txn_id;
-        r.dataVec = (flag_reg.sCmTask && dc::tcSnoop(task_reg.task)) ? kFullVec
-                                                                     : task_reg.chi.dataVec;
-        r.qos = task_reg.qos;
-        return Valid<ReqDBQos>{w_valid && flag_reg.sReqDB, r};
-    };
-    data_task.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
-        auto [w_valid, v, hn_txn_id] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        const uint8_t& resp_err_reg = v.respErr;
-        DataTask t;
-        const bool replLLC = flag_reg.sWriDir && dc::ccWriLLC(task_reg.cmt) && !task_reg.dir.llc.hit;
-        t.dataOp.repl = dc::ccOpRepl(task_reg.cmt);
-        t.dataOp.read = dc::ccOpRead(task_reg.cmt);
-        t.dataOp.send = dc::ccOpSend(task_reg.cmt);
-        t.dataOp.save = dc::ccOpSave(task_reg.cmt) && !replLLC;
-        t.dataOp.merge = dc::ccOpMerge(task_reg.cmt);
-        t.hnTxnID = hn_txn_id;
-        t.ds = task_reg.ds;
-        t.dataVec = dc::ccFullSize(task_reg.cmt) ? kFullVec : task_reg.chi.dataVec;
-        t.qos = task_reg.qos;
-        t.txDat.dbid = hn_txn_id;
-        t.txDat.resp = static_cast<uint8_t>(dc::ccResp(task_reg.cmt));
-        t.txDat.opcode = static_cast<uint8_t>(dc::ccOpcode(task_reg.cmt));
-        t.txDat.txn_id = task_reg.chi.txnID;
-        t.txDat.src_id = task_reg.chi.getNoC();
-        t.txDat.tgt_id = task_reg.chi.nodeId;
-        t.txDat.resp_err = resp_err_reg;
-        return Valid<DataTask>{w_valid && flag_reg.sDataTask && task_reg.alr.reqDB, t};
-    };
-    repl_task.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
-        auto [w_valid, v, hn_txn_id] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        ReplTask t;
-        t.hnTxnID = hn_txn_id;
-        t.qos = task_reg.qos;
-        t.wriSF = dc::ccWriSRC(task_reg.cmt) || dc::ccWriSNP(task_reg.cmt);
-        t.dir.sf.hit = task_reg.dir.sf.hit;
-        t.dir.sf.wayOH = task_reg.dir.sf.wayOH;
-        t.directAllocSF = t.wriSF && !task_reg.dir.sf.hit && task_reg.dir.sf.meta == 0;
-        // sf metaVec 单 meta：srcVec/snpVec 只可能命中 meta0
-        const bool srcVec0 = true;  // metaIdOH 恒 1（nrSfMetas=1）
-        const uint32_t snpTgt = dc::tcSnpTgt(task_reg.task);
-        const bool snpVec0 =
-            snpTgt == 1 && task_reg.dir.sf.meta != 0;  // SnpTgt.ALL=b01；单 meta 时 ONE/OTH→0
-        uint8_t meta0;
-        if (srcVec0 && dc::ccWriSRC(task_reg.cmt)) {
-            meta0 = dc::ccSrcValid(task_reg.cmt);
-        } else if (snpVec0 && dc::ccWriSNP(task_reg.cmt)) {
-            meta0 = dc::ccSnpValid(task_reg.cmt);
-        } else {
-            meta0 = task_reg.dir.sf.hit ? task_reg.dir.sf.meta : 0;
-        }
-        t.dir.sf.meta = meta0;
-        t.wriLLC = dc::ccWriLLC(task_reg.cmt);
-        t.dir.llc.hit = task_reg.dir.llc.hit;
-        t.dir.llc.wayOH = task_reg.dir.llc.wayOH;
-        t.dir.llc.meta = static_cast<uint8_t>(dc::ccLlcState(task_reg.cmt));
-        return Valid<ReplTask>{w_valid && flag_reg.sWriDir && !flag_reg.wDataResp, t};
-    };
-
-    // cmTask 三路（bits 共享，valid 分流）
-    cm_task_snp.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
-        auto [w_valid, v, hn_txn_id] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        CMTask t;
-        t.chi = task_reg.chi;
-        t.chi.channel = dc::tcSnoop(task_reg.task) ? kChSnp : kChReq;
-        t.chi.dataVec = (dc::tcSnoop(task_reg.task) || dc::tcFullSize(task_reg.task))
-                            ? kFullVec
-                            : task_reg.chi.dataVec;
-        t.chi.opcode = static_cast<uint8_t>(dc::tcOpcode(task_reg.task));
-        t.chi.expCompAck = dc::tcExpCompAck(task_reg.task);
-        t.chi.retToSrc = dc::tcRetToSrc(task_reg.task);
-        t.chi.size = (dc::tcSnoop(task_reg.task) || dc::tcFullSize(task_reg.task))
-                         ? 6
-                         : task_reg.chi.size;
-        t.hnTxnID = hn_txn_id;
-        t.dataOp.repl = dc::tcOpRepl(task_reg.task);
-        t.dataOp.read = dc::tcOpRead(task_reg.task);
-        t.dataOp.send = dc::tcOpSend(task_reg.task);
-        t.dataOp.save = dc::tcOpSave(task_reg.task);
-        t.dataOp.merge = dc::tcOpMerge(task_reg.task);
-        t.ds = task_reg.ds;
-        const uint32_t snpTgt = dc::tcSnpTgt(task_reg.task);
-        t.snpVec = snpTgt == 1 && task_reg.dir.sf.meta != 0 ? 1 : 0;
-        t.fromRepl = false;
-        // cbResp：llc meta 的 cbResp（I→I, SC→SC, UC→UC, UD→UD_PD）
-        const uint8_t st = task_reg.dir.llc.meta;
-        t.cbResp = st == 0 ? 0 : st == 1 ? 1 : st == 3 ? 2 : 6;  // I/SC/UC/UD→I/SC/UC/UD_PD
-        t.doDMT = dc::tcDoDMT(task_reg.task);
-        t.qos = task_reg.qos;
-        const bool valid = w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
-                           dc::tcSnoop(task_reg.task);
-        return Valid<CMTask>{valid, t};
-    };
-    cm_task_read.assign().reads(w_valid, v, cm_task_snp) = [](auto src) {
-        auto [w_valid, v, snp_ch] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        CMTask t = snp_ch.bits;
-        return Valid<CMTask>{w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
-                                 dc::tcRead(task_reg.task),
-                             t};
-    };
-    cm_task_wri.assign().reads(w_valid, v, cm_task_snp) = [](auto src) {
-        auto [w_valid, v, snp_ch] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        CMTask t = snp_ch.bits;
-        return Valid<CMTask>{w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
-                                 dc::tcWrite(task_reg.task),
-                             t};
-    };
-
-    tx_rsp.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
-        auto [w_valid, v, hn_txn_id] = src;
-        const Flag& flag_reg = v.flag;
-        const CommitTask& task_reg = v.task;
-        const uint8_t& resp_err_reg = v.respErr;
-        RespFlit f{};
-        f.src_id = task_reg.chi.getNoC();
-        f.tgt_id = task_reg.chi.nodeId;
-        f.txn_id = task_reg.chi.txnID;
-        f.dbid = hn_txn_id;
-        f.opcode = flag_reg.sResp ? static_cast<uint8_t>(dc::ccOpcode(task_reg.cmt))
-                                  : (task_reg.chi.isCopyBackWrite() ? kCompDBIDResp : kDBIDResp);
-        f.fwd_state = static_cast<uint8_t>(dc::ccFwdResp(task_reg.cmt));
-        f.resp = static_cast<uint8_t>(dc::ccResp(task_reg.cmt));
-        f.qos = task_reg.qos;
-        f.resp_err = resp_err_reg;
-        const bool valid = w_valid && (flag_reg.sDbid || flag_reg.sResp) && !flag_reg.sReqDB;
-        return Valid<RespFlit>{valid, f};
-    };
-
-    // 译码请求
-    trd_dec_out.assign().reads(v, hn_txn_id) = [](auto src) {
-        auto [v, hn_txn_id] = src;
-        const uint8_t& state_reg = v.state;
-        const Flag& flag_reg = v.flag;
-        const uint32_t& inst_reg = v.inst;
-        const CommitTask& task_reg = v.task;
-        const bool decValid = flag_reg.sDecode &&
-                              !(flag_reg.wCmResp || flag_reg.wXCB0 || flag_reg.wXCB1);
-        DecMes m;
-        m.taskInst = inst_reg;
-        m.decList = task_reg.decList;
-        m.hnTxnID = hn_txn_id;
-        return Valid<DecMes>{decValid && state_reg == kFstTask, m};
-    };
-    fth_dec_out.assign().reads(v, hn_txn_id) = [](auto src) {
-        auto [v, hn_txn_id] = src;
-        const uint8_t& state_reg = v.state;
-        const Flag& flag_reg = v.flag;
-        const uint32_t& inst_reg = v.inst;
-        const CommitTask& task_reg = v.task;
-        const bool decValid = flag_reg.sDecode &&
-                              !(flag_reg.wCmResp || flag_reg.wXCB0 || flag_reg.wXCB1);
-        DecMes m;
-        m.taskInst = inst_reg;
-        m.decList = task_reg.decList;
-        m.hnTxnID = hn_txn_id;
-        return Valid<DecMes>{decValid && state_reg == kSecTask, m};
-    };
-
-    clean_pos.assign().reads(w_valid, v, hn_idx) = [](auto src) {
-        auto [w_valid, v, hn_idx] = src;
-        const uint8_t& state_reg = v.state;
-        const CommitTask& task_reg = v.task;
-        PosClean p;
-        p.hnIdx = hn_idx;
-        p.channel = task_reg.chi.channel;
-        p.qos = task_reg.qos;
-        return Valid<PosClean>{w_valid && state_reg == kClean, p};
-    };
-
-    // ---- 状态机（先算 stateNext，供 flag/inst 用） ----
-    w_state_next.assign().reads(v, w_alloc_hit, alloc, dec_list_in, task_code_in,
-                                cmt_code_in, clean_pos, clean_pos_rdy) = [](auto src) {
-        auto [v, w_alloc_hit, alloc, dec_list_in, task_code_in, cmt_code_in,
-              clean_pos, clean_pos_rdy] = src;
-        const uint8_t& state_reg = v.state;
-        const Flag& flag_reg = v.flag;
-        const bool allFlagDone = !flag_reg.sDecode && !flag_reg.sReqDB && !flag_reg.sCmTask &&
-                                 !flag_reg.sDataTask && !flag_reg.sWriDir &&
-                                 !flag_reg.wCmResp && !flag_reg.wReplResp &&
-                                 !flag_reg.wDataResp && !flag_reg.sDbid && !flag_reg.sResp &&
-                                 !flag_reg.wXCB0 && !flag_reg.wXCB1 && !flag_reg.wCompAck;
-        uint8_t n = state_reg;
-        switch (state_reg) {
-            case kFree:
-                if (w_alloc_hit)
-                    n = dc::tcIsValid(alloc.bits.task) ? kFstTask : kCommit;
-                break;
-            case kFstTask:
-                if (dec_list_in.valid)
-                    n = (dc::tcIsValid(task_code_in) && dc::ccWaitSecDone(cmt_code_in))
-                            ? kSecTask
-                            : kCommit;
-                break;
-            case kSecTask:
-                if (dec_list_in.valid) n = kCommit;
-                break;
-            case kCommit:
-                if (allFlagDone) n = kClean;
-                break;
-            case kClean:
-                if (clean_pos.valid && clean_pos_rdy) n = kFree;
-                break;
-            default: break;
-        }
-        return n;
-    };
-
-    // ---- taskNext（decListIn 换入 / alr.reqDB） ----
-    w_task_next.assign().reads(v, dec_list_in, task_code_in, cmt_code_in,
-                               req_db, req_db_rdy) = [](auto src) {
-        auto [v, dec_list_in, task_code_in, cmt_code_in, req_db, req_db_rdy] =
-            src;
-        const CommitTask& task_reg = v.task;
-        const uint8_t& state_reg = v.state;
-        CommitTask n = task_reg;
-        if (dec_list_in.valid) {
-            n.decList = dec_list_in.bits;
-            n.task = task_code_in;
-            n.task = (n.task & ~(3u << 1)) |
-                     (dc::tcSnpTgt(task_reg.task) << 1);  // snpTgt 保留原值
-            n.cmt = (state_reg == kFstTask && dc::ccWaitSecDone(cmt_code_in)) ? 0 : cmt_code_in;
-        }
-        if (req_db.valid && req_db_rdy) n.alr.reqDB = true;
-        return n;
-    };
-
-    // ---- flag 次态 ----
-    w_flag_next.assign().reads(v, w_state_next, w_alloc_hit, alloc,
-                               w_task_next, dec_list_in, trd_dec_out, trd_dec_out_rdy,
-                               fth_dec_out, fth_dec_out_rdy, req_db, req_db_rdy, cm_task_snp,
-                               cm_task_snp_rdy, cm_task_read, cm_task_read_rdy, cm_task_wri,
-                               cm_task_wri_rdy, data_task, data_task_rdy, repl_task,
-                               repl_task_rdy, w_cm_resp_hit, repl_resp, data_resp, hn_txn_id,
-                               tx_rsp, tx_rsp_rdy, w_comp_ack_hit, w_xcb_hit0,
-                               w_xcb_hit1) = [](auto src) {
-        auto [v, w_state_next, w_alloc_hit, alloc, w_task_next,
-              dec_list_in, trd_dec_out, trd_dec_out_rdy, fth_dec_out, fth_dec_out_rdy, req_db,
-              req_db_rdy, cm_task_snp, cm_task_snp_rdy, cm_task_read, cm_task_read_rdy,
-              cm_task_wri, cm_task_wri_rdy, data_task, data_task_rdy, repl_task, repl_task_rdy,
-              w_cm_resp_hit, repl_resp, data_resp, hn_txn_id, tx_rsp, tx_rsp_rdy,
-              w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1] = src;
-        const Flag& flag_reg = v.flag;
-        const uint8_t& state_reg = v.state;
-        const CommitTask& task_reg = v.task;
-        const AlrGet& alr_get_reg = v.alrGet;
-        Flag n = flag_reg;
-        if (w_alloc_hit || dec_list_in.valid) {
-            const uint32_t task = dec_list_in.valid ? w_task_next.task : alloc.bits.task;
-            const uint32_t cmt = dec_list_in.valid ? w_task_next.cmt : alloc.bits.cmt;
-            const bool alrReqDB = dec_list_in.valid ? task_reg.alr.reqDB : alloc.bits.alr.reqDB;
-            const bool alrSendData =
-                dec_list_in.valid ? task_reg.alr.sData : alloc.bits.alr.sData;
-            const bool needWaitAck =
-                dec_list_in.valid ? flag_reg.wCompAck : alloc.bits.chi.expCompAck;
-            const bool needWaitData =
-                w_alloc_hit && (dc::tcReturnDBID(alloc.bits.task) || alloc.bits.alr.sDBID);
-            const bool copyBackNeedData = alloc.bits.chi.isCopyBackWrite() && needWaitData;
-            const bool replLLC = dc::ccWriLLC(cmt) && !task_reg.dir.llc.hit;
-            const bool opIsValid = dc::tcSnoop(task) || dc::tcRead(task) ||
-                                   dc::tcDataless(task) || dc::tcWrite(task);
-            const bool cmtDataOpValid = dc::ccOpRepl(cmt) || dc::ccOpRead(cmt) ||
-                                        dc::ccOpSend(cmt) || dc::ccOpSave(cmt) ||
-                                        dc::ccOpMerge(cmt);
-            const bool cmtOnlySave = !dc::ccOpRepl(cmt) && !dc::ccOpRead(cmt) &&
-                                     !dc::ccOpSend(cmt) && dc::ccOpSave(cmt) &&
-                                     !dc::ccOpMerge(cmt);
-            const bool cmtIsWriDir =
-                dc::ccWriSRC(cmt) || dc::ccWriSNP(cmt) || dc::ccWriLLC(cmt);
-
-            n.sDecode = w_state_next == kFstTask || w_state_next == kSecTask;
-            n.sReqDB = (dc::tcNeedDB(task) || cmtDataOpValid) && !alrReqDB;
-            n.sCmTask = opIsValid;
-            n.sDataTask = (cmtOnlySave ? !replLLC : cmtDataOpValid) && !alrSendData;
-            n.sWriDir = cmtIsWriDir;
-
-            n.wCmResp = n.sCmTask;
-            n.wReplResp = n.sWriDir;
-            n.wDataResp = n.sDataTask || alrSendData;
-
-            n.sDbid = w_alloc_hit && dc::tcReturnDBID(alloc.bits.task) && !alloc.bits.alr.sDBID;
-            n.sResp = dc::ccSendResp(cmt) && dc::ccChannel(cmt) == kChRsp;
-
-            n.wXCB0 = needWaitData && (alloc.bits.chi.dataVec & 1) && !w_xcb_hit0 &&
-                      !alr_get_reg.ncbWrD0;
-            n.wXCB1 = needWaitData && ((alloc.bits.chi.dataVec >> 1) & 1) && !w_xcb_hit1 &&
-                      !alr_get_reg.ncbWrD1;
-            n.wCompAck = needWaitAck && !copyBackNeedData && !w_comp_ack_hit &&
-                         !alr_get_reg.compAck;
-        } else {
-            const bool decodeFire =
-                (trd_dec_out.valid && trd_dec_out_rdy) || (fth_dec_out.valid && fth_dec_out_rdy);
-            const bool cmTaskHit = (cm_task_snp.valid && cm_task_snp_rdy) ||
-                                   (cm_task_read.valid && cm_task_read_rdy) ||
-                                   (cm_task_wri.valid && cm_task_wri_rdy);
-            if (decodeFire) n.sDecode = false;
-            if (req_db.valid && req_db_rdy) n.sReqDB = false;
-            if (cmTaskHit) n.sCmTask = false;
-            if (data_task.valid && data_task_rdy) n.sDataTask = false;
-            if (repl_task.valid && repl_task_rdy) n.sWriDir = false;
-            if (w_cm_resp_hit) n.wCmResp = false;
-            if (repl_resp.valid && repl_resp.bits == hn_txn_id) n.wReplResp = false;
-            if (data_resp.valid && data_resp.bits == hn_txn_id) n.wDataResp = false;
-            if (tx_rsp.valid && tx_rsp_rdy) {
-                n.sDbid = false;
-                n.sResp = false;
-            }
-            if (w_comp_ack_hit) n.wCompAck = false;
-            if (w_xcb_hit0) n.wXCB0 = false;
-            if (w_xcb_hit1) n.wXCB1 = false;
-        }
-        return n;
-    };
-
-    // ---- inst 次态 ----
-    w_inst_next.assign().reads(v, w_state_next, w_alloc_hit, w_cm_resp_hit,
-                               cm_resp, w_xcb_hit0, w_xcb_hit1, rx_dat) = [](auto src) {
-        auto [v, w_state_next, w_alloc_hit, w_cm_resp_hit, cm_resp,
-              w_xcb_hit0, w_xcb_hit1, rx_dat] = src;
-        const uint32_t& inst_reg = v.inst;
-        const uint8_t& state_reg = v.state;
-        uint32_t n = inst_reg;
-        const bool cleanInst =
-            (state_reg == kFstTask && w_state_next == kSecTask) || w_state_next == kCommit;
-        if (w_alloc_hit || cleanInst) {
-            n = 0;  // TaskInst 清零
-        } else if (w_cm_resp_hit) {
-            n = state_reg == kFstTask ? (inst_reg | cm_resp.bits.taskInst) : cm_resp.bits.taskInst;
-        }
-        if (cleanInst) {
-            n &= ~((1u << 3) | 0x7u);  // getXCBResp=0, xCBResp=I
-        } else if (w_xcb_hit0 || w_xcb_hit1) {
-            n |= (1u << 3);
-            n = (n & ~0x7u) | (rx_dat.bits.resp & 0x7u);
-        }
-        if (cleanInst) {
-            n &= ~(1u << 18);  // valid=0
-        } else if (w_cm_resp_hit || w_xcb_hit0 || w_xcb_hit1) {
-            n |= (1u << 18);
-        }
-        return n;
-    };
-
-    // ---- 寄存 ----
-    w_set.assign().reads(w_alloc_hit, w_valid, w_xcb_hit0, w_xcb_hit1) = [](auto src) {
-        auto [w_alloc_hit, w_valid, w_xcb_hit0, w_xcb_hit1] = src;
-        return w_alloc_hit || w_valid || w_xcb_hit0 || w_xcb_hit1;
-    };
-    v.update().on(posedge(clk)).reads(v, w_set, w_alloc_hit, alloc, w_task_next, w_flag_next,
-                                      w_inst_next, w_state_next, w_alr_get_next,
-                                      w_resp_err_next) = [](auto src) {
-        auto [v, w_set, w_alloc_hit, alloc, w_task_next, w_flag_next, w_inst_next, w_state_next,
-              w_alr_get_next, w_resp_err_next] = src;
-        V n = v;
-        if (w_set) {
-            n.task = w_alloc_hit ? alloc.bits : w_task_next;
-            n.flag = w_flag_next;
-            n.inst = w_inst_next;
-            n.state = w_state_next;
-        }
-        n.alrGet = w_alr_get_next;
-        n.respErr = w_resp_err_next;
-        return n;
-    };
-}
-
-
 // ---------------- Commit ----------------
+// 拍平建模：112 个表项不再做子模块——状态并入 REG(entries) 一条 update 循环，
+// per-entry 组合逻辑数组化为 Array wire（广播输入变化今天本来就唤醒全部
+// 112 个实例的小 assign，数组合并后总计算量不变、框架动作数 -95%）。
+// 仲裁器/译码器子模块不变。
 
 Commit::Commit() {
     trd_dec.clk = clk;
@@ -582,87 +122,579 @@ Commit::Commit() {
     data_task_arb.clk = clk;
     clean_arb.clk = clk;
 
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        const uint32_t bank = i / 56, set = (i % 56) / 14, way = i % 14;
-        auto& e = entries[i];
-        e.clk = clk;
-        e.cfg_ci = cfg_ci;
-        e.cfg_bank_id = cfg_bank_id;
-        e.hn_txn_id = static_cast<uint8_t>(bank * 64 + set * 16 + way);
-        e.hn_idx = static_cast<uint8_t>((bank << 6) | (set << 4) | way);
-        e.alloc = bank == 0 ? cmt_task_0 : cmt_task_1;
-        e.rx_rsp = rx_rsp;
-        e.rx_dat = rx_dat;
-        e.cm_resp = cm_resp;
-        e.repl_resp = repl_resp;
-        e.data_resp = data_resp;
+    // ---- 基本派生 ----
+    w_valid.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) o[i] = entries[i].state != kFree;
+        return o;
+    };
+    w_alloc_hit.assign().reads(cmt_task_0, cmt_task_1) = [](auto src) {
+        auto [cmt_task_0, cmt_task_1] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const auto& al = (i / 56 == 0) ? cmt_task_0 : cmt_task_1;
+            o[i] = al.valid && al.bits.hnTxnID == hnIdOf(i);
+        }
+        return o;
+    };
+    w_comp_ack_hit.assign().reads(rx_rsp, rx_dat) = [](auto src) {
+        auto [rx_rsp, rx_dat] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const uint8_t hn = hnIdOf(i);
+            const bool rspHit = rx_rsp.valid && rx_rsp.bits.txn_id == hn;
+            const bool datHit = rx_dat.valid && rx_dat.bits.txn_id == hn;
+            o[i] = (rspHit && rx_rsp.bits.opcode == kCompAck) ||
+                   (datHit && rx_dat.bits.opcode == kNCBWrDataCompAck);
+        }
+        return o;
+    };
+    w_xcb_hit0.assign().reads(rx_dat) = [](auto src) {
+        auto [rx_dat] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const uint8_t op = rx_dat.bits.opcode;
+            o[i] = rx_dat.valid && rx_dat.bits.txn_id == hnIdOf(i) &&
+                   rx_dat.bits.data_id == 0 &&
+                   (op == kNonCopyBackWriteData || op == kNCBWrDataCompAck ||
+                    op == kCopyBackWriteData);
+        }
+        return o;
+    };
+    w_xcb_hit1.assign().reads(rx_dat) = [](auto src) {
+        auto [rx_dat] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const uint8_t op = rx_dat.bits.opcode;
+            o[i] = rx_dat.valid && rx_dat.bits.txn_id == hnIdOf(i) &&
+                   rx_dat.bits.data_id == 2 &&
+                   (op == kNonCopyBackWriteData || op == kNCBWrDataCompAck ||
+                    op == kCopyBackWriteData);
+        }
+        return o;
+    };
+    w_cm_resp_hit.assign().reads(w_valid, cm_resp) = [](auto src) {
+        auto [w_valid, cm_resp] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i)
+            o[i] = w_valid[i] && cm_resp.valid && cm_resp.bits.hnTxnID == hnIdOf(i);
+        return o;
+    };
 
-        // 译码结果回灌（按 hnTxnID 匹配；trd 优先）
-        e.dec_list_in.assign().reads(trd_dec.hn_txn_id_out, fth_dec.hn_txn_id_out,
-                                     trd_dec.dec_list_out, fth_dec.dec_list_out,
-                                     e.hn_txn_id) = [](auto src) {
-            auto [trd_id, fth_id, trd_list, fth_list, hn_txn_id] = src;
-            const bool trdHit = trd_id.valid && trd_id.bits == hn_txn_id;
-            const bool fthHit = fth_id.valid && fth_id.bits == hn_txn_id;
-            return Valid<CommitEntry::DecListArr>{trdHit || fthHit,
-                                                  trdHit ? trd_list : fth_list};
-        };
-        e.task_code_in.assign().reads(trd_dec.task_code_out, fth_dec.task_code_out,
-                                      trd_dec.hn_txn_id_out, fth_dec.hn_txn_id_out,
-                                      e.hn_txn_id) = [](auto src) {
-            auto [trd_code, fth_code, trd_id, fth_id, hn_txn_id] = src;
-            const bool trdHit = trd_id.valid && trd_id.bits == hn_txn_id;
-            return trdHit ? trd_code : fth_code;
-        };
-        e.cmt_code_in.assign().reads(trd_dec.cmt_code_out, fth_dec.cmt_code_out,
-                                     trd_dec.hn_txn_id_out, fth_dec.hn_txn_id_out,
-                                     e.hn_txn_id) = [](auto src) {
-            auto [trd_code, fth_code, trd_id, fth_id, hn_txn_id] = src;
-            const bool trdHit = trd_id.valid && trd_id.bits == hn_txn_id;
-            return trdHit ? trd_code : fth_code;
-        };
-    }
+    // ---- 译码结果回灌（按 hnTxnID 匹配；trd 优先） ----
+    w_dec_list_in.assign().reads(trd_dec.hn_txn_id_out, fth_dec.hn_txn_id_out,
+                                 trd_dec.dec_list_out, fth_dec.dec_list_out) = [](auto src) {
+        auto [trd_id, fth_id, trd_list, fth_list] = src;
+        DecListInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const bool trdHit = trd_id.valid && trd_id.bits == hnIdOf(i);
+            const bool fthHit = fth_id.valid && fth_id.bits == hnIdOf(i);
+            o[i] = Valid<DecListArr>{trdHit || fthHit, trdHit ? trd_list : fth_list};
+        }
+        return o;
+    };
+    w_task_code_in.assign().reads(trd_dec.task_code_out, fth_dec.task_code_out,
+                                  trd_dec.hn_txn_id_out, fth_dec.hn_txn_id_out) = [](auto src) {
+        auto [trd_code, fth_code, trd_id, fth_id] = src;
+        U32ArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const bool trdHit = trd_id.valid && trd_id.bits == hnIdOf(i);
+            o[i] = trdHit ? trd_code : fth_code;
+        }
+        return o;
+    };
+    w_cmt_code_in.assign().reads(trd_dec.cmt_code_out, fth_dec.cmt_code_out,
+                                 trd_dec.hn_txn_id_out, fth_dec.hn_txn_id_out) = [](auto src) {
+        auto [trd_code, fth_code, trd_id, fth_id] = src;
+        U32ArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const bool trdHit = trd_id.valid && trd_id.bits == hnIdOf(i);
+            o[i] = trdHit ? trd_code : fth_code;
+        }
+        return o;
+    };
 
-    // 译码请求 RR 合流（validOnly：out_rdy 恒真）
-    combine(w_trd_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<DecMes>>& { return e.trd_dec_out; });
-    combine(w_fth_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<DecMes>>& { return e.fth_dec_out; });
+    // ---- 译码请求 ----
+    w_trd_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DecInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            const bool decValid =
+                e.flag.sDecode && !(e.flag.wCmResp || e.flag.wXCB0 || e.flag.wXCB1);
+            DecMes m;
+            m.taskInst = e.inst;
+            m.decList = e.task.decList;
+            m.hnTxnID = hnIdOf(i);
+            o[i] = Valid<DecMes>{decValid && e.state == kFstTask, m};
+        }
+        return o;
+    };
+    w_fth_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DecInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            const bool decValid =
+                e.flag.sDecode && !(e.flag.wCmResp || e.flag.wXCB0 || e.flag.wXCB1);
+            DecMes m;
+            m.taskInst = e.inst;
+            m.decList = e.task.decList;
+            m.hnTxnID = hnIdOf(i);
+            o[i] = Valid<DecMes>{decValid && e.state == kSecTask, m};
+        }
+        return o;
+    };
+
+    // ---- 输出通道数组 ----
+    w_req_db_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        ReqDbInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            ReqDBQos r;
+            r.hnTxnID = hnIdOf(i);
+            r.dataVec = (e.flag.sCmTask && dc::tcSnoop(e.task.task)) ? kFullVec
+                                                                     : e.task.chi.dataVec;
+            r.qos = e.task.qos;
+            o[i] = Valid<ReqDBQos>{e.state != kFree && e.flag.sReqDB, r};
+        }
+        return o;
+    };
+    w_data_task_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DataTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            const uint8_t hn = hnIdOf(i);
+            DataTask t;
+            const bool replLLC = e.flag.sWriDir && dc::ccWriLLC(e.task.cmt) && !e.task.dir.llc.hit;
+            t.dataOp.repl = dc::ccOpRepl(e.task.cmt);
+            t.dataOp.read = dc::ccOpRead(e.task.cmt);
+            t.dataOp.send = dc::ccOpSend(e.task.cmt);
+            t.dataOp.save = dc::ccOpSave(e.task.cmt) && !replLLC;
+            t.dataOp.merge = dc::ccOpMerge(e.task.cmt);
+            t.hnTxnID = hn;
+            t.ds = e.task.ds;
+            t.dataVec = dc::ccFullSize(e.task.cmt) ? kFullVec : e.task.chi.dataVec;
+            t.qos = e.task.qos;
+            t.txDat.dbid = hn;
+            t.txDat.resp = static_cast<uint8_t>(dc::ccResp(e.task.cmt));
+            t.txDat.opcode = static_cast<uint8_t>(dc::ccOpcode(e.task.cmt));
+            t.txDat.txn_id = e.task.chi.txnID;
+            t.txDat.src_id = e.task.chi.getNoC();
+            t.txDat.tgt_id = e.task.chi.nodeId;
+            t.txDat.resp_err = e.respErr;
+            o[i] = Valid<DataTask>{e.state != kFree && e.flag.sDataTask && e.task.alr.reqDB, t};
+        }
+        return o;
+    };
+    w_repl_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        ReplInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            ReplTask t;
+            t.hnTxnID = hnIdOf(i);
+            t.qos = e.task.qos;
+            t.wriSF = dc::ccWriSRC(e.task.cmt) || dc::ccWriSNP(e.task.cmt);
+            t.dir.sf.hit = e.task.dir.sf.hit;
+            t.dir.sf.wayOH = e.task.dir.sf.wayOH;
+            t.directAllocSF = t.wriSF && !e.task.dir.sf.hit && e.task.dir.sf.meta == 0;
+            // sf metaVec 单 meta：srcVec/snpVec 只可能命中 meta0
+            const bool srcVec0 = true;  // metaIdOH 恒 1（nrSfMetas=1）
+            const uint32_t snpTgt = dc::tcSnpTgt(e.task.task);
+            const bool snpVec0 =
+                snpTgt == 1 && e.task.dir.sf.meta != 0;  // SnpTgt.ALL=b01；单 meta 时 ONE/OTH→0
+            uint8_t meta0;
+            if (srcVec0 && dc::ccWriSRC(e.task.cmt)) {
+                meta0 = dc::ccSrcValid(e.task.cmt);
+            } else if (snpVec0 && dc::ccWriSNP(e.task.cmt)) {
+                meta0 = dc::ccSnpValid(e.task.cmt);
+            } else {
+                meta0 = e.task.dir.sf.hit ? e.task.dir.sf.meta : 0;
+            }
+            t.dir.sf.meta = meta0;
+            t.wriLLC = dc::ccWriLLC(e.task.cmt);
+            t.dir.llc.hit = e.task.dir.llc.hit;
+            t.dir.llc.wayOH = e.task.dir.llc.wayOH;
+            t.dir.llc.meta = static_cast<uint8_t>(dc::ccLlcState(e.task.cmt));
+            o[i] = Valid<ReplTask>{e.state != kFree && e.flag.sWriDir && !e.flag.wDataResp, t};
+        }
+        return o;
+    };
+    // cmTask 三路（bits 共享，valid 分流）
+    w_snp_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        CmTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            CMTask t;
+            t.chi = e.task.chi;
+            t.chi.channel = dc::tcSnoop(e.task.task) ? kChSnp : kChReq;
+            t.chi.dataVec = (dc::tcSnoop(e.task.task) || dc::tcFullSize(e.task.task))
+                                ? kFullVec
+                                : e.task.chi.dataVec;
+            t.chi.opcode = static_cast<uint8_t>(dc::tcOpcode(e.task.task));
+            t.chi.expCompAck = dc::tcExpCompAck(e.task.task);
+            t.chi.retToSrc = dc::tcRetToSrc(e.task.task);
+            t.chi.size = (dc::tcSnoop(e.task.task) || dc::tcFullSize(e.task.task))
+                             ? 6
+                             : e.task.chi.size;
+            t.hnTxnID = hnIdOf(i);
+            t.dataOp.repl = dc::tcOpRepl(e.task.task);
+            t.dataOp.read = dc::tcOpRead(e.task.task);
+            t.dataOp.send = dc::tcOpSend(e.task.task);
+            t.dataOp.save = dc::tcOpSave(e.task.task);
+            t.dataOp.merge = dc::tcOpMerge(e.task.task);
+            t.ds = e.task.ds;
+            const uint32_t snpTgt = dc::tcSnpTgt(e.task.task);
+            t.snpVec = snpTgt == 1 && e.task.dir.sf.meta != 0 ? 1 : 0;
+            t.fromRepl = false;
+            // cbResp：llc meta 的 cbResp（I→I, SC→SC, UC→UC, UD→UD_PD）
+            const uint8_t st = e.task.dir.llc.meta;
+            t.cbResp = st == 0 ? 0 : st == 1 ? 1 : st == 3 ? 2 : 6;  // I/SC/UC/UD→I/SC/UC/UD_PD
+            t.doDMT = dc::tcDoDMT(e.task.task);
+            t.qos = e.task.qos;
+            const bool v = e.state != kFree && e.flag.sCmTask && !e.flag.sReqDB &&
+                           dc::tcSnoop(e.task.task);
+            o[i] = Valid<CMTask>{v, t};
+        }
+        return o;
+    };
+    w_read_in.assign().reads(w_snp_in, entries) = [](auto src) {
+        auto [snp_ch, entries] = src;
+        CmTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            o[i] = Valid<CMTask>{e.state != kFree && e.flag.sCmTask && !e.flag.sReqDB &&
+                                     dc::tcRead(e.task.task),
+                                 snp_ch[i].bits};
+        }
+        return o;
+    };
+    w_wri_in.assign().reads(w_snp_in, entries) = [](auto src) {
+        auto [snp_ch, entries] = src;
+        CmTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            o[i] = Valid<CMTask>{e.state != kFree && e.flag.sCmTask && !e.flag.sReqDB &&
+                                     dc::tcWrite(e.task.task),
+                                 snp_ch[i].bits};
+        }
+        return o;
+    };
+    w_tx_rsp_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        TxRspInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            RespFlit f{};
+            f.src_id = e.task.chi.getNoC();
+            f.tgt_id = e.task.chi.nodeId;
+            f.txn_id = e.task.chi.txnID;
+            f.dbid = hnIdOf(i);
+            f.opcode = e.flag.sResp ? static_cast<uint8_t>(dc::ccOpcode(e.task.cmt))
+                                    : (e.task.chi.isCopyBackWrite() ? kCompDBIDResp : kDBIDResp);
+            f.fwd_state = static_cast<uint8_t>(dc::ccFwdResp(e.task.cmt));
+            f.resp = static_cast<uint8_t>(dc::ccResp(e.task.cmt));
+            f.qos = e.task.qos;
+            f.resp_err = e.respErr;
+            const bool v =
+                e.state != kFree && (e.flag.sDbid || e.flag.sResp) && !e.flag.sReqDB;
+            o[i] = Valid<RespFlit>{v, f};
+        }
+        return o;
+    };
+    w_clean_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        CleanInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            PosClean p;
+            p.hnIdx = hnIdOf(i);
+            p.channel = e.task.chi.channel;
+            p.qos = e.task.qos;
+            o[i] = Valid<PosClean>{e.state != kFree && e.state == kClean, p};
+        }
+        return o;
+    };
+
+    // ---- 次态（state/task/flag/inst/alrGet/respErr） ----
+    w_state_next.assign().reads(entries, w_alloc_hit, cmt_task_0, cmt_task_1, w_dec_list_in,
+                                w_task_code_in, w_cmt_code_in, w_clean_in, clean_arb.in_rdy) =
+        [](auto src) {
+            auto [entries, w_alloc_hit, cmt_task_0, cmt_task_1, dec_list_in, task_code_in,
+                  cmt_code_in, clean_in, clean_rdy] = src;
+            U8ArrN o{};
+            for (uint32_t i = 0; i < kEntries; ++i) {
+                const V& e = entries[i];
+                const auto& alloc = (i / 56 == 0) ? cmt_task_0 : cmt_task_1;
+                const bool allFlagDone =
+                    !e.flag.sDecode && !e.flag.sReqDB && !e.flag.sCmTask && !e.flag.sDataTask &&
+                    !e.flag.sWriDir && !e.flag.wCmResp && !e.flag.wReplResp &&
+                    !e.flag.wDataResp && !e.flag.sDbid && !e.flag.sResp && !e.flag.wXCB0 &&
+                    !e.flag.wXCB1 && !e.flag.wCompAck;
+                uint8_t n = e.state;
+                switch (e.state) {
+                    case kFree:
+                        if (w_alloc_hit[i])
+                            n = dc::tcIsValid(alloc.bits.task) ? kFstTask : kCommit;
+                        break;
+                    case kFstTask:
+                        if (dec_list_in[i].valid)
+                            n = (dc::tcIsValid(task_code_in[i]) &&
+                                 dc::ccWaitSecDone(cmt_code_in[i]))
+                                    ? kSecTask
+                                    : kCommit;
+                        break;
+                    case kSecTask:
+                        if (dec_list_in[i].valid) n = kCommit;
+                        break;
+                    case kCommit:
+                        if (allFlagDone) n = kClean;
+                        break;
+                    case kClean:
+                        if (clean_in[i].valid && clean_rdy[i]) n = kFree;
+                        break;
+                    default: break;
+                }
+                o[i] = n;
+            }
+            return o;
+        };
+
+    // taskNext（decListIn 换入 / alr.reqDB）
+    w_task_next.assign().reads(entries, w_dec_list_in, w_task_code_in, w_cmt_code_in, w_req_db_in,
+                               req_db_arb.in_rdy) = [](auto src) {
+        auto [entries, dec_list_in, task_code_in, cmt_code_in, req_db_in, req_db_rdy] = src;
+        TaskArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            CommitTask n = e.task;
+            if (dec_list_in[i].valid) {
+                n.decList = dec_list_in[i].bits;
+                n.task = task_code_in[i];
+                n.task = (n.task & ~(3u << 1)) |
+                         (dc::tcSnpTgt(e.task.task) << 1);  // snpTgt 保留原值
+                n.cmt = (e.state == kFstTask && dc::ccWaitSecDone(cmt_code_in[i]))
+                            ? 0
+                            : cmt_code_in[i];
+            }
+            if (req_db_in[i].valid && req_db_rdy[i]) n.alr.reqDB = true;
+            o[i] = n;
+        }
+        return o;
+    };
+
+    // flag 次态
+    w_flag_next.assign().reads(entries, w_state_next, w_alloc_hit, cmt_task_0, cmt_task_1,
+                               w_task_next, w_dec_list_in, w_trd_in, trd_arb.in_rdy, w_fth_in,
+                               fth_arb.in_rdy, w_req_db_in, req_db_arb.in_rdy, w_snp_in,
+                               snp_arb.in_rdy, w_read_in, read_arb.in_rdy, w_wri_in,
+                               wri_arb.in_rdy, w_data_task_in, data_task_arb.in_rdy, w_repl_in,
+                               repl_arb.in_rdy, w_cm_resp_hit, repl_resp, data_resp, w_tx_rsp_in,
+                               tx_rsp_arb.in_rdy, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1) =
+        [](auto src) {
+            auto [entries, state_next, alloc_hit, cmt_task_0, cmt_task_1, task_next, dec_list_in,
+                  trd_in, trd_rdy, fth_in, fth_rdy, req_db_in, req_db_rdy, snp_in, snp_rdy,
+                  read_in, read_rdy, wri_in, wri_rdy, data_task_in, data_task_rdy, repl_in,
+                  repl_rdy, cm_resp_hit, repl_resp, data_resp, tx_rsp_in, tx_rsp_rdy,
+                  comp_ack_hit, xcb_hit0, xcb_hit1] = src;
+            FlagArrN o{};
+            for (uint32_t i = 0; i < kEntries; ++i) {
+                const V& e = entries[i];
+                const auto& alloc = (i / 56 == 0) ? cmt_task_0 : cmt_task_1;
+                const uint8_t hn = hnIdOf(i);
+                Flag n = e.flag;
+                if (alloc_hit[i] || dec_list_in[i].valid) {
+                    const uint32_t task = dec_list_in[i].valid ? task_next[i].task : alloc.bits.task;
+                    const uint32_t cmt = dec_list_in[i].valid ? task_next[i].cmt : alloc.bits.cmt;
+                    const bool alrReqDB =
+                        dec_list_in[i].valid ? e.task.alr.reqDB : alloc.bits.alr.reqDB;
+                    const bool alrSendData =
+                        dec_list_in[i].valid ? e.task.alr.sData : alloc.bits.alr.sData;
+                    const bool needWaitAck =
+                        dec_list_in[i].valid ? e.flag.wCompAck : alloc.bits.chi.expCompAck;
+                    const bool needWaitData =
+                        alloc_hit[i] && (dc::tcReturnDBID(alloc.bits.task) || alloc.bits.alr.sDBID);
+                    const bool copyBackNeedData =
+                        alloc.bits.chi.isCopyBackWrite() && needWaitData;
+                    const bool replLLC = dc::ccWriLLC(cmt) && !e.task.dir.llc.hit;
+                    const bool opIsValid = dc::tcSnoop(task) || dc::tcRead(task) ||
+                                           dc::tcDataless(task) || dc::tcWrite(task);
+                    const bool cmtDataOpValid = dc::ccOpRepl(cmt) || dc::ccOpRead(cmt) ||
+                                                dc::ccOpSend(cmt) || dc::ccOpSave(cmt) ||
+                                                dc::ccOpMerge(cmt);
+                    const bool cmtOnlySave = !dc::ccOpRepl(cmt) && !dc::ccOpRead(cmt) &&
+                                             !dc::ccOpSend(cmt) && dc::ccOpSave(cmt) &&
+                                             !dc::ccOpMerge(cmt);
+                    const bool cmtIsWriDir =
+                        dc::ccWriSRC(cmt) || dc::ccWriSNP(cmt) || dc::ccWriLLC(cmt);
+
+                    n.sDecode = state_next[i] == kFstTask || state_next[i] == kSecTask;
+                    n.sReqDB = (dc::tcNeedDB(task) || cmtDataOpValid) && !alrReqDB;
+                    n.sCmTask = opIsValid;
+                    n.sDataTask = (cmtOnlySave ? !replLLC : cmtDataOpValid) && !alrSendData;
+                    n.sWriDir = cmtIsWriDir;
+
+                    n.wCmResp = n.sCmTask;
+                    n.wReplResp = n.sWriDir;
+                    n.wDataResp = n.sDataTask || alrSendData;
+
+                    n.sDbid = alloc_hit[i] && dc::tcReturnDBID(alloc.bits.task) &&
+                              !alloc.bits.alr.sDBID;
+                    n.sResp = dc::ccSendResp(cmt) && dc::ccChannel(cmt) == kChRsp;
+
+                    n.wXCB0 = needWaitData && (alloc.bits.chi.dataVec & 1) && !xcb_hit0[i] &&
+                              !e.alrGet.ncbWrD0;
+                    n.wXCB1 = needWaitData && ((alloc.bits.chi.dataVec >> 1) & 1) &&
+                              !xcb_hit1[i] && !e.alrGet.ncbWrD1;
+                    n.wCompAck = needWaitAck && !copyBackNeedData && !comp_ack_hit[i] &&
+                                 !e.alrGet.compAck;
+                } else {
+                    const bool decodeFire =
+                        (trd_in[i].valid && trd_rdy[i]) || (fth_in[i].valid && fth_rdy[i]);
+                    const bool cmTaskHit = (snp_in[i].valid && snp_rdy[i]) ||
+                                           (read_in[i].valid && read_rdy[i]) ||
+                                           (wri_in[i].valid && wri_rdy[i]);
+                    if (decodeFire) n.sDecode = false;
+                    if (req_db_in[i].valid && req_db_rdy[i]) n.sReqDB = false;
+                    if (cmTaskHit) n.sCmTask = false;
+                    if (data_task_in[i].valid && data_task_rdy[i]) n.sDataTask = false;
+                    if (repl_in[i].valid && repl_rdy[i]) n.sWriDir = false;
+                    if (cm_resp_hit[i]) n.wCmResp = false;
+                    if (repl_resp.valid && repl_resp.bits == hn) n.wReplResp = false;
+                    if (data_resp.valid && data_resp.bits == hn) n.wDataResp = false;
+                    if (tx_rsp_in[i].valid && tx_rsp_rdy[i]) {
+                        n.sDbid = false;
+                        n.sResp = false;
+                    }
+                    if (comp_ack_hit[i]) n.wCompAck = false;
+                    if (xcb_hit0[i]) n.wXCB0 = false;
+                    if (xcb_hit1[i]) n.wXCB1 = false;
+                }
+                o[i] = n;
+            }
+            return o;
+        };
+
+    // inst 次态
+    w_inst_next.assign().reads(entries, w_state_next, w_alloc_hit, w_cm_resp_hit, cm_resp,
+                               w_xcb_hit0, w_xcb_hit1, rx_dat) = [](auto src) {
+        auto [entries, state_next, alloc_hit, cm_resp_hit, cm_resp, xcb_hit0, xcb_hit1,
+              rx_dat] = src;
+        U32ArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            uint32_t n = e.inst;
+            const bool cleanInst =
+                (e.state == kFstTask && state_next[i] == kSecTask) || state_next[i] == kCommit;
+            if (alloc_hit[i] || cleanInst) {
+                n = 0;  // TaskInst 清零
+            } else if (cm_resp_hit[i]) {
+                n = e.state == kFstTask ? (e.inst | cm_resp.bits.taskInst)
+                                        : cm_resp.bits.taskInst;
+            }
+            if (cleanInst) {
+                n &= ~((1u << 3) | 0x7u);  // getXCBResp=0, xCBResp=I
+            } else if (xcb_hit0[i] || xcb_hit1[i]) {
+                n |= (1u << 3);
+                n = (n & ~0x7u) | (rx_dat.bits.resp & 0x7u);
+            }
+            if (cleanInst) {
+                n &= ~(1u << 18);  // valid=0
+            } else if (cm_resp_hit[i] || xcb_hit0[i] || xcb_hit1[i]) {
+                n |= (1u << 18);
+            }
+            o[i] = n;
+        }
+        return o;
+    };
+
+    // alrGet / respErr 跟踪
+    w_alr_get_next.assign().reads(entries, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1, w_clean_in,
+                                  clean_arb.in_rdy) = [](auto src) {
+        auto [entries, comp_ack_hit, xcb_hit0, xcb_hit1, clean_in, clean_rdy] = src;
+        AlrArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            AlrGet n = entries[i].alrGet;
+            if (clean_in[i].valid && clean_rdy[i]) {
+                n = AlrGet{};
+            } else {
+                n.compAck = comp_ack_hit[i] || n.compAck;
+                n.ncbWrD0 = xcb_hit0[i] || n.ncbWrD0;
+                n.ncbWrD1 = xcb_hit1[i] || n.ncbWrD1;
+            }
+            o[i] = n;
+        }
+        return o;
+    };
+    w_resp_err_next.assign().reads(entries, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1,
+                                   rx_dat, w_clean_in, clean_arb.in_rdy) = [](auto src) {
+        auto [entries, cm_resp_hit, cm_resp, xcb_hit0, xcb_hit1, rx_dat, clean_in,
+              clean_rdy] = src;
+        U8ArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const V& e = entries[i];
+            uint8_t n = e.respErr;
+            if (clean_in[i].valid && clean_rdy[i]) {
+                n = kErrOk;
+            } else if (e.respErr != kErrDerr && e.respErr != kErrNderr) {
+                const bool cmIsErr =
+                    cm_resp.bits.respErr == kErrDerr || cm_resp.bits.respErr == kErrNderr;
+                if (cm_resp_hit[i] && cmIsErr) {
+                    n = cm_resp.bits.respErr;
+                } else if (xcb_hit0[i] || xcb_hit1[i]) {
+                    n = rx_dat.bits.resp_err;
+                }
+            }
+            o[i] = n;
+        }
+        return o;
+    };
+
+    w_set.assign().reads(w_alloc_hit, w_valid, w_xcb_hit0, w_xcb_hit1) = [](auto src) {
+        auto [alloc_hit, valid, xcb_hit0, xcb_hit1] = src;
+        BoolArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i)
+            o[i] = alloc_hit[i] || valid[i] || xcb_hit0[i] || xcb_hit1[i];
+        return o;
+    };
+
+    // ---- 寄存（112 项一条 update；w_set 门控组 + 每拍直通组） ----
+    entries.update().on(posedge(clk)).reads(entries, w_set, w_alloc_hit, cmt_task_0, cmt_task_1,
+                                            w_task_next, w_flag_next, w_inst_next, w_state_next,
+                                            w_alr_get_next, w_resp_err_next) = [](auto src) {
+        auto [entries, w_set, alloc_hit, cmt_task_0, cmt_task_1, task_next, flag_next, inst_next,
+              state_next, alr_get_next, resp_err_next] = src;
+        EntryArr n = entries;
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            V nv = entries[i];
+            if (w_set[i]) {
+                const auto& alloc = (i / 56 == 0) ? cmt_task_0 : cmt_task_1;
+                nv.task = alloc_hit[i] ? alloc.bits : task_next[i];
+                nv.flag = flag_next[i];
+                nv.inst = inst_next[i];
+                nv.state = state_next[i];
+            }
+            nv.alrGet = alr_get_next[i];
+            nv.respErr = resp_err_next[i];
+            n[i] = nv;
+        }
+        return n;
+    };
+
+    // ---- 译码请求 RR 合流（validOnly：out_rdy 恒真） ----
     trd_arb.in = w_trd_in;
     trd_arb.out_rdy = true;
     fth_arb.in = w_fth_in;
     fth_arb.out_rdy = true;
     trd_dec.dec_mes_in = trd_arb.out;
     fth_dec.dec_mes_in = fth_arb.out;
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].trd_dec_out_rdy.assign().reads(trd_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].fth_dec_out_rdy.assign().reads(fth_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-    }
 
-    // 输出汇集 + QosRR 仲裁
-    combine(w_tx_rsp_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<RespFlit>>& { return e.tx_rsp; });
-    combine(w_snp_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<CMTask>>& { return e.cm_task_snp; });
-    combine(w_wri_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<CMTask>>& { return e.cm_task_wri; });
-    combine(w_read_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<CMTask>>& { return e.cm_task_read; });
-    combine(w_req_db_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<ReqDBQos>>& { return e.req_db; });
-    combine(w_repl_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<ReplTask>>& { return e.repl_task; });
-    combine(w_data_task_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<DataTask>>& { return e.data_task; });
-    combine(w_clean_in, entries,
-            [](CommitEntry& e) -> wolvicmod::Out<Valid<PosClean>>& { return e.clean_pos; });
-
+    // ---- 输出仲裁 ----
     tx_rsp_arb.in = w_tx_rsp_in;
     tx_rsp_arb.out_rdy = tx_rsp_rdy;
     tx_rsp = tx_rsp_arb.out;
@@ -690,40 +722,5 @@ Commit::Commit() {
     clean_arb.in = w_clean_in;
     clean_arb.out_rdy = clean_pos_rdy;
     clean_pos = clean_arb.out;
-
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].tx_rsp_rdy.assign().reads(tx_rsp_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].cm_task_snp_rdy.assign().reads(snp_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].cm_task_wri_rdy.assign().reads(wri_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].cm_task_read_rdy.assign().reads(read_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].req_db_rdy.assign().reads(req_db_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].repl_task_rdy.assign().reads(repl_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].data_task_rdy.assign().reads(data_task_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].clean_pos_rdy.assign().reads(clean_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-    }
 }
 }  // namespace zj::dj

@@ -40,10 +40,16 @@ public:
     ReqToChiTask();
 };
 
-// ---------------- TaskEntry / TaskBuffer ----------------
+// ---------------- TaskBuffer ----------------
 
-class TaskEntry : public wolvicmod::Module {
+// N = 任务项数（本配置 req=16、hpr=8，per dirBank）
+// 拍平建模：TaskEntry 不做子模块，N 项状态为一个寄存器数组 + 一条 update 循环；
+// alloc/s0 仲裁器（Alloc/VipArb）保留为子模块。
+template <uint32_t N>
+class TaskBuffer : public wolvicmod::Module {
 public:
+    static constexpr uint32_t kEntries = N;
+
     struct EntryReg {
         uint8_t state = taskst::kFree;  // one-hot
         Chi chi;
@@ -52,39 +58,16 @@ public:
 
         bool operator==(const EntryReg&) const = default;
     };
+    struct EntryV {
+        EntryReg task;
+        uint8_t nid = 0;
+        uint8_t retryNum = 0;
+        bool timeout = false;
+        bool validD1 = false;
 
-    IN(bool, clk);
-    IN(Valid<ChiTask>, chi_task_in);
-    OUT(bool, chi_task_in_rdy);
-    OUT(Valid<ChiTask>, chi_task_s0);
-    IN(bool, chi_task_s0_rdy);
-    IN(bool, retry_s1);
-    IN(bool, sleep_s1);
-    IN(Valid<uint64_t>, wakeup);
-    IN(uint8_t, init_nid);  // sort：入队时同址在途数
-    IN(bool, oth_rel);      // sort：同址有 release
-    OUT(bool, st_valid);
-    OUT(bool, st_release);
-    OUT(uint64_t, st_addr);
-    OUT(uint8_t, st_value);
-    OUT(uint8_t, st_nid);
-    OUT(bool, st_lock);
-
-    REG(EntryReg, task_reg);
-    REG(uint8_t, nid_reg);
-    REG(uint8_t, retry_num_reg);
-    REG(bool, timeout_reg);
-    REG(bool, valid_d1);
-    WIRE(bool, w_wakeup_hit);
-
-    TaskEntry();
-};
-
-// N = 任务项数（本配置 req=16、hpr=8，per dirBank）
-template <uint32_t N>
-class TaskBuffer : public wolvicmod::Module {
-public:
-    static constexpr uint32_t kEntries = N;
+        bool operator==(const EntryV&) const = default;
+    };
+    using EntryArr = std::array<EntryV, kEntries>;
 
     IN(bool, clk);
     IN(Valid<ChiTask>, chi_task_in);
@@ -97,7 +80,6 @@ public:
     IN(Valid<uint64_t>, wakeup);
     OUT(bool, working);
 
-    MOD_ARRAY(TaskEntry, kEntries, entries);
     using AllocT = zj::prefab::Alloc<ChiTask, kEntries>;
     MOD(AllocT, alloc_arb);
     using S0ArbT = zj::prefab::VipArb<ChiTask, kEntries>;
@@ -107,13 +89,11 @@ public:
     using BoolArr = std::array<bool, kEntries>;
     using U8Arr = std::array<uint8_t, kEntries>;
     using U64Arr = std::array<uint64_t, kEntries>;
+    REG(EntryArr, entries);
+    REG(bool, has_lock_reg);
     WIRE(S0InArr, w_s0_in);
     WIRE(BoolArr, w_alloc_rdy_all);
-    WIRE(BoolArr, w_valid_all);
-    WIRE(BoolArr, w_release_all);
     WIRE(BoolArr, w_lock_all);
-    WIRE(U64Arr, w_addr_all);
-    REG(bool, has_lock_reg);
 
     TaskBuffer();
 };
@@ -318,49 +298,46 @@ template <uint32_t N>
 TaskBuffer<N>::TaskBuffer() {
     alloc_arb.clk = clk;
     s0_arb.clk = clk;
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].clk = clk;
-        entries[i].retry_s1 = retry_s1;
-        entries[i].sleep_s1 = sleep_s1;
-        entries[i].wakeup = wakeup;
-    }
+
+    // alloc 分配器：out_rdy = 各项空闲位
+    w_alloc_rdy_all.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        BoolArr r{};
+        for (uint32_t i = 0; i < kEntries; ++i) r[i] = entries[i].task.state == taskst::kFree;
+        return r;
+    };
     alloc_arb.in = chi_task_in;
     chi_task_in_rdy = alloc_arb.in_rdy;
-    combine(w_alloc_rdy_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.chi_task_in_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].chi_task_in = alloc_arb.out[i];
-    }
-    // sort：initNid = 同 useAddr 的 valid 数；othRel = 同 useAddr 的 release 任一
-    combine(w_valid_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_valid; });
-    combine(w_release_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_release; });
-    combine(w_addr_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<uint64_t>& { return e.st_addr; });
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].init_nid.assign().reads(w_valid_all, w_addr_all, chi_task_in) =
-            [i](auto src) -> uint8_t {
-                auto [valids, addrs, chi_task_in] = src;
-                uint8_t cnt = 0;
-                for (uint32_t j = 0; j < kEntries; ++j)
-                    if (valids[j] && useAddr(addrs[j]) == useAddr(chi_task_in.bits.addr)) ++cnt;
-                return cnt;
-            };
-        entries[i].oth_rel.assign().reads(w_release_all, w_addr_all, entries[i].st_addr) =
-            [i](auto src) {
-                auto [rels, addrs, self_addr] = src;
-                for (uint32_t j = 0; j < kEntries; ++j)
-                    if (rels[j] && useAddr(addrs[j]) == useAddr(self_addr)) return true;
-                return false;
-            };
-    }
-    // 出站仲裁：hasLockReg(RegNext 任意 lock) 时锁定 lockIdx 路，否则 RR
-    combine(w_s0_in, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<Valid<ChiTask>>& { return e.chi_task_s0; });
-    combine(w_lock_all, entries,
-            [](TaskEntry& e) -> wolvicmod::Out<bool>& { return e.st_lock; });
+
+    // s0 出站：各项发射请求（kSend 且 nid==0）
+    w_s0_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        S0InArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            ChiTask t;
+            t.chi = entries[i].task.chi;
+            t.addr = entries[i].task.addr;
+            t.qos = entries[i].task.qos;
+            o[i] = Valid<ChiTask>{entries[i].task.state == taskst::kSend && entries[i].nid == 0,
+                                  t};
+        }
+        return o;
+    };
+    s0_arb.in = w_s0_in;
+    // RTL 生成 SV 实证：arb 的 out.ready 直连 io_chiTask_s0_ready，与 hasLockReg
+    // 无关——锁定期间仲裁器照样每拍 fire 并推进 vip 指针（仅输出被锁定项覆盖）。
+    s0_arb.out_rdy = chi_task_s0_rdy;
+    // lock = (kSend|kWait) & timeout
+    w_lock_all.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        BoolArr l{};
+        for (uint32_t i = 0; i < kEntries; ++i)
+            l[i] = (entries[i].task.state == taskst::kSend ||
+                    entries[i].task.state == taskst::kWait) &&
+                   entries[i].timeout;
+        return l;
+    };
     has_lock_reg.update().on(posedge(clk)).reads(w_lock_all) = [](auto src) {
         auto [locks] = src;
         for (bool l : locks) {
@@ -368,10 +345,6 @@ TaskBuffer<N>::TaskBuffer() {
         }
         return false;
     };
-    s0_arb.in = w_s0_in;
-    // RTL 生成 SV 实证：arb 的 out.ready 直连 io_chiTask_s0_ready，与 hasLockReg
-    // 无关——锁定期间仲裁器照样每拍 fire 并推进 vip 指针（仅输出被锁定项覆盖）。
-    s0_arb.out_rdy = chi_task_s0_rdy;
     // lockIdx = 首个 lock 位，无 lock 时默认 N-1（chisel PriorityMux 无匹配取末值，
     // 生成 SV 实证：末分支为 {3'h7, ~lock14}）。锁定期间选中项即 lockIdx，即使
     // lockVec 已空（刚发射完）也选 N-1 项。
@@ -388,31 +361,102 @@ TaskBuffer<N>::TaskBuffer() {
         }
         return arb_out;
     };
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].chi_task_s0_rdy.assign().reads(has_lock_reg, w_lock_all, s0_arb.in_rdy,
-                                                  chi_task_s0_rdy) =
-            [i](auto src) {
-                auto [has_lock_reg, locks, arb_rdy, chi_task_s0_rdy] = src;
-                if (has_lock_reg) {
-                    uint32_t idx = kEntries - 1;
-                    for (uint32_t j = 0; j < kEntries; ++j)
-                        if (locks[j]) {
-                            idx = j;
-                            break;
-                        }
-                    return idx == i && chi_task_s0_rdy;
-                }
-                return arb_rdy[i];
-            };
-    }
     lock_task = has_lock_reg;
-    working.assign().reads(w_valid_all) = [](auto src) {
-        auto [valids] = src;
-        for (bool v : valids) {
-            if (v) return true;
-        }
+    working.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        for (const auto& e : entries)
+            if (e.task.state != taskst::kFree) return true;
         return false;
     };
+
+    // N 项状态（一条 update 循环算 next；nid/retryNum/timeout/validD1 的
+    // RegNext 语义全部读旧值）
+    entries.update().on(posedge(clk)).reads(entries, alloc_arb.out, chi_task_in,
+                                            chi_task_s0_rdy, has_lock_reg, w_lock_all,
+                                            s0_arb.in_rdy, retry_s1, sleep_s1, wakeup) =
+        [](auto src) {
+            auto [entries, alloc_out, chi_task_in, s0_rdy_out, has_lock, locks, arb_rdy,
+                  retry_s1, sleep_s1, wakeup] = src;
+            EntryArr n = entries;
+            // 旧值派生：lockIdx / valid / release / useAddr
+            uint32_t lockIdx = kEntries - 1;
+            for (uint32_t j = 0; j < kEntries; ++j)
+                if (locks[j]) {
+                    lockIdx = j;
+                    break;
+                }
+            std::array<bool, kEntries> valid{}, rel{};
+            std::array<uint64_t, kEntries> useA{};
+            for (uint32_t j = 0; j < kEntries; ++j) {
+                valid[j] = entries[j].task.state != taskst::kFree;
+                rel[j] = entries[j].validD1 && entries[j].task.state == taskst::kFree;
+                useA[j] = useAddr(entries[j].task.addr);
+            }
+            const uint64_t inAddr = useAddr(chi_task_in.bits.addr);
+            const uint64_t wakeAddr = useAddr(wakeup.bits);
+            for (uint32_t i = 0; i < kEntries; ++i) {
+                const EntryV& cur = entries[i];
+                EntryV& ne = n[i];
+                const bool inFire = alloc_out[i].valid && cur.task.state == taskst::kFree;
+                const bool s0Valid = cur.task.state == taskst::kSend && cur.nid == 0;
+                const bool s0Rdy = has_lock ? (lockIdx == i && s0_rdy_out) : arb_rdy[i];
+                const bool wakeHit = wakeup.valid && useA[i] == wakeAddr;
+                // sort：initNid = 同址在途数；othRel = 同址有 release
+                uint8_t initNid = 0;
+                for (uint32_t j = 0; j < kEntries; ++j)
+                    if (valid[j] && useA[j] == inAddr) ++initNid;
+                bool othRel = false;
+                for (uint32_t j = 0; j < kEntries; ++j)
+                    if (rel[j] && useA[j] == useA[i]) {
+                        othRel = true;
+                        break;
+                    }
+                // nid
+                if (inFire) {
+                    ne.nid = initNid;
+                } else if (cur.task.state != taskst::kFree && othRel) {
+                    ne.nid = cur.nid > 0 ? cur.nid - 1 : 0;
+                }
+                // retryNum / timeout（timeout 读旧 retryNum）
+                if (inFire) {
+                    ne.retryNum = 0;
+                } else if (cur.task.state == taskst::kWait && retry_s1 && cur.retryNum < 7) {
+                    ne.retryNum = cur.retryNum + 1;
+                }
+                ne.timeout = cur.retryNum == 7;
+                ne.validD1 = cur.task.state != taskst::kFree;
+                // 状态机
+                switch (cur.task.state) {
+                    case taskst::kFree:
+                        if (inFire) {
+                            ne.task.state = taskst::kSend;
+                            ne.task.chi = chi_task_in.bits.chi;
+                            ne.task.addr = chi_task_in.bits.addr;
+                            ne.task.qos = chi_task_in.bits.qos;
+                        }
+                        break;
+                    case taskst::kSend:
+                        if (s0Valid && s0Rdy) ne.task.state = taskst::kWait;
+                        break;
+                    case taskst::kWait:
+                        if (wakeHit) {
+                            ne.task.state = taskst::kSend;
+                        } else if (sleep_s1) {
+                            ne.task.state = taskst::kSleep;
+                        } else if (retry_s1) {
+                            ne.task.state = taskst::kSend;
+                        } else {
+                            ne.task.state = taskst::kFree;
+                        }
+                        break;
+                    case taskst::kSleep:
+                        if (wakeHit) ne.task.state = taskst::kSend;
+                        break;
+                    default: break;
+                }
+            }
+            return n;
+        };
 }
 
 

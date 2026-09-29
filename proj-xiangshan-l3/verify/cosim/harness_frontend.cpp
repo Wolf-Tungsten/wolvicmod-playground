@@ -258,20 +258,20 @@ int intcmpFrontend(VFrontend& ref, Frontend& dut, uint64_t c) {
     };
     for (int i = 0; i < 16; ++i) {
         const auto* e = te[i];
-        const auto& de = dut.req_task_buf.entries[i];
+        const auto& de = dut.req_task_buf.entries.get()[i];
         char nm[64];
         std::snprintf(nm, sizeof nm, "tb[%d].state", i);
-        dif(nm, e->__PVT__taskReg_state, de.task_reg.get().state);
+        dif(nm, e->__PVT__taskReg_state, de.task.state);
         std::snprintf(nm, sizeof nm, "tb[%d].nid", i);
-        dif(nm, e->__PVT__nidReg, de.nid_reg.get());
+        dif(nm, e->__PVT__nidReg, de.nid);
         std::snprintf(nm, sizeof nm, "tb[%d].retryNum", i);
-        dif(nm, e->__PVT__retryNumReg, de.retry_num_reg.get());
+        dif(nm, e->__PVT__retryNumReg, de.retryNum);
         std::snprintf(nm, sizeof nm, "tb[%d].timeout", i);
-        dif(nm, e->__PVT__timeoutReg, de.timeout_reg.get());
+        dif(nm, e->__PVT__timeoutReg, de.timeout);
         std::snprintf(nm, sizeof nm, "tb[%d].addr", i);
-        dif(nm, e->__PVT__taskReg_addr, de.task_reg.get().addr & 0xFFFFFFFFFFFFull);
+        dif(nm, e->__PVT__taskReg_addr, de.task.addr & 0xFFFFFFFFFFFFull);
         std::snprintf(nm, sizeof nm, "tb[%d].opcode", i);
-        dif(nm, e->__PVT__taskReg_chi_opcode, de.task_reg.get().chi.opcode);
+        dif(nm, e->__PVT__taskReg_chi_opcode, de.task.chi.opcode);
     }
     for (int s = 0; s < 4; ++s) {
         const auto* rs = ps[s];
@@ -331,8 +331,8 @@ void intwatchFrontend(VFrontend& ref, Frontend& dut, uint64_t c) {
     auto& rp = *ref.rootp;
     uint32_t dvalid = 0, dlock = 0;
     for (uint32_t i = 0; i < 16; ++i) {
-        if (dut.req_task_buf.entries[i].chi_task_s0.get().valid) dvalid |= 1u << i;
-        if (dut.req_task_buf.entries[i].st_lock.get()) dlock |= 1u << i;
+        if (dut.req_task_buf.w_s0_in.get()[i].valid) dvalid |= 1u << i;
+        if (dut.req_task_buf.w_lock_all.get()[i]) dlock |= 1u << i;
     }
     const uint32_t rvip = rp.Frontend__DOT__reqTaskBuf__DOT__io_chiTask_s0_arb__DOT__low_arb__DOT__vipPtrOH;
     std::cout << "  [w] cyc=" << c << " refVipOH=0x" << std::hex << rvip << " dutVip=0x"
