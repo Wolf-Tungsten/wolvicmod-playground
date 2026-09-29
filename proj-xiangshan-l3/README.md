@@ -17,7 +17,7 @@
 ### 第 1 步：生成回放用 RTL
 
 ```bash
-make zjrtl-rtl   # mill 生成 ZhujiangReplayTop（与整机内 zhujiang_opt
+make replay-rtl   # mill 生成 ZhujiangReplayTop（与整机内 zhujiang_opt
                  # 同配置，端口即三边界）→ build/zjrtl/rtl/
 ```
 
@@ -27,10 +27,10 @@ trace 来自**整机 RTL emu 跑 coremark 时抓的波形**：
 
 ```bash
 make emu TRACE=fst   # 构建带 FST 波形的 RTL emu（首次全量 ~25-35min）
-make replay-top      # 抓全程波形 → 提取 trace → 自动校验
+make trace      # 抓全程波形 → 提取 trace → 自动校验
 ```
 
-`replay-top` 内部三步：
+`trace` 内部三步：
 
 1. emu 跑 coremark 全程并 dump FST 到 `build/trace/cm_full.fst`
    （`-b 0 -e 400000 -C 400000 --dump-wave`；coremark ~31.7 万拍自然
@@ -49,8 +49,8 @@ bits 是随机初值，比对器按 don't-care 处理）。**RTL 侧行为变化
 ### 第 3 步：跑回放
 
 ```bash
-make zjrtl-replay DUT=both    # 等价性对拍（逐拍三边界交叉验证）
-make zjrtl-replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
+make replay DUT=both    # 等价性对拍（逐拍三边界交叉验证）
+make replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
 ```
 
 `REPLAY_AUDIT=1 <二进制>` 开读集审计。

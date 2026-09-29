@@ -10,12 +10,14 @@
 #                             薄壳（dpi/sv，经 RTL_INCLUDE 注入）调 libwolviczj_dpi.a
 #                             （先自动构建；difftest USER_LDFLAGS 链接注入）
 #   make coremark             用现有 emu 运行 coremark 仿真
-#   make replay [N=20000]     coremark 前端 N 拍 trace 重放到 CC 边界：
-#                             emu dump FST（需 emu 带 TRACE=fst 构建）→ fst2vcd
-#                             → verify/trace/extract_cc_trace.py → ctest -R trace_replay
-#   make replay-top           coremark 全程 trace 重放到 WolvicZjTop 三边界（P4b）：
+#   --- 孤立 L3 回放（路径①：造 RTL → 造 trace → 跑回放）---
+#   make replay-rtl           第 1 步：mill 生成 ZhujiangReplayTop RTL
+#   make trace                第 2 步：coremark 全程 trace（cm_full.txt）：
 #                             emu 全程 dump FST → verify/trace/extract_top_trace.cpp
-#                             （C++ libfst 直读）→ ctest -R wolvic_top_replay
+#                             （C++ libfst 直读）→ ctest -R wolvic_top_replay 校验
+#   make replay [DUT=both]    第 3 步：共栖 A/B 回放（RTL vs wolvic 逐拍对拍/计时）
+#   make trace-front [N=20000]  前端 trace（P2）：emu dump 前 N 拍 FST → fst2vcd
+#                             → verify/trace/extract_cc_trace.py → ctest -R trace_replay
 #   make emu-clean            手动清除 XiangShan 构建产物
 #
 # 本仓构建产物全部在 build/ 下（已入 .gitignore）；XiangShan 子模块的产物在
@@ -31,7 +33,7 @@ TRACE ?=
 
 SHELL := /bin/bash
 
-.PHONY: test emu coremark emu-clean replay
+.PHONY: test emu coremark emu-clean stash-emu replay replay-rtl trace trace-front
 
 test:
 	cmake -S . -B build
@@ -90,9 +92,9 @@ stash-emu:
 	cp -L XiangShan/build/emu build/emu-variants/emu-$(NAME)
 	@echo "已留存 build/emu-variants/emu-$(NAME)"
 
-# --- coremark 前端 trace 重放（P2 验收）---
+# --- coremark 前端 trace 生成 + 重放校验（P2）---
 N ?= 20000
-replay:
+trace-front:
 	@[[ -f XiangShan/build/emu ]] || { echo "emu 不存在，先 make emu LLC=ZhuJiang TRACE=fst"; exit 1; }
 	@grep -q 'trace=fst' $(STAMP) || { echo "当前 emu 未开 trace（$$(cat $(STAMP))），先 make emu LLC=ZhuJiang TRACE=fst"; exit 1; }
 	@mkdir -p build/trace
@@ -108,7 +110,7 @@ replay:
 # emu 全程 dump FST → C++ FST 直读提取器（L2 CHI 缝 + mem/cfg AXI）→ 重放对拍。
 # coremark 于 ~31.7 万拍 HIT GOOD TRAP 自然结束；FULLN 仅为防死循环上限。
 FULLN ?= 400000
-replay-top:
+trace:
 	@[[ -f XiangShan/build/emu ]] || { echo "emu 不存在，先 make emu LLC=ZhuJiang TRACE=fst"; exit 1; }
 	@grep -q 'trace=fst' $(STAMP) || { echo "当前 emu 未开 trace（$$(cat $(STAMP))），先 make emu LLC=ZhuJiang TRACE=fst"; exit 1; }
 	@mkdir -p build/trace
@@ -135,14 +137,14 @@ ZJRTL := build/zjrtl
 ABBIN := $(ZJRTL)/zj_ab_replay
 VERILATOR_ROOT ?= $(shell verilator --getenv VERILATOR_ROOT)
 
-zjrtl-rtl:
+replay-rtl:
 	cd XiangShan && mill -i xiangshan.test.runMain top.ZhujiangReplayTopMain \
 	  --config DefaultConfig --issue E.b --num-cores 1 --llc ZhuJiang \
 	  --full-stacktrace --target systemverilog --split-verilog \
 	  --firtool-opt "-O=release --disable-annotation-unknown --lowering-options=explicitBitcast,disallowLocalVariables,disallowPortDeclSharing,locationInfoStyle=none" \
 	  --target-dir $(abspath $(ZJRTL)/rtl)
 
-zjrtl-replay: $(ABBIN)
+replay: $(ABBIN)
 	$(ABBIN) --dut=$(or $(DUT),both) $(if $(ROWS),--rows=$(ROWS)) \
 	  $(if $(PREROLL),--preroll=$(PREROLL)) \
 	  $(if $(TRACE_FILE),$(TRACE_FILE),build/trace/cm_full.txt)
@@ -190,4 +192,4 @@ $(ABBIN): verify/zjrtl/ab_replay.cpp verify/zjrtl/trace_io.h \
 	  -lz -lpthread -o $@
 
 $(ZJRTL)/rtl/ZhujiangReplayTop.sv:
-	$(MAKE) zjrtl-rtl
+	$(MAKE) replay-rtl

@@ -274,7 +274,7 @@ rtl_replay.cpp + test_wolvic_top_replay.cpp，已被前者取代/后者保留为
 ctest），同形状口径不变：同一份 coremark 全程 trace
 （`build/trace/cm_full.txt`，316,748 拍）、同样的预滚（reset 10 拍 +
 空闲 2000 拍，仅 RTL 侧）、同样的 valid 门控与逐字段比对。一键复现：
-`make zjrtl-replay DUT=rtl` / `DUT=wolvic` / `DUT=both`。
+`make replay DUT=rtl` / `DUT=wolvic` / `DUT=both`。
 
 **行为（本轮主要收获）**：两侧各自对同一 trace 全程 **0 失配**（RTL
 5,106,742 项检查、wolvic 5,423,490 项检查）。trace 记录的是 wolvic
