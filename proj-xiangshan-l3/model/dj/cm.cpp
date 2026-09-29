@@ -88,7 +88,14 @@ SnoopCM::SnoopCM() {
     resp = resp_arb.out;
 
     // N 项状态（一条 update 循环算 next；一切判定读旧值，派生量先算再写 next）
-    entries.update().on(posedge(clk)).reads(entries, alloc_arb.out, tx_snp_arb.in_rdy,
+    // 静止门（§21）：候选（allocFire || 非空闲）为空时整条 update 跳过。
+    w_any.assign().reads(entries, alloc_arb.out) = [](auto src) {
+        auto [entries, alloc_out] = src;
+        for (uint32_t i = 0; i < kEntries; ++i)
+            if (entries[i].state != kFree || alloc_out[i].valid) return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(entries, alloc_arb.out, tx_snp_arb.in_rdy,
                                             resp_arb.in_rdy, rx_rsp, rx_dat) = [](auto src) {
         auto [entries, alloc_out, tx_snp_rdy, resp_rdy, rx_rsp, rx_dat] = src;
         EntryArr n = entries;
@@ -273,7 +280,14 @@ ReadCM::ReadCM() {
     resp_arb.out_rdy = resp_rdy;
     resp = resp_arb.out;
 
-    entries.update().on(posedge(clk)).reads(entries, alloc_arb.out, tx_req_arb.in_rdy,
+    // 静止门（§21）：候选（allocFire || 非空闲）为空时整条 update 跳过。
+    w_any.assign().reads(entries, alloc_arb.out) = [](auto src) {
+        auto [entries, alloc_out] = src;
+        for (uint32_t i = 0; i < kEntries; ++i)
+            if (entries[i].state != kFree || alloc_out[i].valid) return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(entries, alloc_arb.out, tx_req_arb.in_rdy,
                                             resp_arb.in_rdy, rx_dat) = [](auto src) {
         auto [entries, alloc_out, tx_req_rdy, resp_rdy, rx_dat] = src;
         EntryArr n = entries;
@@ -408,7 +422,14 @@ WriteCM::WriteCM() {
     data_task_arb.out_rdy = data_task_rdy;
     data_task = data_task_arb.out;
 
-    entries.update().on(posedge(clk)).reads(entries, alloc_arb.out, tx_req_arb.in_rdy,
+    // 静止门（§21）：候选（allocFire || 非空闲）为空时整条 update 跳过。
+    w_any.assign().reads(entries, alloc_arb.out) = [](auto src) {
+        auto [entries, alloc_out] = src;
+        for (uint32_t i = 0; i < kEntries; ++i)
+            if (entries[i].state != kFree || alloc_out[i].valid) return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(entries, alloc_arb.out, tx_req_arb.in_rdy,
                                             resp_arb.in_rdy, data_task_arb.in_rdy, rx_rsp,
                                             data_resp) = [](auto src) {
         auto [entries, alloc_out, tx_req_rdy, resp_rdy, data_task_rdy, rx_rsp, data_resp] = src;

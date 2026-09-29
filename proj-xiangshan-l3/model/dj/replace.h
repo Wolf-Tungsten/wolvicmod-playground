@@ -150,6 +150,9 @@ public:
         bool operator==(const DirHits&) const = default;
     };
     WIRE(DirHits, w_dir_hits);
+    // 整条 update 的静止门（perf-breakdown §21）：无非空闲项且无 alloc 时
+    // compute/commit 全跳过。
+    WIRE(bool, w_any);
     // reqPoS 矩阵输入——原 w_hn_txn_ids / w_req_pos_in，同为 reads(entries) 的
     // per-entry 提取，且共同只喂 reqPoS 矩阵与 rdy 选择这一条组合链。
     struct ReqPosFeed {

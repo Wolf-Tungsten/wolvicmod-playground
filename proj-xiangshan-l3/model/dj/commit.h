@@ -206,6 +206,10 @@ public:
     WIRE(AlrArrN, w_alr_get_next);
     WIRE(U8ArrN, w_resp_err_next);
     WIRE(BoolArrN, w_set);
+    // 整条 update 的静止门（perf-breakdown §21）：候选集为空时 compute/commit
+    // 全跳过。注意必须含 w_comp_ack_hit——它不看项有效性（纯 txnID 匹配），
+    // 空闲项的 alrGet 也会被击中翻转，行为要逐拍复现。
+    WIRE(bool, w_any);
 
     Commit();
 };

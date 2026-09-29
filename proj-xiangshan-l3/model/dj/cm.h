@@ -67,6 +67,8 @@ public:
     WIRE(TxSnpInArr, w_tx_snp_in);
     WIRE(RdyArrN, w_alloc_rdy_all);
     WIRE(RespInArr, w_resp_in);
+    // 整条 update 的静止门（perf-breakdown §21）
+    WIRE(bool, w_any);
 
     SnoopCM();
 };
@@ -113,6 +115,8 @@ public:
     WIRE(TxReqInArr, w_tx_req_in);
     WIRE(RdyArrN, w_alloc_rdy_all);
     WIRE(RespInArr, w_resp_in);
+    // 整条 update 的静止门（perf-breakdown §21）
+    WIRE(bool, w_any);
 
     ReadCM();
 };
@@ -166,6 +170,8 @@ public:
     WIRE(RdyArrN, w_alloc_rdy_all);
     WIRE(RespInArr, w_resp_in);
     WIRE(DataTaskInArr, w_data_task_in);
+    // 整条 update 的静止门（perf-breakdown §21）
+    WIRE(bool, w_any);
 
     WriteCM();
 };

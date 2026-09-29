@@ -302,7 +302,15 @@ DataCM::DataCM() {
     // db/ds/chi_rdys[i]（原 w_db_rdys/w_ds_rdys/w_chi_rdys 三条数组 assign，唯一
     // 消费方即本 update，内联消除；判定逻辑逐位不变）/
     // resp_arb.in_rdy[i] / rel_arb.in_rdy[i]。
-    entries.update().on(posedge(clk)).reads(entries, upd_hn_txn_id, task_d, clean, ds_wri_db,
+    // 静止门（§21）：候选 = ∃非空闲项 或 alloc fire（reqFire && 有空闲选择）。
+    w_any.assign().reads(entries, req_db_in, req_db_in_rdy, w_free_sel) = [](auto src) {
+        auto [entries, req_db_in, req_db_in_rdy, free_sel] = src;
+        if (req_db_in.valid && req_db_in_rdy && free_sel.has) return true;
+        for (uint32_t i = 0; i < kNrDataCM; ++i)
+            if (!dcIsFree(entries[i])) return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(entries, upd_hn_txn_id, task_d, clean, ds_wri_db,
                                             tx_dat_fire, db_wri_ds, req_db_in, req_db_in_rdy,
                                             w_free_sel, dbid_resp, resp_arb.in_rdy,
                                             rel_arb.in_rdy, w_repl_sel, w_db_in, w_ds_in,

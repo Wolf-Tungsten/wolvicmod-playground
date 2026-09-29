@@ -358,6 +358,9 @@ public:
     };
     WIRE(Sel, w_free_sel);
     WIRE(Sel, w_repl_sel);
+    // 整条 update 的静止门（perf-breakdown §21）：无非空闲项且无 alloc 时
+    // compute/commit 全跳过。
+    WIRE(bool, w_any);
     // 条目 read 通道 rdy 回接（原 w_db_rdys/w_ds_rdys/w_chi_rdys 三条数组
     // assign）：唯一消费方是 entries update，已内联进该 lambda。
 

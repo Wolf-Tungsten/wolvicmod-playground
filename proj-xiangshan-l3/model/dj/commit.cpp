@@ -638,7 +638,13 @@ Commit::Commit() {
     };
 
     // ---- 寄存（112 项一条 update；w_set 门控组 + 每拍直通组） ----
-    entries.update().on(posedge(clk)).reads(entries, w_set, w_alloc_hit, cmt_task_0, cmt_task_1,
+    w_any.assign().reads(w_set, w_comp_ack_hit) = [](auto src) {
+        auto [w_set, comp_ack_hit] = src;
+        for (uint32_t i = 0; i < kEntries; ++i)
+            if (w_set[i] || comp_ack_hit[i]) return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(entries, w_set, w_alloc_hit, cmt_task_0, cmt_task_1,
                                             w_task_next, w_flag_next, w_inst_next, w_state_next,
                                             w_alr_get_next, w_resp_err_next) = [](auto src) {
         auto [entries, w_set, alloc_hit, cmt_task_0, cmt_task_1, task_next, flag_next, inst_next,

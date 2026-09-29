@@ -939,6 +939,101 @@ harness）。本轮无 wolvicmod 框架侧改动，wolvicmod ctest/cosim 沿用 
 `build/perf-ab-flatq.data`（§19 后）、`build/perf-ab-layers.data`
 （§19 前基线）。
 
+## 21. 大数组 update 全量门控：活跃度实测否决按项脏位图（2026-09-29）
+
+**动机**：§20 后 Commit（compute+commit 6.5%）成为最大单点，候选方向是
+"大数组按项脏位图"。**先做活跃度测量再定方案**（临时探针 actprobe，
+测完即删）：全程 316,748 拍 ×2 HNF 实例，每条数组 update 的执行次数、
+有变化的拍数、每拍变化项数。
+
+**测量结论**（coremark 全程，100% 覆盖非抽样）：
+
+| 数组 | 有变化的拍 | 每拍变化项 |
+|---|---|---|
+| Commit.entries (112) | 0.3% | 变时 1-2 项 |
+| DataCM.entries (64) | 0.0% | — |
+| ReplaceCM.entries (64) | 0.1% | 变时 1-2 项 |
+
+L3 在此负载下高度静默，且 commit 的 `==` 检测已让下游 assign 在静止拍
+休眠——剩余浪费是 **update 自身的每拍全数组拷贝+循环+比较**（Commit
+每拍 ~3×9.4KB）。按项脏位图优化的是活跃拍内部（算完比较完才知道位
+图），救不了这个；**整条 update 事前门控**才是正解（且在任何负载下
+都不亏：闲时大省、忙时只多一条归约 wire）。位图保留为多核/饱和负载
+下的未来选项。
+
+**改法**：6 处数组 update 各加一条 `w_any` 归约 wire + `.en(w_any)`，
+lambda 本体不动。候选条件按模块语义：
+
+- **Commit**：`|w_set || |w_comp_ack_hit`——关键正确性点：comp_ack_hit
+  不看项有效性（纯 txnID 匹配），空闲项的 alrGet 也会被击中翻转，漏掉
+  它会丢状态（逐拍复现义务，不能按"看起来无害"省略）；
+- **DataCM**：`∃非空闲 || (reqFire && free_sel.has)`；
+- **ReplaceCM / SnoopCM / ReadCM / WriteCM**：循环体已有的
+  `allocFire || state != kFree` 候选条件的归约。
+
+**门控精度**（探针复核）：Commit update 执行 633,496 → 4,406 次
+（0.7%，含 comp_ack_hit 保守唤醒；实际变化 1,786 次全保留）；
+DataCM → **0 次**（全睡且 0 失配）；ReplaceCM → 737 次（99.3% 精确）。
+
+**结果**（孤立回放全程，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 全程 loop | 对 RTL eval 比 |
+|---|---|---|---|
+| §20 终版 | 9.93s | 11.43s | 3.2× |
+| + 本轮 | **8.04s（-19.0%）** | **9.50s（-16.9%）** | **2.5×** |
+
+HNF 桶墙钟 2.76s → 1.42s（-49%）；Commit/DataCM/ReplaceCM/CM 三件套
+从前排热点消失，新热点为 TaskBuffer 3.2%、DirectoryBase 2.7%、
+PosTable 1.9%（同为数组 FSM 但候选几乎恒非空，门控不适用）。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉；`REPLAY_AUDIT=1` 全程审计；proj ctest
+17/17（12.7s → 10.3s）；proj cosim 51 组。
+
+**产物**：perf 采样 `build/perf-ab-gated.data`（本轮后）。
+
+## 22. 仲裁器/SRAM prefab 拍平：VipArb 中转链内联 + SRAM 单链内联（2026-09-29）
+
+**动机**：§21 后 prefab 层剩余两个未拍平对象——VipArb（9 动作/实例，
+~45 处使用、含 QosRRArb 内含的 2 个，实例 ~60-80）与 SpSram/DpSram
+（~15 动作/实例）。RRArb（5 动作且 w_out_fire 已是门）、Alloc/
+FixedArb（纯组合 3 动作）评估后跳过。
+
+**改法**（端口/语义不变，全部机械内联）：
+
+- **VipArb**（xsarb.h）：`w_vip_req`/`w_other_v`/`w_out_fire` 三条单消费
+  中转并入 `w_move`（直读 vip/in/out/out_rdy 一次融合扫描），`w_next_vip`
+  并入 vip.update 的 compute——9 → **5 动作/实例**（3 输出 + 门 + update）。
+- **QosArb**：`w_has_high` 中转消除，4 个消费方直读 `arb_hi.out.valid`
+  （同 §20 dj/qosrr.h 的处理）。
+- **SpSram**：`w_fire`/`w_read_fire` 单链内联（write_fire 融合为一条；
+  读 fire 并入 holdpipe/cappipe enq；intv 的 fire 判定直读 req/req_rdy）。
+  `w_addr` 保留（Mem update 的 `.addr()` 需实体）。intv/rst 标量 update
+  **不加门**——门本身是一条新 action，省下的标量 compute/比较是平凡
+  成本，净收益为负（与 §21 大数组门控不同，那里省的是每拍 3×9.4KB）。
+- **DpSram**：`w_raddr`（rreq.bits 直通）与 `w_bmask`（单消费）并入
+  cappipe.enq（BypassWrite 掩码逻辑 if constexpr 内联）。
+
+**结果**（孤立回放全程，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 全程 loop | 对 RTL eval 比 |
+|---|---|---|---|
+| §21 终版 | 8.04s | 9.50s | 2.5× |
+| + 本轮 | **7.82s（-2.7%）** | **9.28s（-2.3%）** | **2.5×** |
+
+收益小于事前估计（4-7%）：perf 复核显示 VipArb 桶墙钟仅 0.50s → 0.44s
+——其成本大头是 3 条输出 assign（chosen/out/in_rdy 各自 N 路扫描）在
+输入变化时的**真实计算**，派发开销占比小；拍平消掉的 4 条中转 wire 只
+是次要成本。SRAM 桶持平（同理）。-2.7% 主要来自动作数下降对引擎派发
+循环/守卫桶的联动摊薄。**教训**：拍平的收益与"中转成本占比"成正比，
+输出侧多路扫描类 prefab 的拍平空间天然有限。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉；`REPLAY_AUDIT=1` 全程审计；proj ctest
+17/17；proj cosim 51 组。
+
+**产物**：perf 采样 `build/perf-ab-arbflat.data`（本轮后）。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：

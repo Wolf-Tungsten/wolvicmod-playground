@@ -142,8 +142,8 @@ public:
     REG(uint32_t, intv);
     REG(RstState, rst);
 
-    WIRE(bool, w_fire);
-    WIRE(bool, w_read_fire);
+    // §22：w_fire/w_read_fire 单链中转内联进各消费点；w_addr 保留
+    // （Mem update 的 .addr() 需要实体），w_write_fire 保留（ram 写门）。
     WIRE(bool, w_write_fire);
     WIRE(uint32_t, w_addr);
     WIRE(bool, w_wr_pop);
@@ -179,25 +179,17 @@ private:
             auto [intv, rst] = src;
             return intv == 0 && rst.cnt == 0;
         };
-        w_fire.assign().reads(req, req_rdy) = [](auto src) {
+        w_write_fire.assign().reads(req, req_rdy) = [](auto src) {
             auto [req, req_rdy] = src;
-            return req.valid && req_rdy;
-        };
-        w_read_fire.assign().reads(w_fire, req) = [](auto src) {
-            auto [w_fire, req] = src;
-            return w_fire && !req.bits.write;
-        };
-        w_write_fire.assign().reads(w_fire, req) = [](auto src) {
-            auto [w_fire, req] = src;
-            return w_fire && req.bits.write;
+            return req.valid && req_rdy && req.bits.write;
         };
         w_addr.assign().reads(req) = [](auto src) {
             auto [req] = src;
             return req.bits.addr;
         };
-        intv.update().on(posedge(clk)).reads(intv, w_fire, rst) = [](auto src) -> uint32_t {
-            auto [intv, w_fire, rst] = src;
-            if (w_fire) return kInterval - 1;
+        intv.update().on(posedge(clk)).reads(intv, req, req_rdy, rst) = [](auto src) -> uint32_t {
+            auto [intv, req, req_rdy, rst] = src;
+            if (req.valid && req_rdy) return kInterval - 1;  // fire（读/写同重装）
             if (kSweepLastWr != 0 && rst.cnt == kSweepLastWr) return kInterval - 1;
             return intv > 0 ? intv - 1 : 0;
         };
@@ -249,20 +241,21 @@ private:
     }
 
     void registerReadDirect() {  // kCapDelay==0：fire 拍组合采样
-        holdpipe.enq.assign().reads(w_read_fire, ram, w_addr) = [](auto src) {
-            auto [w_read_fire, ram, w_addr] = src;
+        holdpipe.enq.assign().reads(req, req_rdy, ram, w_addr) = [](auto src) {
+            auto [req, req_rdy, ram, w_addr] = src;
+            const bool read_fire = req.valid && req_rdy && !req.bits.write;
             ValidResp d;
-            d.valid = w_read_fire;
-            d.bits.data = w_read_fire ? ram[w_addr] : WayRow{};
+            d.valid = read_fire;
+            d.bits.data = read_fire ? ram[w_addr] : WayRow{};
             return d;
         };
     }
 
     void registerReadPiped(CapPipe& cappipe) {  // kCapDelay>0：第 kIsc 拍组合采样
-        cappipe.enq.assign().reads(w_read_fire, w_addr) = [](auto src) {
-            auto [w_read_fire, w_addr] = src;
+        cappipe.enq.assign().reads(req, req_rdy, w_addr) = [](auto src) {
+            auto [req, req_rdy, w_addr] = src;
             Valid<uint32_t> d;
-            d.valid = w_read_fire;
+            d.valid = req.valid && req_rdy && !req.bits.write;
             d.bits = w_addr;
             return d;
         };
@@ -336,11 +329,11 @@ public:
     REG(uint32_t, w_intv);
     REG(RstState, rst);
 
+    // §22：w_raddr（rreq.bits 直通）与 w_bmask（单消费）内联进 cappipe.enq；
+    // w_waddr 保留（Mem update 的 .addr() 需要实体）。
     WIRE(bool, w_r_fire);
     WIRE(bool, w_w_fire);
-    WIRE(uint32_t, w_raddr);
     WIRE(uint32_t, w_waddr);
-    WIRE(uint32_t, w_bmask);
     WIRE(bool, w_wr_pop);
     WIRE(uint32_t, w_wr_addr);
 
@@ -390,25 +383,10 @@ private:
             auto [wreq, wreq_rdy] = src;
             return wreq.valid && wreq_rdy;
         };
-        w_raddr.assign().reads(rreq) = [](auto src) {
-            auto [rreq] = src;
-            return rreq.bits;
-        };
         w_waddr.assign().reads(wreq) = [](auto src) {
             auto [wreq] = src;
             return wreq.bits.addr;
         };
-        if constexpr (BypassWrite) {
-            // bypassWrite && !singlePort：同拍读写同址时前递写数据（掩码位）；
-            // Ways==1 时源模板 waymask=None 等价掩码全 1
-            w_bmask.assign().reads(w_r_fire, w_w_fire, w_raddr, w_waddr, wreq) = [](auto src) -> uint32_t {
-                auto [w_r_fire, w_w_fire, w_raddr, w_waddr, wreq] = src;
-                if (!(w_r_fire && w_w_fire && w_raddr == w_waddr)) return 0;
-                return Ways == 1 ? 1u : wreq.bits.mask;
-            };
-        } else {
-            w_bmask = 0u;
-        }
         r_intv.update().on(posedge(clk)).reads(r_intv, w_r_fire) = [](auto src) -> uint32_t {
             auto [r_intv, w_r_fire] = src;
             if (w_r_fire) return kInterval - 1;
@@ -476,12 +454,20 @@ private:
 
     // fire 拍：读地址 + 并发写前递信息入 cappipe（kDpCapDepth 拍后到采样拍）
     void registerReadPath(CapPipe& cappipe) {
-        cappipe.enq.assign().reads(w_r_fire, w_raddr, w_bmask, wreq) = [](auto src) {
-            auto [w_r_fire, w_raddr, w_bmask, wreq] = src;
+        cappipe.enq.assign().reads(w_r_fire, w_w_fire, rreq, w_waddr, wreq) = [](auto src) {
+            auto [w_r_fire, w_w_fire, rreq, w_waddr, wreq] = src;
             Valid<CapInfo> d;
             d.valid = w_r_fire;
-            d.bits.addr = w_raddr;
-            d.bits.bmask = w_bmask;
+            d.bits.addr = rreq.bits;
+            // bypassWrite && !singlePort：同拍读写同址时前递写数据（掩码位）；
+            // Ways==1 时源模板 waymask=None 等价掩码全 1
+            if constexpr (BypassWrite) {
+                d.bits.bmask = (w_r_fire && w_w_fire && rreq.bits == w_waddr)
+                                   ? (Ways == 1 ? 1u : wreq.bits.mask)
+                                   : 0u;
+            } else {
+                d.bits.bmask = 0;
+            }
             d.bits.bdata = wreq.bits.data;
             return d;
         };

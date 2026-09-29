@@ -49,11 +49,7 @@ public:
     OUT(uint32_t, chosen);
 
     REG(uint32_t, vip);
-    WIRE(bool, w_vip_req);
-    WIRE(bool, w_other_v);
-    WIRE(bool, w_out_fire);
     WIRE(bool, w_move);
-    WIRE(uint32_t, w_next_vip);
 
     VipArb() {
         chosen.assign().reads(vip, in) = [](auto src) -> uint32_t {
@@ -77,36 +73,28 @@ public:
             for (uint32_t i = 0; i < N; ++i) rdy[i] = out_rdy && in[i].valid && chosen == i;
             return rdy;
         };
-        w_vip_req.assign().reads(vip, in) = [](auto src) {
-            auto [vip, in] = src;
-            return in[vip].valid;
-        };
-        w_other_v.assign().reads(vip, in) = [](auto src) {
-            auto [vip, in] = src;
+        // 指针转移门（perf-breakdown §22：原 w_vip_req/w_other_v/w_out_fire
+        // 三条单消费中转内联）
+        w_move.assign().reads(vip, in, out, out_rdy) = [](auto src) {
+            auto [vip, in, out, out_rdy] = src;
+            bool other_v = false;
             for (uint32_t i = 0; i < N; ++i)
-                if (i != vip && in[i].valid) return true;
-            return false;
+                if (i != vip && in[i].valid) {
+                    other_v = true;
+                    break;
+                }
+            if (!other_v) return false;
+            return in[vip].valid ? (out.valid && out_rdy) : true;
         };
-        w_next_vip.assign().reads(vip, in) = [](auto src) -> uint32_t {
+        // 原 w_next_vip 中转内联：vip 之上最低 valid（highValidMask 优先），
+        // 无则绕回 vip 之下的最低 valid（lowValidMask）
+        vip.update().on(posedge(clk)).en(w_move).reads(vip, in) = [](auto src) {
             auto [vip, in] = src;
-            // vip 之上最低 valid（highValidMask 优先），无则绕回 vip 之下最低 valid
             for (uint32_t i = vip + 1; i < N; ++i)
                 if (in[i].valid) return i;
             for (uint32_t i = 0; i < vip; ++i)
                 if (in[i].valid) return i;
             return vip;
-        };
-        w_out_fire.assign().reads(out, out_rdy) = [](auto src) {
-            auto [out, out_rdy] = src;
-            return out.valid && out_rdy;
-        };
-        w_move.assign().reads(w_other_v, w_vip_req, w_out_fire) = [](auto src) {
-            auto [w_other_v, w_vip_req, w_out_fire] = src;
-            return w_other_v && (w_vip_req ? w_out_fire : true);
-        };
-        vip.update().on(posedge(clk)).en(w_move).reads(w_next_vip) = [](auto src) {
-            auto [w_next_vip] = src;
-            return w_next_vip;
         };
     }
 };
@@ -138,7 +126,6 @@ public:
     IN(bool, out_rdy);
     OUT(uint32_t, chosen);
 
-    WIRE(bool, w_has_high);
     MOD(Sub, arb_lo);
     MOD(Sub, arb_hi);
 
@@ -161,25 +148,22 @@ public:
             for (uint32_t i = 0; i < N; ++i) rdy[i] = arb_lo_in_rdy[i] || arb_hi_in_rdy[i];
             return rdy;
         };
-        w_has_high.assign().reads(arb_hi.out) = [](auto src) {
-            auto [arb_hi_out] = src;
-            return arb_hi_out.valid;
+        // hasHigh 直接取 arb_hi.out.valid（§22：原中转线 w_has_high 内联消除）
+        arb_hi.out_rdy.assign().reads(arb_hi.out, out_rdy) = [](auto src) {
+            auto [arb_hi_out, out_rdy] = src;
+            return arb_hi_out.valid && out_rdy;
         };
-        arb_hi.out_rdy.assign().reads(w_has_high, out_rdy) = [](auto src) {
-            auto [w_has_high, out_rdy] = src;
-            return w_has_high && out_rdy;
+        arb_lo.out_rdy.assign().reads(arb_hi.out, out_rdy) = [](auto src) {
+            auto [arb_hi_out, out_rdy] = src;
+            return !arb_hi_out.valid && out_rdy;
         };
-        arb_lo.out_rdy.assign().reads(w_has_high, out_rdy) = [](auto src) {
-            auto [w_has_high, out_rdy] = src;
-            return !w_has_high && out_rdy;
+        out.assign().reads(arb_hi.out, arb_lo.out) = [](auto src) {
+            auto [arb_hi_out, arb_lo_out] = src;
+            return arb_hi_out.valid ? arb_hi_out : arb_lo_out;
         };
-        out.assign().reads(w_has_high, arb_hi.out, arb_lo.out) = [](auto src) {
-            auto [w_has_high, arb_hi_out, arb_lo_out] = src;
-            return w_has_high ? arb_hi_out : arb_lo_out;
-        };
-        chosen.assign().reads(w_has_high, arb_hi.chosen, arb_lo.chosen) = [](auto src) {
-            auto [w_has_high, arb_hi_chosen, arb_lo_chosen] = src;
-            return w_has_high ? arb_hi_chosen : arb_lo_chosen;
+        chosen.assign().reads(arb_hi.out, arb_hi.chosen, arb_lo.chosen) = [](auto src) {
+            auto [arb_hi_out, arb_hi_chosen, arb_lo_chosen] = src;
+            return arb_hi_out.valid ? arb_hi_chosen : arb_lo_chosen;
         };
     }
 };

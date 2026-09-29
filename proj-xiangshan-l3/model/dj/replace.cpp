@@ -309,7 +309,14 @@ ReplaceCM::ReplaceCM() {
     // ---- 64 项状态（一条 update 循环；w_set = allocFire || 非空闲） ----
     // 读集不含各 w_*_in 输出数组：其次态只用到 valid，而 valid ≡ state==本态，
     // 由 switch 分支隐含（fire 条件退化为纯 rdy）。
-    entries.update().on(posedge(clk)).reads(
+    // 静止门（§21）：候选集（allocFire || 非空闲）为空时整条 update 跳过。
+    w_any.assign().reads(entries, alloc_arb.out) = [](auto src) {
+        auto [entries, alloc_out] = src;
+        for (uint32_t i = 0; i < kEntries; ++i)
+            if (entries[i].state != replst::kFree || alloc_out[i].valid) return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(
         entries, alloc_arb.out, pos_resp_vec, w_dir_hits, resp_dir_sf, resp_dir_llc, cfg_ci,
         req_db_arb.in_rdy, wri_arb.in_rdy, snp_arb.in_rdy, cm_resp, data_task_arb.in_rdy,
         data_resp, clean_arb.in_rdy, write_dir_done, w_req_pos_rdy_all,
