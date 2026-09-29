@@ -7,7 +7,8 @@
 // compareTag=addr[18:3]。
 //
 // 结构同 S 桥简化版（AxiLiteBridge.scala:33-141）：
-//   8×BridgeCm<CmHiT>（CM 内带 64b 数据/8b 掩码，无 dataBuffer/alloc）；
+//   8 项 CM 状态阵列（BridgeCm 已拍平为共享算法 CmLogic<CmHiT>，见
+//   bridge_cm.h；CM 内带 64b 数据/8b 掩码，无 dataBuffer/alloc）；
 //   tx_resp/aw/ar 各经 ConditionVipArbiter(qos>=) 合流；awQueue(8) 保序 →
 //   W 直出（CM 侧驱动 slvData/slvMask/last=true，Mux1H 选择）；
 //   rx.resp（CompAck）/rx.data 按 TxnID 分发且恒 ready；
@@ -23,7 +24,6 @@
 #include "model/bridge/bridge_cm.h"
 #include "model/flit/zj_flit.h"
 #include "prefab/xsarb.h"
-#include "wolvicmod/core/collect.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/valid.h"
@@ -145,8 +145,7 @@ struct CmHiT {
 class HiNodeAxiLiteBridge : public wolvicmod::Module {
 public:
     static constexpr uint32_t kOutst = CmHiT::kOutst;
-    using Cm    = BridgeCm<CmHiT>;
-    using InfoV = typename Cm::InfoV;
+    using InfoV = CmInfoV<CmHiT>;
 
     IN(bool, clk);
     IN(uint16_t, node_id);  // RTL nodeId（= 0x20）
@@ -183,7 +182,9 @@ public:
     MOD(AxArbT, aw_arb);
     MOD(AxArbT, ar_arb);
     MOD(AwQ, aw_q);  // UInt(8.W) 一位热
-    MOD_ARRAY(Cm, kOutst, cms);
+    // 拍平后的 CM 状态阵列（原 MOD_ARRAY(Cm) 的 cms[i].st）
+    using CmStArr = std::array<CmSt<CmHiT>, kOutst>;  // 宏参数含逗号，先取别名
+    REG(CmStArr, cms);
 
 private:
     using RdPipe  = Queue<DataFlit, 1, false, true>;
@@ -195,15 +196,30 @@ private:
     using RspArr  = std::array<Valid<RespFlit>, kOutst>;
     using AxArr   = std::array<Valid<axi::AxFlit>, kOutst>;
     using WArr    = std::array<Valid<axi::WFlit>, kOutst>;
+    using ReqArr  = std::array<Valid<RReqFlit>, kOutst>;
+    using BArr    = std::array<Valid<axi::BFlit>, kOutst>;
+    using DatArr  = std::array<Valid<DataFlit>, kOutst>;
 
     REG(BoolArr, tag_match);
 
+    // CM 阵列（拍平）组合输出数组
     WIRE(WkArr, wk_all);
     WIRE(InfoArr, info_all);
     WIRE(RspArr, rsp_in);
     WIRE(AxArr, aw_in);
     WIRE(AxArr, ar_in);
     WIRE(WArr, w_all);
+    // per-entry 输入分发 / fire（原 CM 端口连接的数组化；HI 无 alloc）
+    WIRE(ReqArr, w_cm_req);      // rx_req × PickOneLow
+    WIRE(RspArr, w_cm_rx_resp);  // rx_resp（CompAck）按 txn_id 分发
+    WIRE(DatArr, w_cm_rx_data);  // rx_data 按 txn_id 分发
+    WIRE(BArr, w_cm_b);          // axi_b 按 id 分发
+    WIRE(BoolArr, w_cm_rd_fire);
+    WIRE(BoolArr, w_cm_rd_last);
+    WIRE(BoolArr, w_rsp_fire);
+    WIRE(BoolArr, w_aw_fire);
+    WIRE(BoolArr, w_ar_fire);
+    WIRE(BoolArr, w_w_fire);
     WIRE(BoolArr, free_lo);
     WIRE(BoolArr, tag_match_c);
     WIRE(bool, w_any_free);

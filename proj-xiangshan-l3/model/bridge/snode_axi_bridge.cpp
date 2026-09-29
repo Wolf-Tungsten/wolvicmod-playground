@@ -4,7 +4,12 @@
 
 namespace zj::bridge {
 
+// 拍平建模（bridge_cm.h）：64 项 CM 状态并入 REG(cms) 一条 update 循环，
+// per-entry 组合输出数组化为 Array wire 直喂仲裁器，per-entry fire 从仲裁器
+// in_rdy 数组直读；仲裁器/队列/data_buf 子模块不变。
+
 SNodeAxiBridge::SNodeAxiBridge() {
+    using CmL = CmLogic<CmST>;
     rsp_arb.clk = clk;
     aw_arb.clk = clk;
     ar_arb.clk = clk;
@@ -13,23 +18,50 @@ SNodeAxiBridge::SNodeAxiBridge() {
     aw_q.clk = clk;
     data_buf.clk = clk;
     rd_pipe.clk = clk;
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm     = cms[i];
-        cm.clk     = clk;
-        cm.idx     = i;
-        cm.rx_resp = Valid<RespFlit>{};  // S 无 rx.resp（tie invalid）
-    }
 
-    // ---- 汇聚 ----
-    wolvicmod::combine(wk_all, cms, [](Cm& cm) -> Out<WkV>& { return cm.wakeup_out; });
-    wolvicmod::combine(info_all, cms, [](Cm& cm) -> Out<InfoV>& { return cm.info_out; });
-    wolvicmod::combine(rsp_in, cms, [](Cm& cm) -> Out<Valid<RespFlit>>& { return cm.tx_resp; });
-    wolvicmod::combine(aw_in, cms, [](Cm& cm) -> Out<Valid<axi::AxFlit>>& { return cm.axi_aw; });
-    wolvicmod::combine(ar_in, cms, [](Cm& cm) -> Out<Valid<axi::AxFlit>>& { return cm.axi_ar; });
-    wolvicmod::combine(alloc_in, cms,
-                       [](Cm& cm) -> Out<Valid<AllocReqBits>>& { return cm.alloc_req; });
-    wolvicmod::combine(w_all, cms,
-                       [](Cm& cm) -> Out<Valid<axi::WFlit>>& { return cm.axi_w; });
+    // ---- CM 阵列：per-entry 组合输出（原 combine(cms, port)）----
+    wk_all.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        WkArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmWakeupOut(cms[i]);
+        return o;
+    };
+    info_all.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        InfoArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmInfoOut(cms[i]);
+        return o;
+    };
+    rsp_in.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        RspArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmTxResp(cms[i], i);
+        return o;
+    };
+    aw_in.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        AxArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmAxiAw(cms[i], i);
+        return o;
+    };
+    ar_in.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        AxArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmAxiAr(cms[i], i);
+        return o;
+    };
+    alloc_in.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        AllocArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmAllocReq(cms[i], i);
+        return o;
+    };
+    w_all.assign().reads(cms) = [](auto src) {
+        auto [cms] = src;
+        WArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = CmL::cmAxiW(cms[i]);
+        return o;
+    };
 
     // ---- 仲裁合流 ----
     rsp_arb.in = rsp_in;
@@ -42,27 +74,31 @@ SNodeAxiBridge::SNodeAxiBridge() {
     aw_arb.out_rdy = axi_aw_rdy;
     axi_ar = ar_arb.out;
     ar_arb.out_rdy = axi_ar_rdy;
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm = cms[i];
-        cm.wk_in = wk_all;
-        cm.wait_num = w_wait_num;
-        cm.tx_resp_rdy.assign().reads(rsp_arb.in_rdy) = [i](auto src) {
-            auto [rsp_arb_in_rdy] = src;
-            return rsp_arb_in_rdy[i];
-        };
-        cm.axi_aw_rdy.assign().reads(aw_arb.in_rdy) = [i](auto src) {
-            auto [aw_arb_in_rdy] = src;
-            return aw_arb_in_rdy[i];
-        };
-        cm.axi_ar_rdy.assign().reads(ar_arb.in_rdy) = [i](auto src) {
-            auto [ar_arb_in_rdy] = src;
-            return ar_arb_in_rdy[i];
-        };
-        cm.alloc_req_rdy.assign().reads(alloc_sel.in_rdy) = [i](auto src) {
-            auto [alloc_sel_in_rdy] = src;
-            return alloc_sel_in_rdy[i];
-        };
-    }
+    // per-entry fire = 出口 valid && 仲裁器 in_rdy[i]
+    w_rsp_fire.assign().reads(rsp_in, rsp_arb.in_rdy) = [](auto src) {
+        auto [rsp_in, rsp_arb_in_rdy] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = rsp_in[i].valid && rsp_arb_in_rdy[i];
+        return o;
+    };
+    w_aw_fire.assign().reads(aw_in, aw_arb.in_rdy) = [](auto src) {
+        auto [aw_in, aw_arb_in_rdy] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = aw_in[i].valid && aw_arb_in_rdy[i];
+        return o;
+    };
+    w_ar_fire.assign().reads(ar_in, ar_arb.in_rdy) = [](auto src) {
+        auto [ar_in, ar_arb_in_rdy] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = ar_in[i].valid && ar_arb_in_rdy[i];
+        return o;
+    };
+    w_alloc_fire.assign().reads(alloc_in, alloc_sel.in_rdy) = [](auto src) {
+        auto [alloc_in, alloc_sel_in_rdy] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = alloc_in[i].valid && alloc_sel_in_rdy[i];
+        return o;
+    };
 
     // ---- PickOneLow 入队 ----
     free_lo.assign().reads(info_all) = [](auto src) {
@@ -86,16 +122,15 @@ SNodeAxiBridge::SNodeAxiBridge() {
         auto [rx_req, w_any_free] = src;
         return rx_req.valid && w_any_free;
     };
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm = cms[i];
-        cm.rx_req.assign().reads(rx_req, free_lo) = [i](auto src) {
-            auto [rx_req, free_lo] = src;
-            Valid<HReqFlit> d;
-            d.valid = rx_req.valid && free_lo[i];
-            d.bits  = rx_req.bits;
-            return d;
-        };
-    }
+    w_cm_req.assign().reads(rx_req, free_lo) = [](auto src) {
+        auto [rx_req, free_lo] = src;
+        ReqArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) {
+            o[i].valid = rx_req.valid && free_lo[i];
+            o[i].bits  = rx_req.bits;
+        }
+        return o;
+    };
 
     // ---- 同 tag 保序统计（AxiBridge.scala:92-98）----
     tag_match_c.assign().reads(info_all, wk_all, rx_req) = [](auto src) {
@@ -123,15 +158,14 @@ SNodeAxiBridge::SNodeAxiBridge() {
     alloc_sel.out_rdy = alloc_q.enq_rdy;
     data_buf.alloc = alloc_q.deq;
     alloc_q.deq_rdy = data_buf.alloc_rdy;
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm = cms[i];
-        cm.alloc_resp.assign().reads(alloc_q.deq, data_buf.alloc_rdy) =
-            [i](auto src) {
-                auto [alloc_q_deq, data_buf_alloc_rdy] = src;
-                return alloc_q_deq.valid && data_buf_alloc_rdy &&
-                       ((alloc_q_deq.bits.idx_oh >> i) & 1);
-            };
-    }
+    w_cm_alloc_resp.assign().reads(alloc_q.deq, data_buf.alloc_rdy) = [](auto src) {
+        auto [alloc_q_deq, data_buf_alloc_rdy] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i)
+            o[i] = alloc_q_deq.valid && data_buf_alloc_rdy &&
+                   ((alloc_q_deq.bits.idx_oh >> i) & 1);
+        return o;
+    };
 
     // ---- awQueue：aw 授权序 → W 选择（AxiBridge.scala:79-90）----
     w_aw_out_fire.assign().reads(aw_arb.out, axi_aw_rdy) = [](auto src) {
@@ -162,14 +196,14 @@ SNodeAxiBridge::SNodeAxiBridge() {
         auto [data_buf_from_cm_rdy, w_wsel_vld] = src;
         return data_buf_from_cm_rdy && w_wsel_vld;
     };
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm = cms[i];
-        cm.axi_w_rdy.assign().reads(data_buf.from_cm_rdy, aw_q.deq) = [i](auto src) {
-            auto [data_buf_from_cm_rdy, aw_q_deq] = src;
-            return data_buf_from_cm_rdy && aw_q_deq.valid &&
+    w_w_fire.assign().reads(w_all, data_buf.from_cm_rdy, aw_q.deq) = [](auto src) {
+        auto [w_all, data_buf_from_cm_rdy, aw_q_deq] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i)
+            o[i] = w_all[i].valid && data_buf_from_cm_rdy && aw_q_deq.valid &&
                    ((aw_q_deq.bits >> i) & 1);
-        };
-    }
+        return o;
+    };
 
     // ---- axi.b / toCmDat / 环侧写数据分发 ----
     axi_b_rdy = true;
@@ -177,24 +211,25 @@ SNodeAxiBridge::SNodeAxiBridge() {
     rx_data_rdy = data_buf.icn_rdy;
     axi_w = data_buf.axi_w;
     data_buf.axi_w_rdy = axi_w_rdy;
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm = cms[i];
-        cm.axi_b.assign().reads(axi_b) = [i](auto src) {
-            auto [axi_b] = src;
-            Valid<axi::BFlit> d;
-            d.valid = axi_b.valid && axi_b.bits.id == i;
-            d.bits  = axi_b.bits;
-            return d;
-        };
-        cm.rx_data.assign().reads(data_buf.to_cm) = [i](auto src) {
-            auto [data_buf_to_cm] = src;
-            Valid<DataFlit> d;
-            d.valid = data_buf_to_cm.valid &&
-                      (data_buf_to_cm.bits.txn_id & (kOutst - 1)) == i;
-            d.bits  = data_buf_to_cm.bits;
-            return d;
-        };
-    }
+    w_cm_b.assign().reads(axi_b) = [](auto src) {
+        auto [axi_b] = src;
+        BArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) {
+            o[i].valid = axi_b.valid && axi_b.bits.id == i;
+            o[i].bits  = axi_b.bits;
+        }
+        return o;
+    };
+    w_cm_rx_data.assign().reads(data_buf.to_cm) = [](auto src) {
+        auto [data_buf_to_cm] = src;
+        DatArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) {
+            o[i].valid = data_buf_to_cm.valid &&
+                         (data_buf_to_cm.bits.txn_id & (kOutst - 1)) == i;
+            o[i].bits  = data_buf_to_cm.bits;
+        }
+        return o;
+    };
 
     // ---- axi.r → readDataPipe → tx_data（AxiBridge.scala:119-148）----
     rd_pipe.enq.assign().reads(axi_r, info_all) = [](auto src) {
@@ -220,17 +255,38 @@ SNodeAxiBridge::SNodeAxiBridge() {
     axi_r_rdy = rd_pipe.enq_rdy;
     tx_data = rd_pipe.deq;
     rd_pipe.deq_rdy = tx_data_rdy;
-    for (uint32_t i = 0; i < kOutst; ++i) {
-        Cm& cm = cms[i];
-        cm.rd_fire.assign().reads(axi_r, rd_pipe.enq_rdy) = [i](auto src) {
-            auto [axi_r, rd_pipe_enq_rdy] = src;
-            return axi_r.valid && rd_pipe_enq_rdy && (axi_r.bits.id & (kOutst - 1)) == i;
+    w_cm_rd_fire.assign().reads(axi_r, rd_pipe.enq_rdy) = [](auto src) {
+        auto [axi_r, rd_pipe_enq_rdy] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i)
+            o[i] = axi_r.valid && rd_pipe_enq_rdy && (axi_r.bits.id & (kOutst - 1)) == i;
+        return o;
+    };
+    w_cm_rd_last.assign().reads(axi_r) = [](auto src) {
+        auto [axi_r] = src;
+        BoolArr o{};
+        for (uint32_t i = 0; i < kOutst; ++i) o[i] = axi_r.bits.last;
+        return o;
+    };
+
+    // ---- CM 状态阵列：一条 update 循环算全数组 next（一切判定读旧值）----
+    // S 无 rx.resp（tie invalid）
+    cms.update().on(posedge(clk))
+        .reads(cms, w_cm_req, w_cm_rx_data, w_cm_b, w_cm_rd_fire, w_cm_rd_last,
+               w_wait_num, wk_all, w_rsp_fire, w_aw_fire, w_ar_fire, w_w_fire,
+               w_alloc_fire, w_cm_alloc_resp) = [](auto src) {
+            auto [cms, cm_req, cm_rx_data, cm_b, cm_rd_fire, cm_rd_last, wait_num,
+                  wk_all, rsp_fire, aw_fire, ar_fire, w_fire, alloc_fire,
+                  alloc_resp] = src;
+            CmStArr n = cms;
+            for (uint32_t i = 0; i < kOutst; ++i)
+                n[i] = CmL::cmNext(cms[i], i, cm_req[i].valid, cm_req[i].bits,
+                                   Valid<RespFlit>{}, cm_rx_data[i], cm_b[i],
+                                   cm_rd_fire[i], cm_rd_last[i], wait_num, wk_all,
+                                   rsp_fire[i], aw_fire[i], ar_fire[i], w_fire[i],
+                                   alloc_fire[i], alloc_resp[i]);
+            return n;
         };
-        cm.rd_last.assign().reads(axi_r) = [i](auto src) {
-            auto [axi_r] = src;
-            return axi_r.bits.last;
-        };
-    }
 }
 
 }  // namespace zj::bridge

@@ -36,9 +36,17 @@ constexpr uint8_t kFree = 0x0, kReqPos = 0x1, kWaitPos = 0x2, kWriDir = 0x3,
                   kCleanPosR = 0x10, kWaitWriDir = 0x11;
 }  // namespace replst
 
-class ReplaceEntry : public wolvicmod::Module {
+// ---------------- ReplaceCM（64 entry 拍平 + Alloc + reqPoS 矩阵 + 输出仲裁） ----------------
+// 拍平建模：ReplaceEntry 不做子模块，64 项状态并为 REG(entries) 一条 update
+// 循环；per-entry 输出为数组 wire 直喂仲裁器。语义与原版逐位等价。
+
+class ReplaceCM : public wolvicmod::Module {
 public:
-    struct ReplReg {
+    static constexpr uint32_t kEntries = 64;
+    using ReqPosArr = std::array<std::array<Valid<ReplReqPos>, 4>, 2>;
+    using PosRespArr = std::array<std::array<Valid<uint8_t>, 4>, 2>;
+
+    struct ReplReg {  // 一个表项的全部状态（原 ReplaceEntry::ReplReg）
         DirMsg dir;
         uint8_t hnTxnID = 0;
         uint8_t qos = 0;
@@ -52,59 +60,8 @@ public:
 
         bool operator==(const ReplReg&) const = default;
     };
-    using PosRespArr = std::array<std::array<Valid<uint8_t>, 4>, 2>;
-
-    IN(bool, clk);
-    IN(uint8_t, cfg_ci);
-    IN(Valid<ReplTask>, alloc);
-    OUT(bool, alloc_rdy);
-    OUT(Valid<uint8_t>, resp);
-    IN(bool, resp_rdy);
-    OUT(Valid<CMTask>, cm_task_snp);
-    IN(bool, cm_task_snp_rdy);
-    OUT(Valid<CMTask>, cm_task_wri);
-    IN(bool, cm_task_wri_rdy);
-    IN(Valid<CMResp>, cm_resp);
-    OUT(Valid<ReplReqPos>, req_pos);
-    IN(bool, req_pos_rdy);
-    IN(PosRespArr, pos_resp);
-    OUT(Valid<UpdPosTag>, upd_pos_tag);
-    OUT(Valid<PosClean>, clean_pos);
-    IN(bool, clean_pos_rdy);
-    OUT(Valid<DirWrBoth>, write_dir);
-    IN(bool, write_dir_rdy);
-    IN(Valid<uint8_t>, write_dir_done);
-    IN(Valid<DirResp>, resp_dir_llc);
-    IN(Valid<DirResp>, resp_dir_sf);
-    OUT(Valid<ReqDBQos>, req_db);
-    IN(bool, req_db_rdy);
-    OUT(Valid<UpdHnTxnID>, upd_hn_txn_id);
-    IN(bool, upd_hn_txn_id_rdy);
-    OUT(Valid<DataTask>, data_task);
-    IN(bool, data_task_rdy);
-    IN(Valid<uint8_t>, data_resp);
-
-    REG(ReplReg, reg);
-    OUT(uint8_t, hn_txn_id_out);  // 矩阵命中测试用（reg.hnTxnID 的端口投影）
-    WIRE(ReplReg, w_next);
-    WIRE(bool, w_set);
-    WIRE(bool, w_pos_resp_hit);
-    WIRE(bool, w_sf_resp_hit);
-    WIRE(bool, w_llc_resp_hit);
-    WIRE(bool, w_cm_resp_hit);
-    WIRE(bool, w_data_resp_hit);
-    WIRE(bool, w_wri_dir_done_hit);
-
-    ReplaceEntry();
-};
-
-// ---------------- ReplaceCM（64 entry + Alloc + reqPoS 矩阵 + 输出仲裁） ----------------
-
-class ReplaceCM : public wolvicmod::Module {
-public:
-    static constexpr uint32_t kEntries = 64;
-    using ReqPosArr = std::array<std::array<Valid<ReplReqPos>, 4>, 2>;
-    using PosRespArr = std::array<std::array<Valid<uint8_t>, 4>, 2>;
+    using EntryArr = std::array<ReplReg, kEntries>;
+    using BoolArrN = std::array<bool, kEntries>;
 
     IN(bool, clk);
     IN(uint8_t, cfg_ci);
@@ -133,7 +90,7 @@ public:
     IN(bool, data_task_rdy);
     IN(Valid<uint8_t>, data_resp);
 
-    MOD_ARRAY(ReplaceEntry, kEntries, entries);
+    REG(EntryArr, entries);
     using AllocT = zj::prefab::Alloc<ReplTask, kEntries>;
     MOD(AllocT, alloc_arb);
     // reqPoS 矩阵：每 (dirBank × posSet) 一个 VipArbiter(64)
@@ -180,6 +137,9 @@ public:
     WIRE(ReqPosInArr, w_req_pos_in);
     using RdyArrN = std::array<bool, kEntries>;
     WIRE(RdyArrN, w_alloc_rdy_all);
+    WIRE(RdyArrN, w_sf_resp_hit);   // 供 upd_pos_tag 输出与次态共用
+    WIRE(RdyArrN, w_llc_resp_hit);
+    WIRE(RdyArrN, w_req_pos_rdy_all);  // 8 个 reqPos 仲裁器按 (bank,set) 选择后的 per-entry rdy
     using ReqPosOutArr = std::array<Valid<ReplReqPos>, 8>;
     using TxnIdArr = std::array<uint8_t, kEntries>;
     WIRE(ReqPosOutArr, w_req_pos_out);

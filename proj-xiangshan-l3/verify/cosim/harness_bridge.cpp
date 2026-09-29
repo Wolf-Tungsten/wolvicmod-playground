@@ -493,7 +493,7 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
         // 看门狗：任一 CM 连续 valid 超 5 万拍即打印内部态（镜像 RTL 的
         // "bridge CM time out" 调试断言；挂死回归时直接定位现场）
         for (uint32_t i = 0; i < 64; ++i) {
-            const auto& s = dut.cms[i].st.get();
+            const auto& s = dut.cms.get()[i];
             if (s.valid) {
                 if (++cmValidCyc[i] == 50001) {
                     std::printf(
@@ -670,7 +670,7 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
                     "cm0.ar.v=%d cm1.ar.v=%d | ar_arb.in_rdy[0]=%d\n",
                     (int)dut.ar_arb.out.get().valid, dut.ar_arb.out.get().bits.id,
                     (int)dut.ar_arb.sel_reg.get()[0], (int)dut.ar_arb.sel_reg.get()[1],
-                    (int)dut.cms[0].axi_ar.get().valid, (int)dut.cms[1].axi_ar.get().valid,
+                    (int)dut.ar_in.get()[0].valid, (int)dut.ar_in.get()[1].valid,
                     (int)dut.ar_arb.in_rdy.get()[0]);
         std::printf("aw_arb: out.v=%d sel_reg非零位数=", (int)dut.aw_arb.out.get().valid);
         int nz = 0;
@@ -678,7 +678,7 @@ uint64_t cosimSBridge(uint32_t seed, uint64_t cycles) {
         std::printf("%d | rsp_arb: out.v=%d sel=%d\n", nz, (int)dut.rsp_arb.out.get().valid,
                     (int)dut.rsp_arb.out.get().bits.opcode);
         for (uint32_t i = 0; i < 64; ++i) {
-            const auto& s = dut.cms[i].st.get();
+            const auto& s = dut.cms.get()[i];
             if (!s.valid) continue;
             std::printf(
                 "  cm_%d: wait=%d u(r=%d,d=%d,w=%d,rd=%d,c=%d) d(wa=%d,ra=%d,wd=%d,wr=%d,"
@@ -1016,7 +1016,7 @@ uint64_t cosimHiBridge(uint32_t seed, uint64_t cycles) {
         // 看门狗：任一 CM 连续 valid 超 5 万拍即打印内部态（镜像 RTL 的
         // "bridge CM time out" 调试断言；挂死回归时直接定位现场）
         for (uint32_t i = 0; i < 8; ++i) {
-            const auto& s = dut.cms[i].st.get();
+            const auto& s = dut.cms.get()[i];
             if (s.valid) {
                 if (++cmValidCyc[i] == 50001) {
                     std::printf(
@@ -1152,7 +1152,7 @@ uint64_t cosimHiBridge(uint32_t seed, uint64_t cycles) {
     }
     if (getenv("BRIDGE_TRACE") || nz > 0) {
         for (uint32_t i = 0; i < 8; ++i) {
-            const auto& s = dut.cms[i].st.get();
+            const auto& s = dut.cms.get()[i];
             if (!s.valid) continue;
             std::printf(
                 "  cm_%u: wait=%d u(r=%d,d=%d,w=%d,rd=%d,ca=%d,c=%d) d(wa=%d,ra=%d,"

@@ -780,6 +780,55 @@ CommitEntry 实例，每实例 ~35 个动作（命中检测、次态线网、15 
 检查）；`--dut=both` 共栖交叉（两侧各 0 失配）；proj ctest 17/17；
 wolvicmod cosim 30 组；proj cosim 51 组；`REPLAY_AUDIT=1` 全程审计回放。
 
+## 18. 建模层整项化（三）：剩余表项阵列全清（2026-09-29）
+
+**动机**：§16/§17 后的 profile 复核（按类聚合）拎出所有残余的 RTL 层次
+照搬表项：ReplaceEntry（64×2）、ReadEntry（64×2）、WriteEntry（32×2）、
+SnoopEntry（32×2）、DataCtrlEntry（64×2）、BridgeCm（64+8）、
+BeatStorage（8×2）。合计 profile 占比 ~12.5%。
+
+**改法**（同一拍平模式，对外端口全部不变；仲裁器/队列/SRAM prefab
+保留）：
+
+- **ReplaceEntry → ReplaceCM 拍平**（replace.h/cpp）：ReplReg 并入
+  `REG(std::array<ReplReg, 64>)`，一条 update 循环（十八态 FSM + 四类
+  命中副作用逐句移植）；11 路 per-entry 输出变数组 wire 直喂仲裁器；
+  reqPoS 矩阵的 per-entry rdy 选择合并为一条 `w_req_pos_rdy_all` 数组
+  assign；`upd_id`/`resp` 两路 rdy 恒真内联。
+- **CM 三件套**（cm.h/cpp）：SnoopEntry/ReadEntry/WriteEntry 三类删除，
+  各并为父模块 REG 数组 + 一条 update；fire 条件中纯 state 函数的 valid
+  化简；hit 检测内联进循环。
+- **DataCtrlEntry → DataCM 拍平**（data.h/datacm.cpp）：64 项并为
+  `REG(CtrlArr)`；9 条 combine 变 9 条数组 assign；64×3 条 rdy 回接变
+  3 条数组 assign；harness_db 窥探点同步。
+- **BridgeCm 拍平**（bridge/）：与前三处不同——它是两桥共享的模板。
+  BridgeCm 降级为普通 C++ 载体 `CmSt<Tr>`（状态 POD）+ `CmLogic<Tr>`
+  （纯静态函数组），两桥各持 `REG(std::array<CmSt, kOutst>)` + 一条
+  update + ~17 条数组 wire；共享逻辑零重复。harness_bridge 5 处窥探点
+  同步。
+- **BeatStorage 跳过**：状态主体是 SpSram（Mem 实体）+ ValidPipe
+  prefab，都必须保留为子模块，可并的只有 3 个标量 reg（8 实例），收益
+  为负；且 `tests/test_datablock.cpp` 白盒单测直接例化它。
+
+**结果**（孤立回放，taskset -c 2）：
+
+| 阶段 | 30k eval | 全程 eval | 全程 loop |
+|---|---|---|---|
+| §17 终版 | 1.970s | 20.53 / 20.51s | 22.05 / 22.03s |
+| + 本批四处拍平 | **1.504s（-23.7%）** | **15.50 / 15.23s（-25%）** | **16.99 / 16.74s** |
+
+累计对 491s 全量基线 **~32×**，对 RTL 差距 ~4.8× → **~3.4×**。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉（两侧各 0 失配）；proj ctest 17/17（总耗
+时 47.9s → 17.8s，提速本身亦印证）；wolvicmod cosim 30 组；proj cosim
+51 组；`REPLAY_AUDIT=1` 全程审计回放。
+
+**注**：本轮由 3 个并行子代理（CM 三件套 / DataCtrlEntry / BridgeCm）
++ 主代理（ReplaceEntry）完成；ReplaceEntry 的派发代理曾陷入工具调用死
+循环（769 次重复 grep、零编辑），被人工中止后由主代理接手——与任务
+本身无关。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：

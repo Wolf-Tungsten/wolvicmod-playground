@@ -1,8 +1,11 @@
 #pragma once
 
-// BridgeCm：两桥（SNodeAxiBridge / HiNodeAxiLiteBridge）共用的控制状态机，
-// 对齐 zhujiang/device/bridge/BaseCtrlMachine.scala + 各自的
-// *CtrlMachine.scala 与 package.scala（opvec/info/entry 类型参数 → Tr 转写）。
+// BridgeCm 拍平（docs/perf-breakdown.md §16/§17 同构模式）：RTL 层次的 CM
+// 子模块阵列在 C 模型里只是 for 循环——本头文件不再定义 Module，只承载两桥
+// （SNodeAxiBridge / HiNodeAxiLiteBridge）共享的 CM 值类型与 per-entry 算法。
+// 两个父桥各自持有 REG(std::array<CmSt<Tr>, kOutst>, cms) + 一条 update 循环
+// （循环体调 CmLogic<Tr>::cmNext）+ 数组 wire（循环体调 CmLogic<Tr> 的组合
+// 函数），两份实例化零重复逻辑。
 //
 // 每 CM 跟踪一笔 CHI 事务的双侧进度：
 //   u（ChiUpstreamOpVec，bridge/package.scala:12-49）：回环侧——ReadReceipt/
@@ -25,15 +28,11 @@
 
 #include "model/bridge/axi_flit.h"
 #include "model/flit/zj_flit.h"
-#include "wolvicmod/core/edge.h"
-#include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/valid.h"
 
 namespace zj::bridge {
 
 using namespace zj::chi;
-using wolvicmod::In;
-using wolvicmod::Out;
 using wolvicmod::prefab::Valid;
 
 // wakeup 广播载荷（Valid(addr)）
@@ -84,321 +83,215 @@ inline uint32_t maskGen(uint64_t addr, uint8_t size, uint32_t beatBytesLog2) {
     return ((1u << window) - 1) << shift;
 }
 
+// ---------------- 拍平后的共享 CM 状态与算法 ----------------
+
+// 一个 CM 的全部寄存器状态（原 BridgeCm<Tr>::st；字段默认值 = 原寄存器初值）
 template <class Tr>
-class BridgeCm : public wolvicmod::Module {
-public:
-    static constexpr uint32_t kOutst = Tr::kOutst;
-    using ReqT  = typename Tr::ReqT;
-    using Info  = typename Tr::Info;
-    using WkArr = std::array<WkV, kOutst>;
+struct CmSt {
+    using Info = typename Tr::Info;
 
-    struct St {
-        bool     valid   = false;  // RegInit(false.B)
-        uint32_t waiting = 0;
-        UState   u;
-        DState   d;
-        Info     info{};
-        bool     alloc_issued      = false;  // S：allocReqIssued
-        bool     buffer_allocated  = false;  // S：state.bufferAllocated
-        bool     wk_vld_reg        = false;  // RegNext(wakeupValid)
-        uint32_t wk_num_reg        = 0;      // RegEnable(PopCount, wakeupValid)
-        bool     wait_set_en       = false;  // RegNext(rx.req.fire)
+    bool     valid   = false;  // RegInit(false.B)
+    uint32_t waiting = 0;
+    UState   u;
+    DState   d;
+    Info     info{};
+    bool     alloc_issued      = false;  // S：allocReqIssued
+    bool     buffer_allocated  = false;  // S：state.bufferAllocated
+    bool     wk_vld_reg        = false;  // RegNext(wakeupValid)
+    uint32_t wk_num_reg        = 0;      // RegEnable(PopCount, wakeupValid)
+    bool     wait_set_en       = false;  // RegNext(rx.req.fire)
 
-        bool operator==(const St&) const = default;
-    };
-
-    struct InfoV {  // io.info（Valid(info)）
-        bool valid = false;
-        Info info{};
-
-        bool operator==(const InfoV&) const = default;
-    };
-
-    IN(bool, clk);
-    IN(uint32_t, idx);
-    // CHI 侧
-    IN(Valid<ReqT>, rx_req);
-    OUT(bool, rx_req_rdy);
-    IN(Valid<RespFlit>, rx_resp);  // 仅 HI 消费（CompAck）；S 桥顶 tie invalid
-    IN(Valid<DataFlit>, rx_data);  // rdy 恒 true（RTL 直连，不出口）
-    OUT(Valid<RespFlit>, tx_resp);
-    IN(bool, tx_resp_rdy);
-    // AXI 侧
-    OUT(Valid<axi::AWFlit>, axi_aw);
-    IN(bool, axi_aw_rdy);
-    OUT(Valid<axi::ARFlit>, axi_ar);
-    IN(bool, axi_ar_rdy);
-    OUT(Valid<axi::WFlit>, axi_w);
-    IN(bool, axi_w_rdy);
-    IN(Valid<axi::BFlit>, axi_b);  // rdy 恒 true
-    // 桥顶广播
-    IN(bool, rd_fire);  // io.readDataFire = axi.r.fire && id===idx
-    IN(bool, rd_last);
-    IN(uint32_t, wait_num);
-    IN(WkArr, wk_in);
-    OUT(WkV, wakeup_out);
-    OUT(InfoV, info_out);
-    // S：dataBufferAlloc（HI 不消费，CM 内 tie invalid）
-    OUT(Valid<AllocReqBits>, alloc_req);
-    IN(bool, alloc_req_rdy);
-    IN(bool, alloc_resp);
-
-    BridgeCm();
-
-    // ---- testbench 白盒：cosim harness 看门狗 dump ----
-    REG(St, st);
-
-private:
-    WIRE(bool, w_req_fire);
-    WIRE(bool, w_resp_fire);
-    WIRE(bool, w_aw_fire);
-    WIRE(bool, w_ar_fire);
-    WIRE(bool, w_w_fire);
-    WIRE(bool, w_alloc_fire);
-    WIRE(bool, w_wk_vld);     // wakeupValid（组合）
-    WIRE(bool, w_wk_out_v);   // io.wakeupOut.valid
-    WIRE(bool, w_allow_comp);
-    WIRE(bool, w_icn_receipt);
-    WIRE(bool, w_icn_dbid);
-    WIRE(bool, w_icn_comp);
-    WIRE(uint8_t, w_rsp_op);
+    bool operator==(const CmSt&) const = default;
 };
 
+// io.info（Valid(info)）
 template <class Tr>
-BridgeCm<Tr>::BridgeCm() {
-        rx_req_rdy.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            return !st.valid;
-        };
-        w_req_fire.assign().reads(rx_req, st) = [](auto src) {
-            auto [rx_req, st] = src;
-            return rx_req.valid && !st.valid;
-        };
+struct CmInfoV {
+    bool valid = false;
+    typename Tr::Info info{};
 
-        // ---- wakeup 侦测（BaseCtrlMachine.scala:68-71；剔除自身）----
-        w_wk_vld.assign().reads(wk_in, st, idx) = [](auto src) {
-            auto [wk_in, st, idx] = src;
-            if (!st.valid) return false;
-            for (uint32_t j = 0; j < kOutst; ++j)
-                if (j != idx && wk_in[j].valid && Tr::tagMatch(wk_in[j].addr, st.info.addr))
-                    return true;
-            return false;
-        };
-        w_wk_out_v.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            const bool wakeup =
-                Tr::kSn ? (st.d.wresp && st.d.rdata) : st.d.completed();
-            return wakeup && st.valid && st.info.isSnooped;
-        };
-        wakeup_out.assign().reads(st, w_wk_out_v) = [](auto src) {
-            auto [st, w_wk_out_v] = src;
-            WkV o;
-            o.valid = w_wk_out_v;
-            o.addr  = st.info.addr;
-            return o;
-        };
+    bool operator==(const CmInfoV&) const = default;
+};
 
-        // ---- 回环响应（BaseCtrlMachine.scala:120-151）----
-        w_allow_comp.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            if (!st.info.ewa) return st.d.completed();
-            return Tr::dwtOf(st.info) ? st.u.wdata : true;
-        };
-        w_icn_receipt.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            return !st.u.receiptResp;
-        };
-        w_icn_dbid.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            const bool base = Tr::kSn ? st.buffer_allocated : true;
-            return base && !st.u.dbidResp;
-        };
-        w_icn_comp.assign().reads(st, w_allow_comp) = [](auto src) {
-            auto [st, w_allow_comp] = src;
-            const bool base = Tr::kSn ? st.buffer_allocated : true;
-            return w_allow_comp && base && !st.u.comp;
-        };
-        // opcode 优先序：CompDBIDResp > ReadReceipt > DBIDResp > Comp
-        w_rsp_op.assign().reads(w_icn_receipt, w_icn_dbid, w_icn_comp) = [](auto src) -> uint8_t {
-            auto [w_icn_receipt, w_icn_dbid, w_icn_comp] = src;
-            if (w_icn_dbid && w_icn_comp) return rsp_op::kCompDBIDResp;
-            if (w_icn_receipt) return rsp_op::kReadReceipt;
-            if (w_icn_dbid) return rsp_op::kDBIDResp;
-            if (w_icn_comp) return rsp_op::kComp;
-            return 0;
-        };
-        tx_resp.assign().reads(st, idx, w_icn_receipt, w_icn_dbid, w_icn_comp, w_rsp_op) =
-            [](auto src) {
-                auto [st, idx, w_icn_receipt, w_icn_dbid, w_icn_comp, w_rsp_op] = src;
-                Valid<RespFlit> d;
-                d.valid = st.valid && (w_icn_receipt || w_icn_dbid || w_icn_comp);
-                auto& b = d.bits;
-                b.opcode  = w_rsp_op;
-                b.qos     = st.info.qos;
-                b.dbid    = uint16_t(idx);
-                const bool dwtRoute = w_icn_dbid && Tr::dwtOf(st.info);
-                b.txn_id  = dwtRoute ? Tr::returnTxnIdOf(st.info) : st.info.txn_id;
-                b.src_id  = 0;
-                b.tgt_id  = dwtRoute ? Tr::returnNidOf(st.info) : st.info.src_id;
-                b.resp    = 0;
-                return d;
-            };
-        w_resp_fire.assign().reads(tx_resp, tx_resp_rdy) = [](auto src) {
-            auto [tx_resp, tx_resp_rdy] = src;
-            return tx_resp.valid && tx_resp_rdy;
-        };
+// per-entry 组合/次态算法（原 BridgeCm 构造体内的 assign/update lambda 逐字
+// 转写为静态函数）。NBA/RegNext 语义由调用侧保证：一切判定读旧值 st。
+template <class Tr>
+struct CmLogic {
+    using ReqT  = typename Tr::ReqT;
+    using St    = CmSt<Tr>;
+    using InfoV = CmInfoV<Tr>;
+    static constexpr uint32_t kOutst = Tr::kOutst;
+    using WkArr = std::array<WkV, kOutst>;
 
-        // ---- AXI 发出（*CtrlMachine.scala；waiting==0 门控）----
-        axi_aw.assign().reads(st, idx) = [](auto src) {
-            auto [st, idx] = src;
-            Valid<axi::AWFlit> d;
-            d.valid = st.valid && !st.d.waddr && st.u.wdata && st.waiting == 0;
-            d.bits  = Tr::mkAx(st.info, idx);
-            return d;
-        };
-        axi_ar.assign().reads(st, idx) = [](auto src) {
-            auto [st, idx] = src;
-            Valid<axi::ARFlit> d;
-            d.valid = st.valid && !st.d.raddr && st.waiting == 0;
-            d.bits  = Tr::mkAx(st.info, idx);
-            return d;
-        };
-        axi_w.assign().reads(st, idx) = [](auto src) {
-            auto [st, idx] = src;
-            Valid<axi::WFlit> d;
-            d.valid = st.valid && st.d.waddr && !st.d.wdata && st.u.wdata &&
-                      st.waiting == 0;
-            d.bits  = Tr::mkW(st.info);
-            return d;
-        };
-        w_aw_fire.assign().reads(axi_aw, axi_aw_rdy) = [](auto src) {
-            auto [axi_aw, axi_aw_rdy] = src;
-            return axi_aw.valid && axi_aw_rdy;
-        };
-        w_ar_fire.assign().reads(axi_ar, axi_ar_rdy) = [](auto src) {
-            auto [axi_ar, axi_ar_rdy] = src;
-            return axi_ar.valid && axi_ar_rdy;
-        };
-        w_w_fire.assign().reads(axi_w, axi_w_rdy) = [](auto src) {
-            auto [axi_w, axi_w_rdy] = src;
-            return axi_w.valid && axi_w_rdy;
-        };
-
-        // ---- dataBufferAlloc（S）----
-        if constexpr (Tr::kSn) {
-            alloc_req.assign().reads(st, idx) = [](auto src) {
-                auto [st, idx] = src;
-                Valid<AllocReqBits> d;
-                d.valid = st.valid && !st.alloc_issued && !st.buffer_allocated &&
-                          st.waiting == 0;
-                d.bits.idx_oh         = uint64_t{1} << idx;
-                d.bits.qos            = st.info.qos;
-                d.bits.size           = st.info.size;
-                d.bits.data_id_offset = uint8_t((st.info.addr >> 5) & 1) << 1;  // dw=256
-                return d;
-            };
-            w_alloc_fire.assign().reads(alloc_req, alloc_req_rdy) = [](auto src) {
-                auto [alloc_req, alloc_req_rdy] = src;
-                return alloc_req.valid && alloc_req_rdy;
-            };
-        } else {
-            alloc_req   = Valid<AllocReqBits>{};
-            w_alloc_fire = false;
-        }
-
-        // ---- info_out / 完成判定 ----
-        info_out.assign().reads(st) = [](auto src) {
-            auto [st] = src;
-            InfoV o;
-            o.valid = st.valid;
-            o.info  = st.info;
-            return o;
-        };
-
-        // ---- 状态漏斗 ----
-        st.update().on(posedge(clk))
-            .reads(st, idx, rx_req, rx_resp, rx_data, axi_b, rd_fire, rd_last, wait_num,
-                   w_req_fire, w_resp_fire, w_aw_fire, w_ar_fire, w_w_fire, w_alloc_fire,
-                   w_wk_vld, w_wk_out_v, w_rsp_op, alloc_resp) = [](auto src) {
-                auto [st, idx, rx_req, rx_resp, rx_data, axi_b, rd_fire, rd_last, wait_num,
-                      w_req_fire, w_resp_fire, w_aw_fire, w_ar_fire, w_w_fire, w_alloc_fire,
-                      w_wk_vld, w_wk_out_v, w_rsp_op, alloc_resp] = src;
-                St next = st;
-                // valid（BaseCtrlMachine.scala:55）
-                const bool allDone = Tr::uCompleted(st.u) && st.d.completed();
-                next.valid       = st.valid ? !allDone : w_req_fire;
-                // waiting（:72-80）
-                if (w_req_fire)
-                    next.waiting = Tr::kAllOnes;
-                else if (st.wait_set_en)
-                    next.waiting = wait_num;
-                else if (st.wk_vld_reg) {
-                    // RTL 断言 wk_num_reg===1（同 tag 完成严格串行）
-                    next.waiting = st.waiting - 1;
-                }
-                next.wk_vld_reg  = w_wk_vld;
-                next.wait_set_en = w_req_fire;
-                // alloc_issued（S，AxiBridgeCtrlMachine.scala:51-55）
-                if (w_req_fire)
-                    next.alloc_issued = false;
-                else if (w_alloc_fire)
-                    next.alloc_issued = true;
-
-                if (w_req_fire) {
-                    // payloadEnqNext：u/d/info 整体覆盖（IcnIoDevRsEntryCommon.enq）
-                    Tr::enqEntry(rx_req.bits, next.u, next.d, next.info,
-                                 next.buffer_allocated);
-                } else if (st.valid) {
-                    // payloadMiscNext：事件累积
-                    if (alloc_resp) next.buffer_allocated = true;
-                    if (rd_fire) {  // u/d.rdata + readCnt（BaseCM:94-97 + 各 CM）
-                        next.u.rdata      = rd_last || st.u.rdata;
-                        next.d.rdata      = rd_last || st.d.rdata;
-                        next.info.readCnt = st.info.readCnt + 1;
-                    }
-                    if constexpr (!Tr::kSn) {  // HI：rx.resp（CompAck）
-                        if (rx_resp.valid)
-                            next.u.compAck =
-                                (rx_resp.bits.opcode == rsp_op::kCompAck) || st.u.compAck;
-                    }
-                    if (rx_data.valid) {
-                        if constexpr (!Tr::kSn) {  // HI：64b 数据/掩码抽取（BaseCM:106-113）
-                            Tr::extractData(st.info.addr, rx_data.bits, next.info);
-                        }
-                        const uint8_t op = rx_data.bits.opcode;
-                        next.u.wdata = (op == dat_op::kNCBWrDataCompAck ||
-                                        op == dat_op::kNonCopyBackWriteData ||
-                                        op == dat_op::kWriteDataCancel) ||
-                                       st.u.wdata;
-                        if constexpr (!Tr::kSn) {
-                            next.u.compAck = (op == dat_op::kNCBWrDataCompAck ||
-                                              op == dat_op::kWriteDataCancel) ||
-                                             st.u.compAck;
-                        } else {  // S：WriteDataCancel 直接补齐下游（AxiBridgeCM:110-114）
-                            if (op == dat_op::kWriteDataCancel) {
-                                next.d.waddr = true;
-                                next.d.wdata = true;
-                                next.d.wresp = true;
-                            }
-                        }
-                    }
-                    if (axi_b.valid) next.d.wresp = true;
-                    if (w_aw_fire) next.d.waddr = true;
-                    if (w_ar_fire) next.d.raddr = true;
-                    if (w_w_fire) next.d.wdata = true;
-                    if (w_resp_fire) {  // BaseCtrlMachine.scala:147-151
-                        next.u.receiptResp = (w_rsp_op == rsp_op::kReadReceipt) || st.u.receiptResp;
-                        next.u.dbidResp    = (w_rsp_op == rsp_op::kDBIDResp ||
-                                              w_rsp_op == rsp_op::kCompDBIDResp) ||
-                                             st.u.dbidResp;
-                        next.u.comp        = (w_rsp_op == rsp_op::kComp ||
-                                              w_rsp_op == rsp_op::kCompDBIDResp) ||
-                                             st.u.comp;
-                    }
-                    if (w_wk_out_v) next.info.isSnooped = false;
-                }
-                return next;
-            };
+    // ---- wakeup 侦测（BaseCtrlMachine.scala:68-71；剔除自身）----
+    static bool cmWakeupVld(const St& st, uint32_t idx, const WkArr& wk_in) {
+        if (!st.valid) return false;
+        for (uint32_t j = 0; j < kOutst; ++j)
+            if (j != idx && wk_in[j].valid && Tr::tagMatch(wk_in[j].addr, st.info.addr))
+                return true;
+        return false;
     }
+    // wakeupOut.valid（组合）
+    static bool cmWakeupOutVld(const St& st) {
+        const bool wakeup =
+            Tr::kSn ? (st.d.wresp && st.d.rdata) : st.d.completed();
+        return wakeup && st.valid && st.info.isSnooped;
+    }
+    static WkV cmWakeupOut(const St& st) {
+        WkV o;
+        o.valid = cmWakeupOutVld(st);
+        o.addr  = st.info.addr;
+        return o;
+    }
+
+    // ---- 回环响应（BaseCtrlMachine.scala:120-151）----
+    // opcode 优先序：CompDBIDResp > ReadReceipt > DBIDResp > Comp
+    static uint8_t cmRspOp(const St& st, bool& icnReceipt, bool& icnDbid, bool& icnComp) {
+        const bool allowComp =
+            st.info.ewa ? (Tr::dwtOf(st.info) ? st.u.wdata : true) : st.d.completed();
+        const bool base = Tr::kSn ? st.buffer_allocated : true;
+        icnReceipt = !st.u.receiptResp;
+        icnDbid    = base && !st.u.dbidResp;
+        icnComp    = allowComp && base && !st.u.comp;
+        if (icnDbid && icnComp) return rsp_op::kCompDBIDResp;
+        if (icnReceipt) return rsp_op::kReadReceipt;
+        if (icnDbid) return rsp_op::kDBIDResp;
+        if (icnComp) return rsp_op::kComp;
+        return 0;
+    }
+    static Valid<RespFlit> cmTxResp(const St& st, uint32_t idx) {
+        bool icnReceipt, icnDbid, icnComp;
+        const uint8_t op = cmRspOp(st, icnReceipt, icnDbid, icnComp);
+        Valid<RespFlit> d;
+        d.valid = st.valid && (icnReceipt || icnDbid || icnComp);
+        auto& b = d.bits;
+        b.opcode  = op;
+        b.qos     = st.info.qos;
+        b.dbid    = uint16_t(idx);
+        const bool dwtRoute = icnDbid && Tr::dwtOf(st.info);
+        b.txn_id  = dwtRoute ? Tr::returnTxnIdOf(st.info) : st.info.txn_id;
+        b.src_id  = 0;
+        b.tgt_id  = dwtRoute ? Tr::returnNidOf(st.info) : st.info.src_id;
+        b.resp    = 0;
+        return d;
+    }
+
+    // ---- AXI 发出（*CtrlMachine.scala；waiting==0 门控）----
+    static Valid<axi::AxFlit> cmAxiAw(const St& st, uint32_t idx) {
+        return Valid<axi::AxFlit>{
+            st.valid && !st.d.waddr && st.u.wdata && st.waiting == 0,
+            Tr::mkAx(st.info, idx)};
+    }
+    static Valid<axi::AxFlit> cmAxiAr(const St& st, uint32_t idx) {
+        return Valid<axi::AxFlit>{st.valid && !st.d.raddr && st.waiting == 0,
+                                  Tr::mkAx(st.info, idx)};
+    }
+    static Valid<axi::WFlit> cmAxiW(const St& st) {
+        return Valid<axi::WFlit>{st.valid && st.d.waddr && !st.d.wdata && st.u.wdata &&
+                                     st.waiting == 0,
+                                 Tr::mkW(st.info)};
+    }
+
+    // ---- dataBufferAlloc（S；HI 恒 invalid，父桥不消费）----
+    static Valid<AllocReqBits> cmAllocReq(const St& st, uint32_t idx) {
+        Valid<AllocReqBits> d;
+        if constexpr (Tr::kSn) {
+            d.valid = st.valid && !st.alloc_issued && !st.buffer_allocated &&
+                      st.waiting == 0;
+            d.bits.idx_oh         = uint64_t{1} << idx;
+            d.bits.qos            = st.info.qos;
+            d.bits.size           = st.info.size;
+            d.bits.data_id_offset = uint8_t((st.info.addr >> 5) & 1) << 1;  // dw=256
+        }
+        return d;
+    }
+
+    // ---- info_out ----
+    static InfoV cmInfoOut(const St& st) { return InfoV{st.valid, st.info}; }
+
+    // ---- 状态漏斗（原 st.update lambda；next 初值 = st）----
+    static St cmNext(const St& st, uint32_t idx, bool reqFire, const ReqT& reqBits,
+                     const Valid<RespFlit>& rxResp, const Valid<DataFlit>& rxData,
+                     const Valid<axi::BFlit>& axiB, bool rdFire, bool rdLast,
+                     uint32_t waitNum, const WkArr& wkIn, bool respFire, bool awFire,
+                     bool arFire, bool wFire, bool allocFire, bool allocResp) {
+        St next = st;
+        // valid（BaseCtrlMachine.scala:55）
+        const bool allDone = Tr::uCompleted(st.u) && st.d.completed();
+        next.valid       = st.valid ? !allDone : reqFire;
+        // waiting（:72-80）
+        if (reqFire)
+            next.waiting = Tr::kAllOnes;
+        else if (st.wait_set_en)
+            next.waiting = waitNum;
+        else if (st.wk_vld_reg) {
+            // RTL 断言 wk_num_reg===1（同 tag 完成严格串行）
+            next.waiting = st.waiting - 1;
+        }
+        next.wk_vld_reg  = cmWakeupVld(st, idx, wkIn);
+        next.wait_set_en = reqFire;
+        // alloc_issued（S，AxiBridgeCtrlMachine.scala:51-55）
+        if (reqFire)
+            next.alloc_issued = false;
+        else if (allocFire)
+            next.alloc_issued = true;
+
+        if (reqFire) {
+            // payloadEnqNext：u/d/info 整体覆盖（IcnIoDevRsEntryCommon.enq）
+            Tr::enqEntry(reqBits, next.u, next.d, next.info, next.buffer_allocated);
+        } else if (st.valid) {
+            // payloadMiscNext：事件累积
+            if (allocResp) next.buffer_allocated = true;
+            if (rdFire) {  // u/d.rdata + readCnt（BaseCM:94-97 + 各 CM）
+                next.u.rdata      = rdLast || st.u.rdata;
+                next.d.rdata      = rdLast || st.d.rdata;
+                next.info.readCnt = st.info.readCnt + 1;
+            }
+            if constexpr (!Tr::kSn) {  // HI：rx.resp（CompAck）
+                if (rxResp.valid)
+                    next.u.compAck =
+                        (rxResp.bits.opcode == rsp_op::kCompAck) || st.u.compAck;
+            }
+            if (rxData.valid) {
+                if constexpr (!Tr::kSn) {  // HI：64b 数据/掩码抽取（BaseCM:106-113）
+                    Tr::extractData(st.info.addr, rxData.bits, next.info);
+                }
+                const uint8_t op = rxData.bits.opcode;
+                next.u.wdata = (op == dat_op::kNCBWrDataCompAck ||
+                                op == dat_op::kNonCopyBackWriteData ||
+                                op == dat_op::kWriteDataCancel) ||
+                               st.u.wdata;
+                if constexpr (!Tr::kSn) {
+                    next.u.compAck = (op == dat_op::kNCBWrDataCompAck ||
+                                      op == dat_op::kWriteDataCancel) ||
+                                     st.u.compAck;
+                } else {  // S：WriteDataCancel 直接补齐下游（AxiBridgeCM:110-114）
+                    if (op == dat_op::kWriteDataCancel) {
+                        next.d.waddr = true;
+                        next.d.wdata = true;
+                        next.d.wresp = true;
+                    }
+                }
+            }
+            if (axiB.valid) next.d.wresp = true;
+            if (awFire) next.d.waddr = true;
+            if (arFire) next.d.raddr = true;
+            if (wFire) next.d.wdata = true;
+            if (respFire) {  // BaseCtrlMachine.scala:147-151
+                bool icnReceipt, icnDbid, icnComp;
+                const uint8_t rspOp = cmRspOp(st, icnReceipt, icnDbid, icnComp);
+                next.u.receiptResp = (rspOp == rsp_op::kReadReceipt) || st.u.receiptResp;
+                next.u.dbidResp    = (rspOp == rsp_op::kDBIDResp ||
+                                      rspOp == rsp_op::kCompDBIDResp) ||
+                                     st.u.dbidResp;
+                next.u.comp        = (rspOp == rsp_op::kComp ||
+                                      rspOp == rsp_op::kCompDBIDResp) ||
+                                     st.u.comp;
+            }
+            if (cmWakeupOutVld(st)) next.info.isSnooped = false;
+        }
+        return next;
+    }
+};
 
 }  // namespace zj::bridge

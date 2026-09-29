@@ -7,7 +7,8 @@
 //
 // 结构（AxiBridge.scala:35-148）：
 //   rx_req（HReqFlit，ERQ）→ PickOneLow 选最低空闲 CM 入队；
-//   64×BridgeCm<CmST>：tx_resp 经 ConditionVipArbiter(qos>=) 合流；
+//   64 项 CM 状态阵列（BridgeCm 已拍平为共享算法 CmLogic<CmST>，见
+//   bridge_cm.h）：tx_resp 经 ConditionVipArbiter(qos>=) 合流；
 //   aw/ar 各经 ConditionVipArbiter 合流；awQueue(64) 记录 aw 授权序 →
 //   W 数据按序从 AxiDataBuffer 读出（AXI3 无 WID，W 必须按 AW 序）；
 //   alloc 经 DataBufferAllocReqSelector（= CondVipArb + Queue(2)，
@@ -26,7 +27,6 @@
 #include "model/bridge/bridge_cm.h"
 #include "model/flit/zj_flit.h"
 #include "prefab/xsarb.h"
-#include "wolvicmod/core/collect.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
 #include "wolvicmod/prefab/valid.h"
@@ -140,8 +140,7 @@ struct CmST {
 class SNodeAxiBridge : public wolvicmod::Module {
 public:
     static constexpr uint32_t kOutst = CmST::kOutst;
-    using Cm    = BridgeCm<CmST>;
-    using InfoV = typename Cm::InfoV;
+    using InfoV = CmInfoV<CmST>;
 
     IN(bool, clk);
     // ---- 环侧（DeviceIcnBundle S：rx=弹出输入、tx=注入输出）----
@@ -176,7 +175,11 @@ public:
     MOD(AxArbT, ar_arb);
     MOD(AwQ, aw_q);  // UInt(64.W) 一位热
     MOD(AxiDataBuffer, data_buf);
-    MOD_ARRAY(Cm, kOutst, cms);
+    // 拍平后的 CM 状态阵列（原 MOD_ARRAY(Cm) 的 cms[i].st）与 per-entry ar 探针
+    using CmStArr = std::array<CmSt<CmST>, kOutst>;  // 宏参数含逗号，先取别名
+    using AxArr   = std::array<Valid<axi::AxFlit>, kOutst>;
+    REG(CmStArr, cms);
+    WIRE(AxArr, ar_in);
 
 private:
     using AllocArbT = CondVipArb<AllocReqBits, kOutst>;
@@ -190,19 +193,33 @@ private:
     using WkArr   = std::array<WkV, kOutst>;
     using InfoArr = std::array<InfoV, kOutst>;
     using RspArr  = std::array<Valid<RespFlit>, kOutst>;
-    using AxArr   = std::array<Valid<axi::AxFlit>, kOutst>;
     using AllocArr = std::array<Valid<AllocReqBits>, kOutst>;
     using WArr    = std::array<Valid<axi::WFlit>, kOutst>;
+    using ReqArr  = std::array<Valid<HReqFlit>, kOutst>;
+    using BArr    = std::array<Valid<axi::BFlit>, kOutst>;
+    using DatArr  = std::array<Valid<DataFlit>, kOutst>;
 
     REG(BoolArr, tag_match);  // reqTagMatchVecReg
 
+    // CM 阵列（拍平）组合输出数组
     WIRE(WkArr, wk_all);
     WIRE(InfoArr, info_all);
     WIRE(RspArr, rsp_in);
     WIRE(AxArr, aw_in);
-    WIRE(AxArr, ar_in);
     WIRE(AllocArr, alloc_in);
     WIRE(WArr, w_all);
+    // per-entry 输入分发 / fire（原 CM 端口连接的数组化）
+    WIRE(ReqArr, w_cm_req);          // rx_req × PickOneLow
+    WIRE(DatArr, w_cm_rx_data);      // data_buf.to_cm 按 txn_id 分发
+    WIRE(BArr, w_cm_b);              // axi_b 按 id 分发
+    WIRE(BoolArr, w_cm_rd_fire);     // io.readDataFire
+    WIRE(BoolArr, w_cm_rd_last);
+    WIRE(BoolArr, w_cm_alloc_resp);  // dataBufferAlloc 响应按 idxOH 分发
+    WIRE(BoolArr, w_rsp_fire);
+    WIRE(BoolArr, w_aw_fire);
+    WIRE(BoolArr, w_ar_fire);
+    WIRE(BoolArr, w_w_fire);
+    WIRE(BoolArr, w_alloc_fire);
     WIRE(BoolArr, free_lo);       // PickOneLow 一位热
     WIRE(BoolArr, tag_match_c);   // reqTagMatchVec（组合）
     WIRE(bool, w_any_free);

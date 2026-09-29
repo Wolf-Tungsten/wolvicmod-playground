@@ -310,7 +310,7 @@ uint64_t cosimDb(uint32_t seed, uint64_t cycles) {
 
         if (c == dumpAt()) {
             for (uint32_t i = 0; i < kNrDataCM; ++i) {
-                const auto st = dut.data_cm.entries[i].state.get();
+                const auto st = dut.data_cm.w_states.get()[i];
                 if (st.valid)
                     std::cout << "  [dump] dcid=" << i << " txn=0x" << std::hex
                               << (uint32_t)st.bits.hnTxnID << " dv=" << (uint32_t)st.bits.dataVec

@@ -5,8 +5,8 @@
 //   DBIDPool      — 双 FastQueue(64) dbid 池（预充/长短平衡）
 //   DBIDCtrl      — dbid 分配/释放组合逻辑
 //   DataBuffer    — datBuf(DpSram 字节阵列) + mask/repl 跟踪 + toCHIQ/toDSQ
-//   DataCtrlEntry — 八态控制 FSM（×64）
-//   DataCM        — entry 阵列 + 仲裁（repl 捆绑 / critical / QoS-RR）
+//   DataCM        — 八态控制 FSM ×64（拍平：REG 数组 + 一条 update）+
+//                   仲裁（repl 捆绑 / critical / QoS-RR）
 //   DataBlock     — 顶层组装（txDat 二选一、DS 交叉分发）
 
 #include <array>
@@ -198,65 +198,18 @@ public:
     DataBuffer();
 };
 
-// ---------------- DataCtrlEntry ----------------
+// ---------------- DataCM 表项状态 ----------------
 
 namespace ctrl {
 constexpr uint8_t kFree = 0, kAlloc = 1, kRepl = 2, kRead = 3, kSend = 4, kSave = 5,
                   kResp = 6, kClean = 7;
 }  // namespace ctrl
 
-class DataCtrlEntry : public wolvicmod::Module {
-public:
-    struct EntryReg {
-        uint8_t state = ctrl::kFree;
-        bool critical = false;
-        uint8_t s_read = 0, s_send = 0, s_save = 0;  // 待发 beat 位图（2bit）
-        uint8_t w_read = 0, w_send = 0, w_save = 0;  // 待完成 beat 位图
-        DataTask task;
-        uint8_t dataVec = 0;
-        std::array<uint8_t, kNrBeat> dbidVec{};
-
-        bool operator==(const EntryReg&) const = default;
-    };
-
-    IN(bool, clk);
-    IN(uint8_t, dcid);
-    IN(Valid<UpdHnTxnID>, upd_hn_txn_id);
-    IN(Valid<AllocBits>, alloc);
-    OUT(bool, alloc_rdy);
-    IN(Valid<DataTask>, task);
-    OUT(Valid<uint8_t>, resp);  // HnTxnID
-    IN(bool, resp_rdy);
-    IN(Valid<CleanBits>, clean);
-    OUT(bool, read_for_repl);
-    OUT(Valid<ReadDS>, read_to_db);
-    IN(bool, read_to_db_rdy);
-    OUT(Valid<ReadDB>, read_to_ds);
-    IN(bool, read_to_ds_rdy);
-    OUT(Valid<ReadDB>, read_to_chi);
-    IN(bool, read_to_chi_rdy);
-    OUT(Valid<DBIDVecC>, release);
-    IN(bool, release_rdy);
-    IN(Valid<DcidBeat>, ds_wri_db);
-    IN(Valid<DcidBeat>, tx_dat_fire);
-    IN(Valid<DcidBeat>, db_wri_ds);
-    OUT(DataFlit, tx_dat_bits);  // 组合直出（无 valid）
-    OUT(Valid<EntryState>, state);
-
-    REG(EntryReg, reg);
-    WIRE(EntryReg, w_next);
-    WIRE(bool, w_set);
-
-    DataCtrlEntry();
-
-    // HasCtrlMes 派生（静态，供 DataCM 仲裁读取 reg 快照）
-    static bool isFree(const EntryReg& r) { return r.state == ctrl::kFree; }
-    static bool isRepl(const EntryReg& r) {
-        return r.state == ctrl::kRepl && r.s_read != 0 && r.s_save != 0;
-    }
-};
-
 // ---------------- DataCM ----------------
+// 拍平建模：RTL 的 DataCtrlEntry 子模块阵列（×64）在 C 模型里只是 for 循环，
+// 不再做子模块。64 项控制状态是一个 REG 数组（一条 update 循环算全数组 next）；
+// per-entry 组合输出为 std::array 值的单条 assign 直喂仲裁器；resp/release/三读
+// 通道仲裁器（VipArb）保留为子模块。对外端口与原层次版逐位等价。
 
 class DataCM : public wolvicmod::Module {
 public:
@@ -291,7 +244,19 @@ public:
     IN(Valid<DcidBeat>, tx_dat_fire);
     IN(Valid<DcidBeat>, db_wri_ds);
 
-    MOD_ARRAY(DataCtrlEntry, kNrDataCM, entries);
+    struct DataCtrlV {  // 一个 DataCtrlEntry 的全部寄存器状态（原 EntryReg）
+        uint8_t state = ctrl::kFree;
+        bool critical = false;
+        uint8_t s_read = 0, s_send = 0, s_save = 0;  // 待发 beat 位图（2bit）
+        uint8_t w_read = 0, w_send = 0, w_save = 0;  // 待完成 beat 位图
+        DataTask task;
+        uint8_t dataVec = 0;
+        std::array<uint8_t, kNrBeat> dbidVec{};
+
+        bool operator==(const DataCtrlV&) const = default;
+    };
+    using CtrlArr = std::array<DataCtrlV, kNrDataCM>;
+    REG(CtrlArr, entries);
 
     REG(bool, task_fire_reg);
     REG(DataTask, task_reg);
@@ -311,7 +276,7 @@ public:
     MOD(ChiArbT, chi_hi_arb);
     MOD(ChiArbT, chi_lo_arb);
 
-    // 端口阵列汇集线（条目输出 → 仲裁输入）
+    // 端口阵列汇集线（条目派生输出 → 仲裁输入；拍平后为单条数组 assign）
     using RespInArr = std::array<Valid<uint8_t>, kNrDataCM>;
     using RelInArr = std::array<Valid<DBIDVecC>, kNrDataCM>;
     using DbInArr = std::array<Valid<ReadDS>, kNrDataCM>;
@@ -328,6 +293,10 @@ public:
     WIRE(RdyArr64, w_read_for_repl_all);
     WIRE(TxBitsArr, w_tx_dat_bits);
     WIRE(StateArr, w_states);
+    // 条目 read 通道 rdy 回接（原 entries[i].read_to_*_rdy 输入）
+    WIRE(RdyArr64, w_db_rdys);
+    WIRE(RdyArr64, w_ds_rdys);
+    WIRE(RdyArr64, w_chi_rdys);
     // 仲裁结果与选择
     WIRE(bool, w_has_repl);
     WIRE(uint8_t, w_repl_dcid);

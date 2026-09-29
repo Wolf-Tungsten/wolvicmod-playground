@@ -17,246 +17,13 @@ constexpr uint8_t popcount2(uint8_t v) {
     return static_cast<uint8_t>((v & 1u) + ((v >> 1) & 1u));
 }
 
-}  // namespace
-
-// ---------------- DataCtrlEntry ----------------
-
-DataCtrlEntry::DataCtrlEntry() {
-    // ---- 状态查询（组合） ----
-    alloc_rdy.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return isFree(reg);
-    };
-    read_for_repl.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return isRepl(reg);
-    };
-    state.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        EntryState s;
-        s.hnTxnID = reg.task.hnTxnID;
-        s.dataVec = reg.dataVec;
-        s.dbidVec = reg.dbidVec;
-        return Valid<EntryState>{!isFree(reg), s};
-    };
-    tx_dat_bits.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return reg.task.txDat;
-    };
-
-    // ---- 输出通道 ----
-    read_to_db.assign().reads(reg, dcid) = [](auto src) {
-        auto [reg, dcid] = src;
-        const bool valid = isRepl(reg) || (reg.state == ctrl::kRead && reg.s_read != 0);
-        ReadDS r;
-        r.ds = reg.task.ds;
-        r.dcid = dcid;
-        const uint8_t beat = pe(reg.s_read);
-        r.dbid = reg.dbidVec[beat];
-        r.beatNum = beat;
-        r.qos = reg.task.qos;
-        r.critical = reg.critical;
-        r.toCHI = (reg.task.dataOp.repl || reg.task.dataOp.send) && !reg.task.dataOp.merge;
-        return Valid<ReadDS>{valid, r};
-    };
-    read_to_ds.assign().reads(reg, dcid) = [](auto src) {
-        auto [reg, dcid] = src;
-        const bool valid = isRepl(reg) || (reg.state == ctrl::kSave && reg.s_save != 0);
-        ReadDB r;
-        r.ds = reg.task.ds;
-        r.dcid = dcid;
-        const uint8_t beat = pe(reg.s_save);
-        r.dbid = reg.dbidVec[beat];
-        r.beatNum = beat;
-        r.qos = reg.task.qos;
-        r.critical = reg.critical;
-        r.repl = isRepl(reg);
-        return Valid<ReadDB>{valid, r};
-    };
-    read_to_chi.assign().reads(reg, dcid) = [](auto src) {
-        auto [reg, dcid] = src;
-        const bool valid = reg.state == ctrl::kSend && reg.s_send != 0;
-        ReadDB r;
-        r.dcid = dcid;
-        const uint8_t beat = pe(reg.s_send);
-        r.dbid = reg.dbidVec[beat];
-        r.beatNum = beat;
-        r.qos = reg.task.qos;
-        r.critical = reg.critical;
-        r.repl = false;
-        return Valid<ReadDB>{valid, r};
-    };
-    release.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        DBIDVecC r;
-        r.dataVec = reg.dataVec & reg.task.dataVec;
-        r.dbidVec = reg.dbidVec;
-        return Valid<DBIDVecC>{reg.state == ctrl::kClean, r};
-    };
-    resp.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return Valid<uint8_t>{reg.state == ctrl::kResp, reg.task.hnTxnID};
-    };
-
-    // ---- 次态（单一大组合，与 RTL 的 when/elsewhen 链同构） ----
-    w_next.assign().reads(reg, dcid, alloc, task, clean, upd_hn_txn_id, ds_wri_db, tx_dat_fire,
-                          db_wri_ds, read_to_db_rdy, read_to_ds_rdy, read_to_chi_rdy,
-                          release_rdy, resp_rdy) = [](auto src) {
-        auto [reg, dcid, alloc, task, clean, upd_hn_txn_id, ds_wri_db, tx_dat_fire, db_wri_ds,
-              read_to_db_rdy, read_to_ds_rdy, read_to_chi_rdy, release_rdy, resp_rdy] = src;
-        EntryReg next = reg;
-        const bool isValid = reg.state != ctrl::kFree;
-        const bool allocFire = alloc.valid && isFree(reg);
-        const bool taskHit = isValid && task.valid && task.bits.hnTxnID == reg.task.hnTxnID;
-        const bool cleanHit = isValid && clean.valid && clean.bits.hnTxnID == reg.task.hnTxnID;
-        const bool updHit =
-            isValid && upd_hn_txn_id.valid && upd_hn_txn_id.bits.before == reg.task.hnTxnID;
-        const bool dsWriDBHit = isValid && ds_wri_db.valid && ds_wri_db.bits.dcid == dcid;
-        const bool txDatHit = isValid && tx_dat_fire.valid && tx_dat_fire.bits.dcid == dcid;
-        const bool dbWriDSHit = isValid && db_wri_ds.valid && db_wri_ds.bits.dcid == dcid;
-        // 通道 fire（valid 由 reg 派生，与输出 assign 一致）
-        const bool dbValid = isRepl(reg) || (reg.state == ctrl::kRead && reg.s_read != 0);
-        const bool dsValid = isRepl(reg) || (reg.state == ctrl::kSave && reg.s_save != 0);
-        const bool chiValid = reg.state == ctrl::kSend && reg.s_send != 0;
-        const bool dbFire = dbValid && read_to_db_rdy;
-        const bool dsFire = dsValid && read_to_ds_rdy;
-        const bool chiFire = chiValid && read_to_chi_rdy;
-        const bool relFire = reg.state == ctrl::kClean && release_rdy;
-        const bool respFire = reg.state == ctrl::kResp && resp_rdy;
-
-        if (taskHit) next.task = task.bits;
-
-        // dataVec
-        if (allocFire) {
-            next.dataVec = alloc.bits.dataVec;
-        } else if (cleanHit) {
-            next.task.dataVec = clean.bits.dataVec;
-        } else if (relFire) {
-            next.dataVec = reg.dataVec & ~(reg.dataVec & reg.task.dataVec);
-        }
-
-        // 三通道位图（setNextXXV）
-        const uint8_t dbBeat = pe(reg.s_read);
-        const uint8_t dsBeat = pe(reg.s_save);
-        const uint8_t chiBeat = pe(reg.s_send);
-        const uint8_t tdv = task.bits.dataVec;
-        if (allocFire) {
-            next.s_read = 0;
-            next.w_read = 0;
-        } else if (taskHit && task.bits.dataOp.readToDB()) {
-            next.s_read = tdv;
-            next.w_read = tdv;
-        } else {
-            next.s_read = dbFire ? (dsWriDBHit ? reg.s_read & ~((1u << dbBeat) |
-                                                               (1u << ds_wri_db.bits.beatNum))
-                                               : reg.s_read & ~(1u << dbBeat))
-                                 : (dsWriDBHit ? reg.s_read & ~(1u << ds_wri_db.bits.beatNum)
-                                               : reg.s_read);
-            if (dsWriDBHit) next.w_read = reg.w_read & ~(1u << ds_wri_db.bits.beatNum);
-        }
-        if (allocFire) {
-            next.s_send = 0;
-            next.w_send = 0;
-        } else if (taskHit && task.bits.dataOp.readToCHI()) {
-            next.s_send = tdv;
-            next.w_send = tdv;
-        } else {
-            next.s_send = chiFire ? (txDatHit ? reg.s_send & ~((1u << chiBeat) |
-                                                               (1u << tx_dat_fire.bits.beatNum))
-                                              : reg.s_send & ~(1u << chiBeat))
-                                  : (txDatHit ? reg.s_send & ~(1u << tx_dat_fire.bits.beatNum)
-                                              : reg.s_send);
-            if (txDatHit) next.w_send = reg.w_send & ~(1u << tx_dat_fire.bits.beatNum);
-        }
-        if (allocFire) {
-            next.s_save = 0;
-            next.w_save = 0;
-        } else if (taskHit && task.bits.dataOp.readToDS()) {
-            next.s_save = tdv;
-            next.w_save = tdv;
-        } else {
-            next.s_save = dsFire ? (dbWriDSHit ? reg.s_save & ~((1u << dsBeat) |
-                                                                (1u << db_wri_ds.bits.beatNum))
-                                               : reg.s_save & ~(1u << dsBeat))
-                                 : (dbWriDSHit ? reg.s_save & ~(1u << db_wri_ds.bits.beatNum)
-                                               : reg.s_save);
-            if (dbWriDSHit) next.w_save = reg.w_save & ~(1u << db_wri_ds.bits.beatNum);
-        }
-
-        // critical
-        if (allocFire || taskHit) {
-            next.critical = false;
-        } else if (dbFire) {
-            next.critical = popcount2(reg.s_read) > 1;
-        } else if (chiFire) {
-            next.critical = popcount2(reg.s_send) > 1;
-        } else if (dsFire) {
-            next.critical = popcount2(reg.s_save) > 1;
-        }
-
-        // hnTxnID
-        if (allocFire) {
-            next.task.hnTxnID = alloc.bits.hnTxnID;
-        } else if (updHit) {
-            next.task.hnTxnID = upd_hn_txn_id.bits.next;
-        }
-
-        // dbidVec
-        if (allocFire) next.dbidVec = alloc.bits.dbidVec;
-
-        // 状态机（用 next.* 位图判断）
-        const bool nReadAll = next.w_read == 0;
-        const bool nSendAll = next.w_send == 0;
-        const bool nSaveAll = next.w_save == 0;
-        switch (reg.state) {
-            case ctrl::kFree:
-                if (allocFire) next.state = ctrl::kAlloc;
-                break;
-            case ctrl::kAlloc:
-                if (taskHit) {
-                    next.state = task.bits.dataOp.repl  ? ctrl::kRepl
-                                 : task.bits.dataOp.read ? ctrl::kRead
-                                 : task.bits.dataOp.send ? ctrl::kSend
-                                                         : ctrl::kSave;
-                } else if (cleanHit) {
-                    next.state = ctrl::kClean;
-                }
-                break;
-            case ctrl::kRepl:
-                if (nReadAll && nSaveAll) next.state = nSendAll ? ctrl::kResp : ctrl::kSend;
-                break;
-            case ctrl::kRead:
-                if (nReadAll)
-                    next.state = (reg.task.dataOp.send && !nSendAll)  ? ctrl::kSend
-                                 : (reg.task.dataOp.save && !nSaveAll) ? ctrl::kSave
-                                                                       : ctrl::kResp;
-                break;
-            case ctrl::kSend:
-                if (nSendAll)
-                    next.state = (reg.task.dataOp.save && !nSaveAll) ? ctrl::kSave : ctrl::kResp;
-                break;
-            case ctrl::kSave:
-                if (nSaveAll) next.state = ctrl::kResp;
-                break;
-            case ctrl::kResp:
-                if (respFire) next.state = ctrl::kAlloc;
-                break;
-            case ctrl::kClean:
-                if (relFire) next.state = next.dataVec == 0 ? ctrl::kFree : ctrl::kAlloc;
-                break;
-            default: break;
-        }
-        return next;
-    };
-    w_set.assign().reads(reg, alloc) = [](auto src) {
-        auto [reg, alloc] = src;
-        return (alloc.valid && isFree(reg)) || !isFree(reg);
-    };
-    reg.update().on(posedge(clk)).reads(reg, w_next, w_set) = [](auto src) {
-        auto [reg, w_next, w_set] = src;
-        return w_set ? w_next : reg;
-    };
+// HasCtrlMes 派生查询（原 DataCtrlEntry 静态方法）
+inline bool dcIsFree(const DataCM::DataCtrlV& r) { return r.state == ctrl::kFree; }
+inline bool dcIsRepl(const DataCM::DataCtrlV& r) {
+    return r.state == ctrl::kRepl && r.s_read != 0 && r.s_save != 0;
 }
+
+}  // namespace
 
 // ---------------- DataCM ----------------
 
@@ -270,19 +37,6 @@ DataCM::DataCM() {
     chi_hi_arb.clk = clk;
     chi_lo_arb.clk = clk;
 
-    for (uint32_t i = 0; i < kNrDataCM; ++i) {
-        entries[i].clk = clk;
-        entries[i].dcid = static_cast<uint8_t>(i);
-        entries[i].upd_hn_txn_id = upd_hn_txn_id;
-        entries[i].clean = clean;
-        entries[i].ds_wri_db = ds_wri_db;
-        entries[i].tx_dat_fire = tx_dat_fire;
-        entries[i].db_wri_ds = db_wri_ds;
-        entries[i].task.assign().reads(task_fire_reg, task_reg) = [](auto src) {
-            auto [task_fire_reg, task_reg] = src;
-            return Valid<DataTask>{task_fire_reg, task_reg};
-        };
-    }
     task_fire_reg.update().on(posedge(clk)).reads(task) = [](auto src) {
         auto [task] = src;
         return task.valid;
@@ -292,27 +46,111 @@ DataCM::DataCM() {
         return task.valid ? task.bits : task_reg;
     };
 
-    // ---- 条目端口汇集（combine：实体 → 值数组） ----
-    combine(w_alloc_rdy_all, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
-    combine(w_read_for_repl_all, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<bool>& { return e.read_for_repl; });
-    combine(w_resp_in, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<Valid<uint8_t>>& { return e.resp; });
-    combine(w_rel_in, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<Valid<DBIDVecC>>& { return e.release; });
-    combine(w_db_in, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<Valid<ReadDS>>& { return e.read_to_db; });
-    combine(w_ds_in, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<Valid<ReadDB>>& { return e.read_to_ds; });
-    combine(w_chi_in, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<Valid<ReadDB>>& {
-                return e.read_to_chi;
-            });
-    combine(w_tx_dat_bits, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<DataFlit>& { return e.tx_dat_bits; });
-    combine(w_states, entries,
-            [](DataCtrlEntry& e) -> wolvicmod::Out<Valid<EntryState>>& { return e.state; });
+    // ---- 条目输出汇集（拍平：per-entry 组合输出 = 单条 assign 的数组值） ----
+    w_alloc_rdy_all.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        RdyArr64 r{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) r[i] = dcIsFree(entries[i]);
+        return r;
+    };
+    w_read_for_repl_all.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        RdyArr64 r{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) r[i] = dcIsRepl(entries[i]);
+        return r;
+    };
+    w_states.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        StateArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            EntryState s;
+            s.hnTxnID = entries[i].task.hnTxnID;
+            s.dataVec = entries[i].dataVec;
+            s.dbidVec = entries[i].dbidVec;
+            a[i] = Valid<EntryState>{!dcIsFree(entries[i]), s};
+        }
+        return a;
+    };
+    w_tx_dat_bits.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        TxBitsArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) a[i] = entries[i].task.txDat;
+        return a;
+    };
+    w_resp_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        RespInArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i)
+            a[i] = Valid<uint8_t>{entries[i].state == ctrl::kResp, entries[i].task.hnTxnID};
+        return a;
+    };
+    w_rel_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        RelInArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            DBIDVecC r;
+            r.dataVec = entries[i].dataVec & entries[i].task.dataVec;
+            r.dbidVec = entries[i].dbidVec;
+            a[i] = Valid<DBIDVecC>{entries[i].state == ctrl::kClean, r};
+        }
+        return a;
+    };
+    w_db_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DbInArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            const auto& reg = entries[i];
+            const bool valid = dcIsRepl(reg) || (reg.state == ctrl::kRead && reg.s_read != 0);
+            ReadDS r;
+            r.ds = reg.task.ds;
+            r.dcid = static_cast<uint8_t>(i);
+            const uint8_t beat = pe(reg.s_read);
+            r.dbid = reg.dbidVec[beat];
+            r.beatNum = beat;
+            r.qos = reg.task.qos;
+            r.critical = reg.critical;
+            r.toCHI = (reg.task.dataOp.repl || reg.task.dataOp.send) && !reg.task.dataOp.merge;
+            a[i] = Valid<ReadDS>{valid, r};
+        }
+        return a;
+    };
+    w_ds_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DsInArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            const auto& reg = entries[i];
+            const bool valid = dcIsRepl(reg) || (reg.state == ctrl::kSave && reg.s_save != 0);
+            ReadDB r;
+            r.ds = reg.task.ds;
+            r.dcid = static_cast<uint8_t>(i);
+            const uint8_t beat = pe(reg.s_save);
+            r.dbid = reg.dbidVec[beat];
+            r.beatNum = beat;
+            r.qos = reg.task.qos;
+            r.critical = reg.critical;
+            r.repl = dcIsRepl(reg);
+            a[i] = Valid<ReadDB>{valid, r};
+        }
+        return a;
+    };
+    w_chi_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DsInArr a{};
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            const auto& reg = entries[i];
+            const bool valid = reg.state == ctrl::kSend && reg.s_send != 0;
+            ReadDB r;
+            r.dcid = static_cast<uint8_t>(i);
+            const uint8_t beat = pe(reg.s_send);
+            r.dbid = reg.dbidVec[beat];
+            r.beatNum = beat;
+            r.qos = reg.task.qos;
+            r.critical = reg.critical;
+            r.repl = false;
+            a[i] = Valid<ReadDB>{valid, r};
+        }
+        return a;
+    };
 
     // ---- reqDB 分配 ----
     w_has_free_dc.assign().reads(w_alloc_rdy_all) = [](auto src) {
@@ -335,26 +173,6 @@ DataCM::DataCM() {
         auto [req_db_out_rdy, w_has_free_dc] = src;
         return req_db_out_rdy && w_has_free_dc;
     };
-    for (uint32_t i = 0; i < kNrDataCM; ++i) {
-        entries[i].alloc.assign().reads(req_db_in, req_db_in_rdy, w_free_dcid, dbid_resp) =
-            [i](auto src) {
-                auto [req_db_in, req_db_in_rdy, w_free_dcid, dbid_resp] = src;
-                AllocBits b;
-                b.hnTxnID = req_db_in.bits.hnTxnID;
-                b.dataVec = req_db_in.bits.dataVec;
-                b.dbidVec = dbid_resp;
-                const bool fire = req_db_in.valid && req_db_in_rdy;
-                return Valid<AllocBits>{fire && w_free_dcid == i, b};
-            };
-        entries[i].resp_rdy.assign().reads(resp_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].release_rdy.assign().reads(rel_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-    }
 
     // ---- resp / release（VipArb RR，validOut） ----
     resp_arb.in = w_resp_in;
@@ -482,41 +300,236 @@ DataCM::DataCM() {
         return !hi_out.valid && read_to_chi_rdy;
     };
 
-    // 条目 read rdy 回接
-    for (uint32_t i = 0; i < kNrDataCM; ++i) {
-        entries[i].read_to_db_rdy.assign().reads(
-            w_has_repl, w_repl_dcid, w_db_in, read_to_db_rdy, read_to_ds_rdy, db_hi_arb.in_rdy,
-            db_lo_arb.in_rdy) =
-            [i](auto src) {
-                auto [w_has_repl, w_repl_dcid, w_db_in, read_to_db_rdy, read_to_ds_rdy, hi_rdy,
-                      lo_rdy] = src;
-                if (w_has_repl) return i == w_repl_dcid && read_to_ds_rdy && read_to_db_rdy;
-                for (uint32_t j = 0; j < kNrDataCM; ++j)
-                    if (w_db_in[j].valid && w_db_in[j].bits.critical)
-                        return j == i && read_to_db_rdy;
-                return hi_rdy[i] || lo_rdy[i];
-            };
-        entries[i].read_to_ds_rdy.assign().reads(
-            w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, read_to_ds_rdy, ds_hi_arb.in_rdy,
-            ds_lo_arb.in_rdy) =
-            [i](auto src) {
-                auto [w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, read_to_ds_rdy, hi_rdy,
-                      lo_rdy] = src;
-                if (w_has_repl) return i == w_repl_dcid && read_to_ds_rdy && read_to_db_rdy;
-                for (uint32_t j = 0; j < kNrDataCM; ++j)
-                    if (w_ds_in[j].valid && w_ds_in[j].bits.critical)
-                        return j == i && read_to_ds_rdy;
-                return hi_rdy[i] || lo_rdy[i];
-            };
-        entries[i].read_to_chi_rdy.assign().reads(w_chi_in, read_to_chi_rdy, chi_hi_arb.in_rdy,
-                                                  chi_lo_arb.in_rdy) = [i](auto src) {
+    // ---- 条目 read rdy 回接（拍平：数组合一） ----
+    w_db_rdys.assign().reads(w_has_repl, w_repl_dcid, w_db_in, read_to_db_rdy, read_to_ds_rdy,
+                             db_hi_arb.in_rdy, db_lo_arb.in_rdy) = [](auto src) {
+        auto [w_has_repl, w_repl_dcid, w_db_in, read_to_db_rdy, read_to_ds_rdy, hi_rdy, lo_rdy] =
+            src;
+        RdyArr64 r{};
+        uint32_t crit = kNrDataCM;  // 首个 critical 候选（无 → kNrDataCM）
+        for (uint32_t j = 0; j < kNrDataCM; ++j)
+            if (w_db_in[j].valid && w_db_in[j].bits.critical) {
+                crit = j;
+                break;
+            }
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            if (w_has_repl) {
+                r[i] = i == w_repl_dcid && read_to_ds_rdy && read_to_db_rdy;
+            } else if (crit < kNrDataCM) {
+                r[i] = crit == i && read_to_db_rdy;
+            } else {
+                r[i] = hi_rdy[i] || lo_rdy[i];
+            }
+        }
+        return r;
+    };
+    w_ds_rdys.assign().reads(w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, read_to_ds_rdy,
+                             ds_hi_arb.in_rdy, ds_lo_arb.in_rdy) = [](auto src) {
+        auto [w_has_repl, w_repl_dcid, w_ds_in, read_to_db_rdy, read_to_ds_rdy, hi_rdy, lo_rdy] =
+            src;
+        RdyArr64 r{};
+        uint32_t crit = kNrDataCM;
+        for (uint32_t j = 0; j < kNrDataCM; ++j)
+            if (w_ds_in[j].valid && w_ds_in[j].bits.critical) {
+                crit = j;
+                break;
+            }
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            if (w_has_repl) {
+                r[i] = i == w_repl_dcid && read_to_ds_rdy && read_to_db_rdy;
+            } else if (crit < kNrDataCM) {
+                r[i] = crit == i && read_to_ds_rdy;
+            } else {
+                r[i] = hi_rdy[i] || lo_rdy[i];
+            }
+        }
+        return r;
+    };
+    w_chi_rdys.assign().reads(w_chi_in, read_to_chi_rdy, chi_hi_arb.in_rdy, chi_lo_arb.in_rdy) =
+        [](auto src) {
             auto [w_chi_in, read_to_chi_rdy, hi_rdy, lo_rdy] = src;
+            RdyArr64 r{};
+            uint32_t crit = kNrDataCM;
             for (uint32_t j = 0; j < kNrDataCM; ++j)
-                if (w_chi_in[j].valid && w_chi_in[j].bits.critical)
-                    return j == i && read_to_chi_rdy;
-            return hi_rdy[i] || lo_rdy[i];
+                if (w_chi_in[j].valid && w_chi_in[j].bits.critical) {
+                    crit = j;
+                    break;
+                }
+            for (uint32_t i = 0; i < kNrDataCM; ++i) {
+                if (crit < kNrDataCM) {
+                    r[i] = crit == i && read_to_chi_rdy;
+                } else {
+                    r[i] = hi_rdy[i] || lo_rdy[i];
+                }
+            }
+            return r;
         };
-    }
+
+    // ---- 64 项控制 FSM（一条 update 循环算全数组 next；NBA：一切判定读旧值） ----
+    // 原 per-entry 端口在此折回：alloc = reqDB fire 且 w_free_dcid==i；task =
+    // {task_fire_reg, task_reg}（RegNext 语义，读旧值）；dcid = i；各通道 rdy =
+    // w_*_rdys[i] / resp_arb.in_rdy[i] / rel_arb.in_rdy[i]。
+    entries.update().on(posedge(clk)).reads(entries, upd_hn_txn_id, task_fire_reg, task_reg,
+                                            clean, ds_wri_db, tx_dat_fire, db_wri_ds, req_db_in,
+                                            req_db_in_rdy, w_free_dcid, dbid_resp,
+                                            resp_arb.in_rdy, rel_arb.in_rdy, w_db_rdys, w_ds_rdys,
+                                            w_chi_rdys) = [](auto src) {
+        auto [entries, upd_hn_txn_id, task_fire_reg, task_reg, clean, ds_wri_db, tx_dat_fire,
+              db_wri_ds, req_db_in, req_db_in_rdy, w_free_dcid, dbid_resp, resp_rdys, rel_rdys,
+              db_rdys, ds_rdys, chi_rdys] = src;
+        CtrlArr n = entries;
+        const bool reqFire = req_db_in.valid && req_db_in_rdy;  // DataCM 级 reqDB fire
+        const uint8_t tdv = task_reg.dataVec;
+        for (uint32_t i = 0; i < kNrDataCM; ++i) {
+            const DataCtrlV& reg = entries[i];
+            const bool isValid = reg.state != ctrl::kFree;
+            const bool allocFire = reqFire && w_free_dcid == i && dcIsFree(reg);
+            // w_set：alloc 命中空闲项、或项非空闲才更新
+            if (!allocFire && dcIsFree(reg)) continue;
+            DataCtrlV& next = n[i];
+            const uint8_t dcid = static_cast<uint8_t>(i);
+            const bool taskHit = isValid && task_fire_reg && task_reg.hnTxnID == reg.task.hnTxnID;
+            const bool cleanHit =
+                isValid && clean.valid && clean.bits.hnTxnID == reg.task.hnTxnID;
+            const bool updHit =
+                isValid && upd_hn_txn_id.valid && upd_hn_txn_id.bits.before == reg.task.hnTxnID;
+            const bool dsWriDBHit = isValid && ds_wri_db.valid && ds_wri_db.bits.dcid == dcid;
+            const bool txDatHit = isValid && tx_dat_fire.valid && tx_dat_fire.bits.dcid == dcid;
+            const bool dbWriDSHit = isValid && db_wri_ds.valid && db_wri_ds.bits.dcid == dcid;
+            // 通道 fire（valid 由旧 reg 派生，与 w_*_in assign 一致）
+            const bool dbValid = dcIsRepl(reg) || (reg.state == ctrl::kRead && reg.s_read != 0);
+            const bool dsValid = dcIsRepl(reg) || (reg.state == ctrl::kSave && reg.s_save != 0);
+            const bool chiValid = reg.state == ctrl::kSend && reg.s_send != 0;
+            const bool dbFire = dbValid && db_rdys[i];
+            const bool dsFire = dsValid && ds_rdys[i];
+            const bool chiFire = chiValid && chi_rdys[i];
+            const bool relFire = reg.state == ctrl::kClean && rel_rdys[i];
+            const bool respFire = reg.state == ctrl::kResp && resp_rdys[i];
+
+            if (taskHit) next.task = task_reg;
+
+            // dataVec
+            if (allocFire) {
+                next.dataVec = req_db_in.bits.dataVec;
+            } else if (cleanHit) {
+                next.task.dataVec = clean.bits.dataVec;
+            } else if (relFire) {
+                next.dataVec = reg.dataVec & ~(reg.dataVec & reg.task.dataVec);
+            }
+
+            // 三通道位图（setNextXXV）
+            const uint8_t dbBeat = pe(reg.s_read);
+            const uint8_t dsBeat = pe(reg.s_save);
+            const uint8_t chiBeat = pe(reg.s_send);
+            if (allocFire) {
+                next.s_read = 0;
+                next.w_read = 0;
+            } else if (taskHit && task_reg.dataOp.readToDB()) {
+                next.s_read = tdv;
+                next.w_read = tdv;
+            } else {
+                next.s_read = dbFire ? (dsWriDBHit ? reg.s_read & ~((1u << dbBeat) |
+                                                                    (1u << ds_wri_db.bits.beatNum))
+                                                   : reg.s_read & ~(1u << dbBeat))
+                                     : (dsWriDBHit ? reg.s_read & ~(1u << ds_wri_db.bits.beatNum)
+                                                   : reg.s_read);
+                if (dsWriDBHit) next.w_read = reg.w_read & ~(1u << ds_wri_db.bits.beatNum);
+            }
+            if (allocFire) {
+                next.s_send = 0;
+                next.w_send = 0;
+            } else if (taskHit && task_reg.dataOp.readToCHI()) {
+                next.s_send = tdv;
+                next.w_send = tdv;
+            } else {
+                next.s_send = chiFire ? (txDatHit ? reg.s_send & ~((1u << chiBeat) |
+                                                                   (1u << tx_dat_fire.bits.beatNum))
+                                                  : reg.s_send & ~(1u << chiBeat))
+                                      : (txDatHit ? reg.s_send & ~(1u << tx_dat_fire.bits.beatNum)
+                                                  : reg.s_send);
+                if (txDatHit) next.w_send = reg.w_send & ~(1u << tx_dat_fire.bits.beatNum);
+            }
+            if (allocFire) {
+                next.s_save = 0;
+                next.w_save = 0;
+            } else if (taskHit && task_reg.dataOp.readToDS()) {
+                next.s_save = tdv;
+                next.w_save = tdv;
+            } else {
+                next.s_save = dsFire ? (dbWriDSHit ? reg.s_save & ~((1u << dsBeat) |
+                                                                    (1u << db_wri_ds.bits.beatNum))
+                                                   : reg.s_save & ~(1u << dsBeat))
+                                     : (dbWriDSHit ? reg.s_save & ~(1u << db_wri_ds.bits.beatNum)
+                                                   : reg.s_save);
+                if (dbWriDSHit) next.w_save = reg.w_save & ~(1u << db_wri_ds.bits.beatNum);
+            }
+
+            // critical
+            if (allocFire || taskHit) {
+                next.critical = false;
+            } else if (dbFire) {
+                next.critical = popcount2(reg.s_read) > 1;
+            } else if (chiFire) {
+                next.critical = popcount2(reg.s_send) > 1;
+            } else if (dsFire) {
+                next.critical = popcount2(reg.s_save) > 1;
+            }
+
+            // hnTxnID
+            if (allocFire) {
+                next.task.hnTxnID = req_db_in.bits.hnTxnID;
+            } else if (updHit) {
+                next.task.hnTxnID = upd_hn_txn_id.bits.next;
+            }
+
+            // dbidVec
+            if (allocFire) next.dbidVec = dbid_resp;
+
+            // 状态机（用 next.* 位图判断）
+            const bool nReadAll = next.w_read == 0;
+            const bool nSendAll = next.w_send == 0;
+            const bool nSaveAll = next.w_save == 0;
+            switch (reg.state) {
+                case ctrl::kFree:
+                    if (allocFire) next.state = ctrl::kAlloc;
+                    break;
+                case ctrl::kAlloc:
+                    if (taskHit) {
+                        next.state = task_reg.dataOp.repl  ? ctrl::kRepl
+                                     : task_reg.dataOp.read ? ctrl::kRead
+                                     : task_reg.dataOp.send ? ctrl::kSend
+                                                            : ctrl::kSave;
+                    } else if (cleanHit) {
+                        next.state = ctrl::kClean;
+                    }
+                    break;
+                case ctrl::kRepl:
+                    if (nReadAll && nSaveAll) next.state = nSendAll ? ctrl::kResp : ctrl::kSend;
+                    break;
+                case ctrl::kRead:
+                    if (nReadAll)
+                        next.state = (reg.task.dataOp.send && !nSendAll)  ? ctrl::kSend
+                                     : (reg.task.dataOp.save && !nSaveAll) ? ctrl::kSave
+                                                                           : ctrl::kResp;
+                    break;
+                case ctrl::kSend:
+                    if (nSendAll)
+                        next.state = (reg.task.dataOp.save && !nSaveAll) ? ctrl::kSave : ctrl::kResp;
+                    break;
+                case ctrl::kSave:
+                    if (nSaveAll) next.state = ctrl::kResp;
+                    break;
+                case ctrl::kResp:
+                    if (respFire) next.state = ctrl::kAlloc;
+                    break;
+                case ctrl::kClean:
+                    if (relFire) next.state = next.dataVec == 0 ? ctrl::kFree : ctrl::kAlloc;
+                    break;
+                default: break;
+            }
+        }
+        return n;
+    };
 }
 
 // ---------------- DataBlock ----------------

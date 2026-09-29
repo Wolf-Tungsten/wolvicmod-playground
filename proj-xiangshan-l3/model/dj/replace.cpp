@@ -19,351 +19,6 @@ constexpr uint8_t kStI = 0, kStSC = 1, kStUD = 2, kStUC = 3;
 constexpr uint8_t kRespI = 0, kRespSC = 1, kRespUC = 2, kRespUdPd = 6;
 }  // namespace
 
-ReplaceEntry::ReplaceEntry() {
-    alloc_rdy.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return reg.state == replst::kFree;
-    };
-    hn_txn_id_out.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return reg.hnTxnID;
-    };
-
-    // ---- reqPoS / posResp ----
-    req_pos.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        ReplReqPos r;
-        const uint8_t db = hnIdxDirBank(reg.hnTxnID);
-        const uint8_t ps = hnIdxPosSet(reg.hnTxnID);
-        r.hnIdx = hnIdxOf(db, ps, 0);  // pos.way = DontCare
-        r.channel = (reg.wriSF && !reg.dir.sf.hit && !reg.directAllocSF) ? kChSnp : kChReq;
-        return Valid<ReplReqPos>{reg.state == replst::kReqPos, r};
-    };
-    w_pos_resp_hit.assign().reads(reg, pos_resp) = [](auto src) {
-        auto [reg, pos_resp] = src;
-        const uint8_t db = hnIdxDirBank(reg.hnTxnID);
-        const uint8_t ps = hnIdxPosSet(reg.hnTxnID);
-        return reg.state == replst::kWaitPos && pos_resp[db][ps].valid;
-    };
-
-    // ---- writeDir ----
-    write_dir.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        DirWrBoth w;
-        w.llcValid = reg.wriLLC;
-        w.llc.addr = reg.hnTxnID;  // hnTxnID 低 7 位即 pos 地址切片（RTL 直接位拼接）
-        w.llc.wayOH = reg.dir.llc.wayOH;
-        w.llc.hit = reg.dir.llc.hit;
-        w.llc.meta = reg.dir.llc.meta;
-        w.llc.hnIdx = reg.hnTxnID & 0x7F;
-        w.llc.directAlloc = false;
-        w.sfValid = reg.wriSF;
-        w.sf.addr = reg.hnTxnID;
-        w.sf.wayOH = reg.dir.sf.wayOH;
-        w.sf.hit = reg.dir.sf.hit;
-        w.sf.meta = reg.dir.sf.meta;
-        w.sf.hnIdx = reg.hnTxnID & 0x7F;
-        w.sf.directAlloc = reg.wriSF && !reg.dir.sf.hit && reg.directAllocSF;
-        return Valid<DirWrBoth>{reg.state == replst::kWriDir, w};
-    };
-
-    // ---- respDir 命中 ----
-    w_sf_resp_hit.assign().reads(reg, resp_dir_sf) = [](auto src) {
-        auto [reg, resp_dir_sf] = src;
-        return reg.state == replst::kWaitDir && resp_dir_sf.valid &&
-               resp_dir_sf.bits.hnTxnID == reg.hnTxnID;
-    };
-    w_llc_resp_hit.assign().reads(reg, resp_dir_llc) = [](auto src) {
-        auto [reg, resp_dir_llc] = src;
-        return reg.state == replst::kWaitDir && resp_dir_llc.valid &&
-               resp_dir_llc.bits.hnTxnID == reg.hnTxnID;
-    };
-    upd_pos_tag.assign().reads(w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf, resp_dir_llc, reg) =
-        [](auto src) {
-            auto [w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf, resp_dir_llc, reg] = src;
-            UpdPosTag u;
-            u.addrVal = w_sf_resp_hit ? resp_dir_sf.bits.meta != 0 : resp_dir_llc.bits.meta != 0;
-            u.addr = w_sf_resp_hit ? resp_dir_sf.bits.addr : resp_dir_llc.bits.addr;
-            u.hnIdx = reg.replHnTxnID & 0x7F;
-            return Valid<UpdPosTag>{w_sf_resp_hit || w_llc_resp_hit, u};
-        };
-
-    // ---- cmTask 两路 ----
-    cm_task_snp.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        CMTask t{};
-        t.chi.channel = kChSnp;
-        t.chi.opcode = kSnpUnique;
-        t.chi.dataVec = kFullVec;
-        t.chi.retToSrc = true;
-        t.chi.size = 6;
-        t.hnTxnID = reg.replHnTxnID;
-        t.snpVec = reg.dir.sf.meta != 0 ? 1 : 0;
-        t.fromRepl = true;
-        t.qos = reg.qos;
-        return Valid<CMTask>{reg.state == replst::kSnoop, t};
-    };
-    cm_task_wri.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        CMTask t{};
-        t.chi.channel = kChReq;
-        const bool dirty = reg.dir.llc.meta == kStUD;
-        t.chi.opcode = reg.replToLan ? kWriteNoSnpFull
-                                     : (dirty ? kWriteBackFull : kWriteEvictOrEvict);
-        t.chi.dataVec = kFullVec;
-        t.chi.memAttr = 0b0101;  // allocate=0 device=0 cacheable=1 ewa=1（先声明 MSB）
-        t.chi.toLAN = reg.replToLan;
-        t.chi.size = 6;
-        t.hnTxnID = reg.replHnTxnID;
-        t.fromRepl = true;
-        t.ds = reg.ds;
-        t.cbResp = reg.replToLan ? kRespI
-                                 : (reg.dir.llc.meta == kStI    ? kRespI
-                                    : reg.dir.llc.meta == kStSC ? kRespSC
-                                    : reg.dir.llc.meta == kStUC ? kRespUC
-                                                                : kRespUdPd);
-        t.dataOp.repl = true;
-        t.qos = reg.qos;
-        return Valid<CMTask>{reg.state == replst::kWrite, t};
-    };
-
-    // ---- reqDB / updHnTxnID / dataTask / cleanPoS / resp ----
-    req_db.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        ReqDBQos r;
-        r.hnTxnID = reg.replHnTxnID;
-        r.dataVec = kFullVec;
-        r.qos = reg.qos;
-        return Valid<ReqDBQos>{reg.state == replst::kReqDB, r};
-    };
-    upd_hn_txn_id.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        UpdHnTxnID u;
-        u.before = reg.hnTxnID;
-        u.next = reg.replHnTxnID;
-        return Valid<UpdHnTxnID>{reg.state == replst::kUpdateId, u};
-    };
-    data_task.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        DataTask t{};
-        t.hnTxnID = reg.hnTxnID;
-        t.dataOp.save = true;
-        t.dataVec = kFullVec;
-        t.ds = reg.ds;
-        t.qos = reg.qos;
-        return Valid<DataTask>{reg.state == replst::kSaveData, t};
-    };
-    clean_pos.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        PosClean p;
-        const bool isT = reg.state == replst::kCleanPosT;
-        p.hnIdx = isT ? reg.hnTxnID & 0x7F : reg.replHnTxnID & 0x7F;
-        p.channel = isT ? kChSnp
-                        : ((reg.wriSF && !reg.dir.sf.hit && !reg.directAllocSF) ? kChSnp
-                                                                               : kChReq);
-        p.qos = reg.qos;
-        return Valid<PosClean>{reg.state == replst::kCleanPosT ||
-                                   reg.state == replst::kCleanPosR,
-                               p};
-    };
-    resp.assign().reads(reg) = [](auto src) {
-        auto [reg] = src;
-        return Valid<uint8_t>{reg.state == replst::kRespCmt, reg.hnTxnID};
-    };
-
-    // ---- 命中派生 ----
-    w_cm_resp_hit.assign().reads(reg, cm_resp) = [](auto src) {
-        auto [reg, cm_resp] = src;
-        return reg.state != replst::kFree && cm_resp.valid &&
-               cm_resp.bits.hnTxnID == reg.replHnTxnID;
-    };
-    w_data_resp_hit.assign().reads(reg, data_resp) = [](auto src) {
-        auto [reg, data_resp] = src;
-        return reg.state != replst::kFree && data_resp.valid && data_resp.bits == reg.hnTxnID;
-    };
-    w_wri_dir_done_hit.assign().reads(reg, write_dir_done) = [](auto src) {
-        auto [reg, write_dir_done] = src;
-        return reg.state == replst::kWaitWriDir && write_dir_done.valid &&
-               write_dir_done.bits == reg.hnTxnID;
-    };
-
-    // ---- 次态 ----
-    w_next.assign().reads(reg, alloc, alloc_rdy, req_pos, req_pos_rdy, w_pos_resp_hit, pos_resp,
-                          write_dir, write_dir_rdy, w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf,
-                          resp_dir_llc, cfg_ci, upd_hn_txn_id, upd_hn_txn_id_rdy, resp,
-                          resp_rdy, req_db, req_db_rdy, cm_task_wri, cm_task_wri_rdy,
-                          cm_task_snp, cm_task_snp_rdy, w_cm_resp_hit, cm_resp, data_task,
-                          data_task_rdy, w_data_resp_hit, clean_pos, clean_pos_rdy,
-                          w_wri_dir_done_hit) = [](auto src) {
-        auto [reg, alloc, alloc_rdy, req_pos, req_pos_rdy, w_pos_resp_hit, pos_resp, write_dir,
-              write_dir_rdy, w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf, resp_dir_llc, cfg_ci,
-              upd_hn_txn_id, upd_hn_txn_id_rdy, resp, resp_rdy, req_db, req_db_rdy, cm_task_wri,
-              cm_task_wri_rdy, cm_task_snp, cm_task_snp_rdy, w_cm_resp_hit, cm_resp, data_task,
-              data_task_rdy, w_data_resp_hit, clean_pos, clean_pos_rdy,
-              w_wri_dir_done_hit] = src;
-        ReplReg n = reg;
-        const bool isReplDIR = (reg.wriSF && !reg.dir.sf.hit && !reg.directAllocSF) ||
-                               (reg.wriLLC && !reg.dir.llc.hit);
-        const bool isReplSF = reg.wriSF && !reg.dir.sf.hit && !reg.directAllocSF;
-        const bool isReplLLC = reg.wriLLC && !reg.dir.llc.hit;
-        const uint8_t db = hnIdxDirBank(reg.hnTxnID);
-        const uint8_t ps = hnIdxPosSet(reg.hnTxnID);
-
-        // 状态机
-        switch (reg.state) {
-            case replst::kFree:
-                if (alloc.valid && alloc_rdy) {
-                    const bool aReplDIR = (alloc.bits.wriSF && !alloc.bits.dir.sf.hit &&
-                                           !alloc.bits.directAllocSF) ||
-                                          (alloc.bits.wriLLC && !alloc.bits.dir.llc.hit);
-                    n.state = aReplDIR ? replst::kReqPos : replst::kWriDir;
-                }
-                break;
-            case replst::kReqPos:
-                if (req_pos.valid && req_pos_rdy) n.state = replst::kWaitPos;
-                break;
-            case replst::kWaitPos: n.state = w_pos_resp_hit ? replst::kWriDir : replst::kReqPos; break;
-            case replst::kWriDir:
-                if (write_dir.valid && write_dir_rdy) {
-                    const bool isDirectAllocSF =
-                        reg.wriSF && !reg.dir.sf.hit && reg.directAllocSF;
-                    n.state = isReplDIR ? replst::kWaitDir
-                                        : (isDirectAllocSF ? replst::kWaitWriDir
-                                                           : replst::kRespCmt);
-                }
-                break;
-            case replst::kWaitWriDir:
-                if (w_wri_dir_done_hit) n.state = replst::kRespCmt;
-                break;
-            case replst::kWaitDir:
-                if (w_sf_resp_hit || w_llc_resp_hit) {
-                    if (w_sf_resp_hit) {
-                        n.state = replst::kRespCmt;
-                    } else {
-                        const bool needReplLLC = resp_dir_llc.bits.meta != 0;
-                        const bool toLan = ciOf(resp_dir_llc.bits.addr) == cfg_ci;
-                        const bool dirty = resp_dir_llc.bits.meta == kStUD;
-                        const bool localClean = toLan && !dirty;
-                        n.state = needReplLLC ? (localClean ? replst::kSaveData
-                                                            : replst::kUpdateId)
-                                              : replst::kSaveData;
-                    }
-                }
-                break;
-            case replst::kUpdateId:
-                if (upd_hn_txn_id.valid && upd_hn_txn_id_rdy) n.state = replst::kWrite;
-                break;
-            case replst::kRespCmt:
-                if (resp.valid && resp_rdy) {
-                    if (isReplSF) {
-                        n.state = reg.needSnp ? replst::kReqDB : replst::kCleanPosR;
-                    } else if (isReplLLC) {
-                        n.state = replst::kCleanPosR;
-                    } else {
-                        n.state = replst::kFree;
-                    }
-                }
-                break;
-            case replst::kReqDB:
-                if (req_db.valid && req_db_rdy) n.state = replst::kSnoop;
-                break;
-            case replst::kWrite:
-                if (cm_task_wri.valid && cm_task_wri_rdy) n.state = replst::kWaitRWri;
-                break;
-            case replst::kSnoop:
-                if (cm_task_snp.valid && cm_task_snp_rdy) n.state = replst::kWaitRSnp;
-                break;
-            case replst::kWaitRWri:
-                if (w_cm_resp_hit) n.state = reg.alrReplSF ? replst::kCleanPosT : replst::kRespCmt;
-                break;
-            case replst::kWaitRSnp:
-                if (w_cm_resp_hit) {
-                    const bool cmRespData =
-                        dc::tiValid(cm_resp.bits.taskInst) && dc::tiChannel(cm_resp.bits.taskInst) == kChDat;
-                    n.state = cmRespData ? replst::kCopyId : replst::kCleanPosR;
-                }
-                break;
-            case replst::kCopyId: n.state = replst::kReqPos; break;
-            case replst::kSaveData:
-                if (data_task.valid && data_task_rdy) n.state = replst::kWaitResp;
-                break;
-            case replst::kWaitResp:
-                if (w_data_resp_hit)
-                    n.state = reg.alrReplSF ? replst::kCleanPosT : replst::kRespCmt;
-                break;
-            case replst::kCleanPosT:
-                if (clean_pos.valid && clean_pos_rdy) n.state = replst::kCleanPosR;
-                break;
-            case replst::kCleanPosR:
-                if (clean_pos.valid && clean_pos_rdy) n.state = replst::kFree;
-                break;
-            default: break;
-        }
-
-        // hnTxnID：COPYID 换槽 / posResp 选中新槽
-        if (reg.state == replst::kCopyId) {
-            n.hnTxnID = reg.replHnTxnID;
-        } else if (w_pos_resp_hit) {
-            n.replHnTxnID = hnIdxOf(db, ps, pos_resp[db][ps].bits);
-        }
-
-        // llcRespHit 副作用：toLan / ds
-        if (w_llc_resp_hit) {
-            n.replToLan = ciOf(resp_dir_llc.bits.addr) == cfg_ci;
-            DsIdx nds;
-            nds.set(resp_dir_llc.bits.addr, ohToUInt(resp_dir_llc.bits.wayOH));
-            n.ds = nds;
-        }
-
-        // sfRespHit 副作用
-        if (w_sf_resp_hit) {
-            n.needSnp = resp_dir_sf.bits.meta != 0;
-            n.alrReplSF = true;
-            n.dir.sf.wayOH = resp_dir_sf.bits.wayOH;
-            n.dir.sf.meta = resp_dir_sf.bits.meta;
-            n.dir.sf.hit = resp_dir_sf.bits.hit;
-        } else if (n.state == replst::kFree) {
-            n.needSnp = false;
-            n.alrReplSF = false;
-        }
-
-        // cmRespData 副作用：改写为 wriLLC 任务
-        const bool cmRespDataHit =
-            w_cm_resp_hit && dc::tiValid(cm_resp.bits.taskInst) &&
-            dc::tiChannel(cm_resp.bits.taskInst) == kChDat;
-        if (cmRespDataHit) {
-            const bool dirty = (dc::tiResp(cm_resp.bits.taskInst) >> 2) & 1;  // passDirty
-            n.wriSF = false;
-            n.wriLLC = true;
-            n.dir.llc.hit = false;
-            n.dir.llc.meta = dirty ? kStUD : kStSC;
-        }
-        return n;
-    };
-    w_set.assign().reads(reg, alloc, alloc_rdy) = [](auto src) {
-        auto [reg, alloc, alloc_rdy] = src;
-        return (alloc.valid && alloc_rdy) || reg.state != replst::kFree;
-    };
-    reg.update().on(posedge(clk)).reads(reg, w_next, w_set, alloc, alloc_rdy) = [](auto src) {
-        auto [reg, w_next, w_set, alloc, alloc_rdy] = src;
-        if (!w_set) return reg;
-        if (alloc.valid && alloc_rdy) {
-            ReplReg a{};
-            a.dir = alloc.bits.dir;
-            a.hnTxnID = alloc.bits.hnTxnID;
-            a.qos = alloc.bits.qos;
-            a.wriSF = alloc.bits.wriSF;
-            a.wriLLC = alloc.bits.wriLLC;
-            a.directAllocSF = alloc.bits.directAllocSF;
-            a.replHnTxnID = alloc.bits.hnTxnID;
-            a.state = w_next.state;  // 状态机已按 alloc 计算
-            return a;
-        }
-        return w_next;
-    };
-}
-
-
 // ---------------- ReplaceCM ----------------
 
 ReplaceCM::ReplaceCM() {
@@ -379,33 +34,207 @@ ReplaceCM::ReplaceCM() {
     req_db_arb.clk = clk;
     for (uint32_t i = 0; i < 8; ++i) req_pos_arbs[i].clk = clk;
 
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        auto& e = entries[i];
-        e.clk = clk;
-        e.cfg_ci = cfg_ci;
-        e.cm_resp = cm_resp;
-        e.resp_dir_llc = resp_dir_llc;
-        e.resp_dir_sf = resp_dir_sf;
-        e.data_resp = data_resp;
-        e.pos_resp = pos_resp_vec;
-        e.write_dir_done = write_dir_done;
-    }
-
-    // Alloc 池化
+    // ---- Alloc 池化 ----
+    w_alloc_rdy_all.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        RdyArrN r{};
+        for (uint32_t i = 0; i < kEntries; ++i) r[i] = entries[i].state == replst::kFree;
+        return r;
+    };
     alloc_arb.in = task;
     task_rdy = alloc_arb.in_rdy;
-    combine(w_alloc_rdy_all, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<bool>& { return e.alloc_rdy; });
     alloc_arb.out_rdy = w_alloc_rdy_all;
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].alloc = alloc_arb.out[i];
-    }
 
-    // reqPoS 矩阵
-    combine(w_req_pos_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<ReplReqPos>>& { return e.req_pos; });
-    combine(w_hn_txn_ids, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<uint8_t>& { return e.hn_txn_id_out; });
+    // ---- per-entry 命中（upd_pos_tag 与次态共用） ----
+    w_sf_resp_hit.assign().reads(entries, resp_dir_sf) = [](auto src) {
+        auto [entries, resp_dir_sf] = src;
+        RdyArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i)
+            o[i] = entries[i].state == replst::kWaitDir && resp_dir_sf.valid &&
+                   resp_dir_sf.bits.hnTxnID == entries[i].hnTxnID;
+        return o;
+    };
+    w_llc_resp_hit.assign().reads(entries, resp_dir_llc) = [](auto src) {
+        auto [entries, resp_dir_llc] = src;
+        RdyArrN o{};
+        for (uint32_t i = 0; i < kEntries; ++i)
+            o[i] = entries[i].state == replst::kWaitDir && resp_dir_llc.valid &&
+                   resp_dir_llc.bits.hnTxnID == entries[i].hnTxnID;
+        return o;
+    };
+
+    // ---- per-entry 输出数组（直喂仲裁器/reqPoS 矩阵） ----
+    w_hn_txn_ids.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        TxnIdArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) o[i] = entries[i].hnTxnID;
+        return o;
+    };
+    w_req_pos_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        ReqPosInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            ReplReqPos r;
+            const uint8_t db = hnIdxDirBank(e.hnTxnID);
+            const uint8_t ps = hnIdxPosSet(e.hnTxnID);
+            r.hnIdx = hnIdxOf(db, ps, 0);  // pos.way = DontCare
+            r.channel = (e.wriSF && !e.dir.sf.hit && !e.directAllocSF) ? kChSnp : kChReq;
+            o[i] = Valid<ReplReqPos>{e.state == replst::kReqPos, r};
+        }
+        return o;
+    };
+    w_resp_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        RespInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i)
+            o[i] = Valid<uint8_t>{entries[i].state == replst::kRespCmt, entries[i].hnTxnID};
+        return o;
+    };
+    w_upd_id_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        UpdIdInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            UpdHnTxnID u;
+            u.before = e.hnTxnID;
+            u.next = e.replHnTxnID;
+            o[i] = Valid<UpdHnTxnID>{e.state == replst::kUpdateId, u};
+        }
+        return o;
+    };
+    w_upd_tag_in.assign().reads(entries, w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf,
+                                resp_dir_llc) = [](auto src) {
+        auto [entries, sf_hit, llc_hit, resp_dir_sf, resp_dir_llc] = src;
+        UpdTagInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            UpdPosTag u;
+            u.addrVal = sf_hit[i] ? resp_dir_sf.bits.meta != 0 : resp_dir_llc.bits.meta != 0;
+            u.addr = sf_hit[i] ? resp_dir_sf.bits.addr : resp_dir_llc.bits.addr;
+            u.hnIdx = e.replHnTxnID & 0x7F;
+            o[i] = Valid<UpdPosTag>{sf_hit[i] || llc_hit[i], u};
+        }
+        return o;
+    };
+    w_clean_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        CleanInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            PosClean p;
+            const bool isT = e.state == replst::kCleanPosT;
+            p.hnIdx = isT ? e.hnTxnID & 0x7F : e.replHnTxnID & 0x7F;
+            p.channel = isT ? kChSnp
+                            : ((e.wriSF && !e.dir.sf.hit && !e.directAllocSF) ? kChSnp : kChReq);
+            p.qos = e.qos;
+            o[i] = Valid<PosClean>{e.state == replst::kCleanPosT ||
+                                       e.state == replst::kCleanPosR,
+                                   p};
+        }
+        return o;
+    };
+    w_data_task_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        DataTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            DataTask t{};
+            t.hnTxnID = e.hnTxnID;
+            t.dataOp.save = true;
+            t.dataVec = kFullVec;
+            t.ds = e.ds;
+            t.qos = e.qos;
+            o[i] = Valid<DataTask>{e.state == replst::kSaveData, t};
+        }
+        return o;
+    };
+    w_wdir_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        WdirInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            DirWrBoth w;
+            w.llcValid = e.wriLLC;
+            w.llc.addr = e.hnTxnID;  // hnTxnID 低 7 位即 pos 地址切片（RTL 直接位拼接）
+            w.llc.wayOH = e.dir.llc.wayOH;
+            w.llc.hit = e.dir.llc.hit;
+            w.llc.meta = e.dir.llc.meta;
+            w.llc.hnIdx = e.hnTxnID & 0x7F;
+            w.llc.directAlloc = false;
+            w.sfValid = e.wriSF;
+            w.sf.addr = e.hnTxnID;
+            w.sf.wayOH = e.dir.sf.wayOH;
+            w.sf.hit = e.dir.sf.hit;
+            w.sf.meta = e.dir.sf.meta;
+            w.sf.hnIdx = e.hnTxnID & 0x7F;
+            w.sf.directAlloc = e.wriSF && !e.dir.sf.hit && e.directAllocSF;
+            o[i] = Valid<DirWrBoth>{e.state == replst::kWriDir, w};
+        }
+        return o;
+    };
+    w_snp_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        CmTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            CMTask t{};
+            t.chi.channel = kChSnp;
+            t.chi.opcode = kSnpUnique;
+            t.chi.dataVec = kFullVec;
+            t.chi.retToSrc = true;
+            t.chi.size = 6;
+            t.hnTxnID = e.replHnTxnID;
+            t.snpVec = e.dir.sf.meta != 0 ? 1 : 0;
+            t.fromRepl = true;
+            t.qos = e.qos;
+            o[i] = Valid<CMTask>{e.state == replst::kSnoop, t};
+        }
+        return o;
+    };
+    w_wri_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        CmTaskInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            CMTask t{};
+            t.chi.channel = kChReq;
+            const bool dirty = e.dir.llc.meta == kStUD;
+            t.chi.opcode = e.replToLan ? kWriteNoSnpFull
+                                       : (dirty ? kWriteBackFull : kWriteEvictOrEvict);
+            t.chi.dataVec = kFullVec;
+            t.chi.memAttr = 0b0101;  // allocate=0 device=0 cacheable=1 ewa=1（先声明 MSB）
+            t.chi.toLAN = e.replToLan;
+            t.chi.size = 6;
+            t.hnTxnID = e.replHnTxnID;
+            t.fromRepl = true;
+            t.ds = e.ds;
+            t.cbResp = e.replToLan ? kRespI
+                                   : (e.dir.llc.meta == kStI    ? kRespI
+                                      : e.dir.llc.meta == kStSC ? kRespSC
+                                      : e.dir.llc.meta == kStUC ? kRespUC
+                                                                : kRespUdPd);
+            t.dataOp.repl = true;
+            t.qos = e.qos;
+            o[i] = Valid<CMTask>{e.state == replst::kWrite, t};
+        }
+        return o;
+    };
+    w_req_db_in.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        ReqDbInArr o{};
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& e = entries[i];
+            ReqDBQos r;
+            r.hnTxnID = e.replHnTxnID;
+            r.dataVec = kFullVec;
+            r.qos = e.qos;
+            o[i] = Valid<ReqDBQos>{e.state == replst::kReqDB, r};
+        }
+        return o;
+    };
+
+    // ---- reqPoS 矩阵 ----
     for (uint32_t b = 0; b < 2; ++b) {
         for (uint32_t s = 0; s < 4; ++s) {
             const uint32_t m = b * 4 + s;
@@ -432,43 +261,24 @@ ReplaceCM::ReplaceCM() {
             for (uint32_t s = 0; s < 4; ++s) r[b][s] = outs[b * 4 + s];
         return r;
     };
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].req_pos_rdy.assign().reads(
-            w_hn_txn_ids, req_pos_arbs[0].in_rdy, req_pos_arbs[1].in_rdy, req_pos_arbs[2].in_rdy,
-            req_pos_arbs[3].in_rdy, req_pos_arbs[4].in_rdy, req_pos_arbs[5].in_rdy,
-            req_pos_arbs[6].in_rdy, req_pos_arbs[7].in_rdy) =
-            [i](auto src) {
-                auto [ids, r0, r1, r2, r3, r4, r5, r6, r7] = src;
+    // per-entry reqPos rdy：按本项 (bank,set) 从对应仲裁器的 in_rdy 选
+    w_req_pos_rdy_all.assign().reads(
+        w_hn_txn_ids, req_pos_arbs[0].in_rdy, req_pos_arbs[1].in_rdy, req_pos_arbs[2].in_rdy,
+        req_pos_arbs[3].in_rdy, req_pos_arbs[4].in_rdy, req_pos_arbs[5].in_rdy,
+        req_pos_arbs[6].in_rdy, req_pos_arbs[7].in_rdy) =
+        [](auto src) {
+            auto [ids, r0, r1, r2, r3, r4, r5, r6, r7] = src;
+            const RdyArrN* rdys[8] = {&r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7};
+            RdyArrN o{};
+            for (uint32_t i = 0; i < kEntries; ++i) {
                 const uint32_t b = hnIdxDirBank(ids[i]);
                 const uint32_t s = hnIdxPosSet(ids[i]);
-                using RdyArr = std::array<bool, kEntries>;
-                const RdyArr* rdys[8] = {&r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7};
-                return (*rdys[b * 4 + s])[i];
-            };
-    }
+                o[i] = (*rdys[b * 4 + s])[i];
+            }
+            return o;
+        };
 
-    // 输出汇集
-    combine(w_resp_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<uint8_t>>& { return e.resp; });
-    combine(w_upd_id_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<UpdHnTxnID>>& {
-                return e.upd_hn_txn_id;
-            });
-    combine(w_upd_tag_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<UpdPosTag>>& { return e.upd_pos_tag; });
-    combine(w_clean_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<PosClean>>& { return e.clean_pos; });
-    combine(w_data_task_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<DataTask>>& { return e.data_task; });
-    combine(w_wdir_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<DirWrBoth>>& { return e.write_dir; });
-    combine(w_snp_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<CMTask>>& { return e.cm_task_snp; });
-    combine(w_wri_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<CMTask>>& { return e.cm_task_wri; });
-    combine(w_req_db_in, entries,
-            [](ReplaceEntry& e) -> wolvicmod::Out<Valid<ReqDBQos>>& { return e.req_db; });
-
+    // ---- 输出仲裁 ----
     resp_arb.in = w_resp_in;
     resp_arb.out_rdy = true;
     resp = resp_arb.out;
@@ -500,33 +310,191 @@ ReplaceCM::ReplaceCM() {
         return Valid<ReqDB>{o.valid, {o.bits.hnTxnID, o.bits.dataVec}};
     };
 
-    for (uint32_t i = 0; i < kEntries; ++i) {
-        entries[i].resp_rdy = true;
-        entries[i].upd_hn_txn_id_rdy = true;
-        entries[i].clean_pos_rdy.assign().reads(clean_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].data_task_rdy.assign().reads(data_task_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].write_dir_rdy.assign().reads(wdir_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].cm_task_snp_rdy.assign().reads(snp_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].cm_task_wri_rdy.assign().reads(wri_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-        entries[i].req_db_rdy.assign().reads(req_db_arb.in_rdy) = [i](auto src) {
-            auto [rdy] = src;
-            return rdy[i];
-        };
-    }
+    // ---- 64 项状态（一条 update 循环；w_set = allocFire || 非空闲） ----
+    entries.update().on(posedge(clk)).reads(
+        entries, alloc_arb.out, pos_resp_vec, w_sf_resp_hit, w_llc_resp_hit, resp_dir_sf,
+        resp_dir_llc, cfg_ci, w_upd_id_in, w_resp_in, w_req_db_in, req_db_arb.in_rdy, w_wri_in,
+        wri_arb.in_rdy, w_snp_in, snp_arb.in_rdy, cm_resp, w_data_task_in, data_task_arb.in_rdy,
+        data_resp, w_clean_in, clean_arb.in_rdy, write_dir_done, w_req_pos_in,
+        w_req_pos_rdy_all, w_wdir_in, wdir_arb.in_rdy) = [](auto src) {
+        auto [entries, alloc_out, pos_resp, sf_hit, llc_hit, resp_dir_sf, resp_dir_llc, cfg_ci,
+              upd_id_in, resp_in, req_db_in, req_db_rdy, wri_in, wri_rdy, snp_in, snp_rdy,
+              cm_resp, data_task_in, data_task_rdy, data_resp, clean_in, clean_rdy,
+              write_dir_done, req_pos_in, req_pos_rdy, wdir_in, wdir_rdy] = src;
+        EntryArr n = entries;
+        for (uint32_t i = 0; i < kEntries; ++i) {
+            const ReplReg& reg = entries[i];
+            const bool allocFire = alloc_out[i].valid && reg.state == replst::kFree;
+            if (!allocFire && reg.state == replst::kFree) continue;  // !w_set
+
+            ReplReg next = reg;  // 原 w_next
+            const bool isReplDIR = (reg.wriSF && !reg.dir.sf.hit && !reg.directAllocSF) ||
+                                   (reg.wriLLC && !reg.dir.llc.hit);
+            const bool isReplSF = reg.wriSF && !reg.dir.sf.hit && !reg.directAllocSF;
+            const bool isReplLLC = reg.wriLLC && !reg.dir.llc.hit;
+            const uint8_t db = hnIdxDirBank(reg.hnTxnID);
+            const uint8_t ps = hnIdxPosSet(reg.hnTxnID);
+            // 命中派生（原 w_*_hit 线）
+            const bool posRespHit = reg.state == replst::kWaitPos && pos_resp[db][ps].valid;
+            const bool cmRespHit = reg.state != replst::kFree && cm_resp.valid &&
+                                   cm_resp.bits.hnTxnID == reg.replHnTxnID;
+            const bool dataRespHit = reg.state != replst::kFree && data_resp.valid &&
+                                     data_resp.bits == reg.hnTxnID;
+            const bool wriDoneHit = reg.state == replst::kWaitWriDir && write_dir_done.valid &&
+                                    write_dir_done.bits == reg.hnTxnID;
+
+            // 状态机（fire 条件 = 输出 valid && 仲裁 rdy；upd_id/resp 的 rdy 恒真）
+            switch (reg.state) {
+                case replst::kFree:
+                    if (allocFire) {
+                        const auto& ab = alloc_out[i].bits;
+                        const bool aReplDIR = (ab.wriSF && !ab.dir.sf.hit && !ab.directAllocSF) ||
+                                              (ab.wriLLC && !ab.dir.llc.hit);
+                        next.state = aReplDIR ? replst::kReqPos : replst::kWriDir;
+                    }
+                    break;
+                case replst::kReqPos:
+                    if (req_pos_in[i].valid && req_pos_rdy[i]) next.state = replst::kWaitPos;
+                    break;
+                case replst::kWaitPos:
+                    next.state = posRespHit ? replst::kWriDir : replst::kReqPos;
+                    break;
+                case replst::kWriDir:
+                    if (wdir_in[i].valid && wdir_rdy[i]) {
+                        const bool isDirectAllocSF =
+                            reg.wriSF && !reg.dir.sf.hit && reg.directAllocSF;
+                        next.state = isReplDIR ? replst::kWaitDir
+                                               : (isDirectAllocSF ? replst::kWaitWriDir
+                                                                  : replst::kRespCmt);
+                    }
+                    break;
+                case replst::kWaitWriDir:
+                    if (wriDoneHit) next.state = replst::kRespCmt;
+                    break;
+                case replst::kWaitDir:
+                    if (sf_hit[i] || llc_hit[i]) {
+                        if (sf_hit[i]) {
+                            next.state = replst::kRespCmt;
+                        } else {
+                            const bool needReplLLC = resp_dir_llc.bits.meta != 0;
+                            const bool toLan = ciOf(resp_dir_llc.bits.addr) == cfg_ci;
+                            const bool dirty = resp_dir_llc.bits.meta == kStUD;
+                            const bool localClean = toLan && !dirty;
+                            next.state = needReplLLC ? (localClean ? replst::kSaveData
+                                                                   : replst::kUpdateId)
+                                                     : replst::kSaveData;
+                        }
+                    }
+                    break;
+                case replst::kUpdateId:
+                    if (upd_id_in[i].valid) next.state = replst::kWrite;
+                    break;
+                case replst::kRespCmt:
+                    if (resp_in[i].valid) {
+                        if (isReplSF) {
+                            next.state = reg.needSnp ? replst::kReqDB : replst::kCleanPosR;
+                        } else if (isReplLLC) {
+                            next.state = replst::kCleanPosR;
+                        } else {
+                            next.state = replst::kFree;
+                        }
+                    }
+                    break;
+                case replst::kReqDB:
+                    if (req_db_in[i].valid && req_db_rdy[i]) next.state = replst::kSnoop;
+                    break;
+                case replst::kWrite:
+                    if (wri_in[i].valid && wri_rdy[i]) next.state = replst::kWaitRWri;
+                    break;
+                case replst::kSnoop:
+                    if (snp_in[i].valid && snp_rdy[i]) next.state = replst::kWaitRSnp;
+                    break;
+                case replst::kWaitRWri:
+                    if (cmRespHit)
+                        next.state = reg.alrReplSF ? replst::kCleanPosT : replst::kRespCmt;
+                    break;
+                case replst::kWaitRSnp:
+                    if (cmRespHit) {
+                        const bool cmRespData =
+                            dc::tiValid(cm_resp.bits.taskInst) &&
+                            dc::tiChannel(cm_resp.bits.taskInst) == kChDat;
+                        next.state = cmRespData ? replst::kCopyId : replst::kCleanPosR;
+                    }
+                    break;
+                case replst::kCopyId: next.state = replst::kReqPos; break;
+                case replst::kSaveData:
+                    if (data_task_in[i].valid && data_task_rdy[i]) next.state = replst::kWaitResp;
+                    break;
+                case replst::kWaitResp:
+                    if (dataRespHit)
+                        next.state = reg.alrReplSF ? replst::kCleanPosT : replst::kRespCmt;
+                    break;
+                case replst::kCleanPosT:
+                    if (clean_in[i].valid && clean_rdy[i]) next.state = replst::kCleanPosR;
+                    break;
+                case replst::kCleanPosR:
+                    if (clean_in[i].valid && clean_rdy[i]) next.state = replst::kFree;
+                    break;
+                default: break;
+            }
+
+            // hnTxnID：COPYID 换槽 / posResp 选中新槽
+            if (reg.state == replst::kCopyId) {
+                next.hnTxnID = reg.replHnTxnID;
+            } else if (posRespHit) {
+                next.replHnTxnID = hnIdxOf(db, ps, pos_resp[db][ps].bits);
+            }
+
+            // llcRespHit 副作用：toLan / ds
+            if (llc_hit[i]) {
+                next.replToLan = ciOf(resp_dir_llc.bits.addr) == cfg_ci;
+                DsIdx nds;
+                nds.set(resp_dir_llc.bits.addr, ohToUInt(resp_dir_llc.bits.wayOH));
+                next.ds = nds;
+            }
+
+            // sfRespHit 副作用
+            if (sf_hit[i]) {
+                next.needSnp = resp_dir_sf.bits.meta != 0;
+                next.alrReplSF = true;
+                next.dir.sf.wayOH = resp_dir_sf.bits.wayOH;
+                next.dir.sf.meta = resp_dir_sf.bits.meta;
+                next.dir.sf.hit = resp_dir_sf.bits.hit;
+            } else if (next.state == replst::kFree) {
+                next.needSnp = false;
+                next.alrReplSF = false;
+            }
+
+            // cmRespData 副作用：改写为 wriLLC 任务
+            const bool cmRespDataHit =
+                cmRespHit && dc::tiValid(cm_resp.bits.taskInst) &&
+                dc::tiChannel(cm_resp.bits.taskInst) == kChDat;
+            if (cmRespDataHit) {
+                const bool dirty = (dc::tiResp(cm_resp.bits.taskInst) >> 2) & 1;  // passDirty
+                next.wriSF = false;
+                next.wriLLC = true;
+                next.dir.llc.hit = false;
+                next.dir.llc.meta = dirty ? kStUD : kStSC;
+            }
+
+            // alloc 覆盖（原 reg update 的 alloc 分支）
+            if (allocFire) {
+                const auto& ab = alloc_out[i].bits;
+                ReplReg a{};
+                a.dir = ab.dir;
+                a.hnTxnID = ab.hnTxnID;
+                a.qos = ab.qos;
+                a.wriSF = ab.wriSF;
+                a.wriLLC = ab.wriLLC;
+                a.directAllocSF = ab.directAllocSF;
+                a.replHnTxnID = ab.hnTxnID;
+                a.state = next.state;  // 状态机已按 alloc 计算
+                n[i] = a;
+            } else {
+                n[i] = next;
+            }
+        }
+        return n;
+    };
 }
 }  // namespace zj::dj
