@@ -15,6 +15,7 @@ void comb(M& top) {
 
 template <class M>
 void edge(M& top) {
+    top.eval();  // 沉定 comb 之后的输入 poke（引擎守卫预过滤要求 clk 脉冲前组合稳态）
     top.clk.set(1);
     top.eval();
 }

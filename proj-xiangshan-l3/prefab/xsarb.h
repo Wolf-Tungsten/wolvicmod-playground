@@ -50,50 +50,62 @@ public:
 
     REG(uint32_t, vip);
     WIRE(bool, w_move);
+    // 各路 valid 的密集拷贝（perf-breakdown §25 SoA）：chosen/in_rdy/w_move
+    // 只依赖 valid 位——改读 w_v 后，in 中任一路 bits 翻动不再唤醒它们，
+    // 且扫描从跨步读 Valid<T> 变成连续 bool。in 的读者只剩 w_v 自身与
+    // out（bits 本来就要随数据翻动）。
+    WIRE(RdyArr, w_v);
 
     VipArb() {
-        chosen.assign().reads(vip, in) = [](auto src) -> uint32_t {
-            auto [vip, in] = src;
-            if (in[vip].valid) return vip;
+        w_v.assign().reads(in) = [](auto src) {
+            auto [in] = src;
+            RdyArr v{};
+            for (uint32_t i = 0; i < N; ++i) v[i] = in[i].valid;
+            return v;
+        };
+        chosen.assign().reads(vip, w_v) = [](auto src) -> uint32_t {
+            auto [vip, w_v] = src;
+            if (w_v[vip]) return vip;
             for (uint32_t i = 0; i < N; ++i)
-                if (in[i].valid) return i;
+                if (w_v[i]) return i;
             return 0;  // OHToUInt(0) = 0
         };
         out.assign().reads(in, chosen) = [](auto src) {
             auto [in, chosen] = src;
             ValidT o;
-            for (uint32_t i = 0; i < N; ++i) o.valid = o.valid || in[i].valid;
-            // chisel Mux1H(selPtrOH)：无授权时输出零值
+            // chosen 指向首个 valid 路（无 valid 时归 0），o.valid 等价于
+            // 全路 valid 归约；无授权时输出零值（chisel Mux1H(selPtrOH)）
+            o.valid = in[chosen].valid;
             o.bits = o.valid ? in[chosen].bits : T{};
             return o;
         };
-        in_rdy.assign().reads(in, chosen, out_rdy) = [](auto src) {
-            auto [in, chosen, out_rdy] = src;
+        in_rdy.assign().reads(w_v, chosen, out_rdy) = [](auto src) {
+            auto [w_v, chosen, out_rdy] = src;
             RdyArr rdy{};
-            for (uint32_t i = 0; i < N; ++i) rdy[i] = out_rdy && in[i].valid && chosen == i;
+            if (out_rdy && w_v[chosen]) rdy[chosen] = true;
             return rdy;
         };
         // 指针转移门（perf-breakdown §22：原 w_vip_req/w_other_v/w_out_fire
         // 三条单消费中转内联）
-        w_move.assign().reads(vip, in, out, out_rdy) = [](auto src) {
-            auto [vip, in, out, out_rdy] = src;
+        w_move.assign().reads(vip, w_v, out, out_rdy) = [](auto src) {
+            auto [vip, w_v, out, out_rdy] = src;
             bool other_v = false;
             for (uint32_t i = 0; i < N; ++i)
-                if (i != vip && in[i].valid) {
+                if (i != vip && w_v[i]) {
                     other_v = true;
                     break;
                 }
             if (!other_v) return false;
-            return in[vip].valid ? (out.valid && out_rdy) : true;
+            return w_v[vip] ? (out.valid && out_rdy) : true;
         };
         // 原 w_next_vip 中转内联：vip 之上最低 valid（highValidMask 优先），
         // 无则绕回 vip 之下的最低 valid（lowValidMask）
-        vip.update().on(posedge(clk)).en(w_move).reads(vip, in) = [](auto src) {
-            auto [vip, in] = src;
+        vip.update().on(posedge(clk)).en(w_move).reads(vip, w_v) = [](auto src) {
+            auto [vip, w_v] = src;
             for (uint32_t i = vip + 1; i < N; ++i)
-                if (in[i].valid) return i;
+                if (w_v[i]) return i;
             for (uint32_t i = 0; i < vip; ++i)
-                if (in[i].valid) return i;
+                if (w_v[i]) return i;
             return vip;
         };
     }

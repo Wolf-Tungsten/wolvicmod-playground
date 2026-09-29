@@ -50,6 +50,7 @@ extern "C" void wolvic_zj_step(const svBitVecVal* in_pack, svBitVecVal* out_pack
     zj::WolvicZjTop& m = wzj::model();
     const wzj::InPack in = wzj::fromSv<std::tuple_size<wzj::InPack>::value>(in_pack, wzj::kInW);
     wzj::unpackInputs(m, in);
+    m.eval();  // 输入沉定（§5.2 守卫预过滤约定：clk 脉冲前组合须达稳态）
     m.clk.set(1);
     m.eval();  // posedge：采样边沿前输入，提交状态，组合稳态
     const wzj::OutPack out = wzj::packOutputs(m);
