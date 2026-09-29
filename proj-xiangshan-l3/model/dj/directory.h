@@ -236,6 +236,13 @@ public:
     // ---- 锁/预留次态 ----
     WIRE(LockArr, w_lock_next);
     WIRE(LockArr, w_rsv_next);
+    // ---- 静止门（perf-breakdown §23） ----
+    WIRE(bool, w_sft_any);  // sft：任一级非零 || d0 新 fire
+    WIRE(bool, w_req_d2);   // d3 使能 = req(D2)
+    WIRE(bool, w_req_d3);   // d4 使能 = req(D3)
+    WIRE(bool, w_bp_any);   // bp：本拍 d1d4 匹配 || 旧 d1d4 未清
+    WIRE(bool, w_lock_en);  // lock_tab：reqD3 || unlock
+    WIRE(bool, w_rsv_en);   // rsv_tab：pendAlloc || direct 写 || unlock（llc 恒 false）
 
     DirectoryBase() {
         meta_ram.clk = clk;
@@ -510,15 +517,30 @@ private:
                 }
                 return next;
             };
-            rsv_tab.update().on(posedge(clk)).reads(rsv_tab, w_rsv_next, w_pend_d3, w_wr_kind,
+            // 静止门（§23）：候选与原内部条件相同（pendAlloc || direct ||
+            // unlock.valid）——clr/reserve 两写通道分别是两者的与项，门关闭时
+            // 原 lambda 恒选旧值，跳过等价。
+            w_rsv_en.assign().reads(w_pend_d3, w_wr_kind, unlock) = [](auto src) {
+                auto [pend, k, unlock] = src;
+                return pend.pendAlloc || k.direct || unlock.valid;
+            };
+            rsv_tab.update().on(posedge(clk)).en(w_rsv_en).reads(rsv_tab, w_rsv_next, w_pend_d3, w_wr_kind,
                                                     unlock) = [](auto src) {
                 auto [rsv_tab, w_rsv_next, pend, k, unlock] = src;
                 return (pend.pendAlloc || k.direct || unlock.valid) ? w_rsv_next : rsv_tab;
             };
         } else {
             w_rsv_next = rsv_tab;  // llc：恒零占位（RTL 为 WireInit 0）
+            w_rsv_en = false;
         }
-        lock_tab.update().on(posedge(clk)).reads(lock_tab, w_lock_next, sft,
+        // 静止门（§23）：候选与原内部条件相同（reqD3 || unlock.valid）——
+        // unlHit ⊆ unlock.valid、setEvt ⊆ reqD3，门关闭时原 lambda 恒选旧值。
+        w_lock_en.assign().reads(sft, unlock) = [](auto src) {
+            auto [sft, unlock] = src;
+            const bool reqD3 = (((sft.read | sft.write) >> 1) & 1u) != 0;
+            return reqD3 || unlock.valid;
+        };
+        lock_tab.update().on(posedge(clk)).en(w_lock_en).reads(lock_tab, w_lock_next, sft,
                                                  unlock) = [](auto src) {
             auto [lock_tab, w_lock_next, sft, unlock] = src;
             const bool reqD3 = (((sft.read | sft.write) >> 1) & 1u) != 0;
@@ -528,7 +550,14 @@ private:
 
     void registerState() {
         // 移位流水：三条移位器 + req 载荷同拍更新（原 4 条 update）
-        sft.update().on(posedge(clk)).reads(sft, w_rec, w_wr_fire, w_read_d0, write,
+        // 静止门（§23）：候选 = 任一级非零 || d0 新 fire。移位器右移/载荷前移
+        // 要求移位器非零，新项入 bit3/req[3] 要求本拍 d0 fire；rec.fire 也以
+        // 两者之一为前提（repl_d0 ⊆ 移位器非零）。
+        w_sft_any.assign().reads(sft, w_wr_fire, w_read_d0) = [](auto src) {
+            auto [sft, w_wr_fire, w_read_d0] = src;
+            return ((sft.read | sft.write | sft.repl) != 0) || w_wr_fire || w_read_d0;
+        };
+        sft.update().on(posedge(clk)).en(w_sft_any).reads(sft, w_rec, w_wr_fire, w_read_d0, write,
                                             read) = [](auto src) {
             auto [sft, rec, w_wr_fire, w_read_d0, write, read] = src;
             Sft next;
@@ -548,7 +577,13 @@ private:
         };
         // d2→d3（en = req(D2)）；replWay/unuseWay/selIsUsing 由 mes/useWay 单链
         // 派生（原 w_repl_way_d2/w_unuse_way_d2/w_sel_is_using_d2），内联
-        d3.update().on(posedge(clk)).reads(sft, d3, w_repl_mes_d2, w_use_way_d2) = [](auto src) {
+        // 静止门（§23）：候选即原内部 en（req(D2)）——门关闭时原 lambda 恒返回
+        // 旧值，跳过等价。
+        w_req_d2.assign().reads(sft) = [](auto src) {
+            auto [sft] = src;
+            return (((sft.read | sft.write) >> 2) & 1u) != 0;
+        };
+        d3.update().on(posedge(clk)).en(w_req_d2).reads(sft, d3, w_repl_mes_d2, w_use_way_d2) = [](auto src) {
             auto [sft, d3, w_repl_mes_d2, w_use_way_d2] = src;
             const bool en = (((sft.read | sft.write) >> 2) & 1u) != 0;
             if (!en) return d3;
@@ -558,13 +593,26 @@ private:
                       ((w_use_way_d2 >> replWay) & 1u) != 0};
         };
         // 前递寄存
-        bp.update().on(posedge(clk)).reads(w_match, d4, bp) = [](auto src) {
+        // 静止门（§23）：候选 = 本拍 d1d4 匹配 || 旧 d1d4 未清。bp.d1d4 每拍
+        // 无条件重赋（RegNext(m.d1d4)，自清），上拍置位本拍必清——旧值项不
+        // 可漏（同 §21 commit 的教训）。mes 仅在本拍匹配时改写。
+        w_bp_any.assign().reads(w_match, bp) = [](auto src) {
+            auto [m, bp] = src;
+            return m.d1d4 || bp.d1d4;
+        };
+        bp.update().on(posedge(clk)).en(w_bp_any).reads(w_match, d4, bp) = [](auto src) {
             auto [m, d4, bp] = src;
             return Bp{m.d1d4, m.d1d4 ? d4.newReplMes : bp.mes};
         };
         // d3→d4（en = req(D3)）；newReplMes/resp 组合链（原 w_new_repl_mes_d3/
         // w_resp_d3）仅在此被采样，内联
-        d4.update().on(posedge(clk)).reads(sft, d4, d3, tag_ram.resp, meta_ram.resp, w_set_d3,
+        // 静止门（§23）：候选即原内部 en（req(D3)）——门关闭时原 lambda 恒返回
+        // 旧值，跳过等价。
+        w_req_d3.assign().reads(sft) = [](auto src) {
+            auto [sft] = src;
+            return (((sft.read | sft.write) >> 1) & 1u) != 0;
+        };
+        d4.update().on(posedge(clk)).en(w_req_d3).reads(sft, d4, d3, tag_ram.resp, meta_ram.resp, w_set_d3,
                                            w_sel_way_d3, w_hit_d3, cfg_bank_id,
                                            dir_bank) = [](auto src) {
             auto [sft, d4, d3, tag_resp, meta_resp, w_set_d3, sel, h, cfg_bank_id, dir_bank] = src;

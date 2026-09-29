@@ -87,7 +87,18 @@ AxiDataBuffer::AxiDataBuffer() {
     stage2.deq_rdy = axi_w_rdy;
 
     // ---- 状态漏斗 ----
-    st.update().on(posedge(clk))
+    // 静止门（§23 续）：候选 = alloc fire || 读 fire || icn 有 flit || from_cm
+    // 有请求 || 回收延迟链未排空（rel_cnt>0）|| icn 接收寄存未清。旁路排查：
+    // icn.valid 按 txn_id 命中 recv_cnt 累计/落 RAM，不看 ctrl_valid（广播命
+    // 中类，必须入候选）；rx_vld_reg=RegNext(icn.valid) 自清，旧值项不可漏；
+    // rel_cnt 上拍非零本拍必回表并清零（self-clear 同 validD1）；tx_req_vld 的
+    // 清除要求 w_release。w_release⊆w_rdr_fire、w_cancel⊆rx_vld_reg，无需单列。
+    w_any.assign().reads(st, w_alloc_fire, w_rdr_fire, icn, from_cm) = [](auto src) {
+        auto [st, w_alloc_fire, w_rdr_fire, icn, from_cm] = src;
+        return w_alloc_fire || w_rdr_fire || icn.valid || from_cm.valid || st.rel_cnt > 0 ||
+               st.rx_vld_reg;
+    };
+    st.update().on(posedge(clk)).en(w_any)
         .reads(st, alloc, w_req_num, w_alloc_fire, icn, from_cm, w_rdr_fire,
                w_rdr_last, w_release, w_cancel, w_allow_new) = [](auto src) {
             auto [st, alloc, w_req_num, w_alloc_fire, icn, from_cm, w_rdr_fire,

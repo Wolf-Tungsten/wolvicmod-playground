@@ -94,6 +94,8 @@ public:
     WIRE(S0InArr, w_s0_in);
     WIRE(BoolArr, w_alloc_rdy_all);
     WIRE(BoolArr, w_lock_all);
+    // 整条 update 的静止门（perf-breakdown §23）
+    WIRE(bool, w_any);
 
     TaskBuffer();
 };
@@ -212,6 +214,9 @@ public:
     WIRE(U32Arr4, w_free_vec2);
     WIRE(U8Arr4, w_repl_sel_way);
     WIRE(BoolArr4, w_req_pos_fire);
+    // 静止门（perf-breakdown §23）：s1 / entries 两条 update 各一条
+    WIRE(bool, w_s1_any);
+    WIRE(bool, w_ent_any);
 
     PosTable();
 };
@@ -399,7 +404,21 @@ TaskBuffer<N>::TaskBuffer() {
 
     // N 项状态（一条 update 循环算 next；nid/retryNum/timeout/validD1 的
     // RegNext 语义全部读旧值）
-    entries.update().on(posedge(clk)).reads(entries, alloc_arb.out, chi_task_in,
+    // 静止门（§23）：候选 = ∃非空闲项 || ∃validD1 || alloc fire。validD1 是
+    // state 的一拍延迟且每拍无条件重赋（释放后下一拍才自清）——漏掉它会让
+    // 末项释放后 validD1 永远滞留（rel/othRel 旁路写通道）。timeout 同理派生
+    // 自 retryNum，但 retryNum 变化的拍该项必非空闲或 validD1 未清，候选已
+    // 覆盖。其余写通道（nid/retryNum/状态机/wakeHit/sleep/retry）均以非空闲
+    // 或 inFire 为前提。
+    w_any.assign().reads(entries, alloc_arb.out) = [](auto src) {
+        auto [entries, alloc_out] = src;
+        for (uint32_t i = 0; i < kEntries; ++i)
+            if (entries[i].task.state != taskst::kFree || entries[i].validD1 ||
+                alloc_out[i].valid)
+                return true;
+        return false;
+    };
+    entries.update().on(posedge(clk)).en(w_any).reads(entries, alloc_arb.out, chi_task_in,
                                             chi_task_s0_rdy, has_lock_reg, w_lock_all,
                                             s0_arb.in_rdy, retry_s1, sleep_s1, wakeup) =
         [](auto src) {

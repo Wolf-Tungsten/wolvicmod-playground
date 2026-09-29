@@ -65,6 +65,8 @@ private:
     };
 
     REG(St, st);
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 
     static uint32_t ptrOf(uint32_t oh) {
         for (uint32_t i = 0; i < Size; ++i)
@@ -118,6 +120,8 @@ private:
     WIRE(bool, w_enq_rdy);
     WIRE(bool, w_enq_fire);  // ipipe.enq.fire
     WIRE(bool, w_deq_fire);  // oqueue.deq.fire
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 };
 
 template <uint32_t Size>
@@ -130,7 +134,19 @@ VipTable<Size>::VipTable() {
         o.tag   = st.table[ptr];
         return o;
     };
-    st.update().on(posedge(clk)).reads(st, update) = [](auto src) {
+    // 静止门（§23 续）：候选 = 有 update || 指针悬空（ptr 项失效且尚有 valid）。
+    // valids/table 的一切变化都要求 update.valid；ptr_oh 的搬移由 valids 现态
+    // 驱动（上拍 rel 清掉 ptr 项后本拍自走，不要求本拍 update.valid）——悬空
+    // 项不可漏（DirectoryBase sft 移位器排空白清同款）。
+    w_any.assign().reads(st, update) = [](auto src) {
+        auto [st, update] = src;
+        if (update.valid) return true;
+        if (st.valids[ptrOf(st.ptr_oh)]) return false;
+        for (uint32_t i = 0; i < Size; ++i)
+            if (st.valids[i]) return true;
+        return false;
+    };
+    st.update().on(posedge(clk)).en(w_any).reads(st, update) = [](auto src) {
         auto [st, update] = src;
         St next = st;
         // 首个空闲项（PriorityEncoderOH(!valids)：全占用时出零，enq 不命中）
@@ -235,7 +251,18 @@ EjectBuffer<FlitT, Size, IsDat>::EjectBuffer() {
         return oqueue_deq.valid && deq_rdy;
     };
 
-    st.update().on(posedge(clk)).reads(st, enq, w_tag, w_enq_rdy, w_enq_fire, w_deq_fire) =
+    // 静止门（§23 续）：候选 = enq.valid || deq fire || upd_valid/upd_rel 与本拍
+    // 源值不一致。upd_valid=RegNext(enq.valid)、upd_rel=RegNext(enq_rdy) 均为
+    // 自清打拍，用"旧值≠本拍源"精确覆盖置位/清零两方向（upd_rel 空闲稳态为
+    // true，单看旧值会漏 false→true 回程）；upd_tag 为 RegEnable(enq.valid)，
+    // enq 阻塞保持期间环上后续同向 flit 可使 tag 变化——enq.valid 项不可漏。
+    // （w_enq_fire ⊆ enq.valid，empties 变化被两项 fire 覆盖。）
+    w_any.assign().reads(st, enq, w_enq_rdy, w_deq_fire) = [](auto src) {
+        auto [st, enq, w_enq_rdy, w_deq_fire] = src;
+        return enq.valid || w_deq_fire || st.upd_valid != enq.valid ||
+               st.upd_rel != w_enq_rdy;
+    };
+    st.update().on(posedge(clk)).en(w_any).reads(st, enq, w_tag, w_enq_rdy, w_enq_fire, w_deq_fire) =
         [](auto src) {
             auto [st, enq, w_tag, w_enq_rdy, w_enq_fire, w_deq_fire] = src;
             St next = st;

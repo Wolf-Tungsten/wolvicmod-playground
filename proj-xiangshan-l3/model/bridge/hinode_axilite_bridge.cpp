@@ -247,7 +247,21 @@ HiNodeAxiLiteBridge::HiNodeAxiLiteBridge() {
     };
 
     // ---- CM 状态阵列：一条 update 循环算全数组 next（一切判定读旧值）----
-    cms.update().on(posedge(clk))
+    // 静止门（§23 续）：候选 = ∃有效项 || ∃wk_vld_reg/wait_set_en 未清 || 本拍
+    // 新入队。旁路排查：cmNext 的 payload 事件累积全部在 st.valid 分支内，
+    // wk_all 广播命中也以本项 valid 为前提（无 comp_ack_hit 类旁路）；
+    // wk_vld_reg=RegNext(cmWakeupVld) 自清——项完成（valid 撤）与被打拍唤醒
+    // 同拍时 valid 已非而 wk_vld_reg 仍置位，waiting 照常 -1，漏掉会丢这次
+    // 递减（validD1 同款）；wait_set_en=RegNext(reqFire) 同理自清（置位时项
+    // 必 valid，列入作保守冗余）。
+    w_cms_any.assign().reads(cms, w_cm_req) = [](auto src) {
+        auto [cms, cm_req] = src;
+        for (uint32_t i = 0; i < kOutst; ++i)
+            if (cms[i].valid || cms[i].wk_vld_reg || cms[i].wait_set_en || cm_req[i].valid)
+                return true;
+        return false;
+    };
+    cms.update().on(posedge(clk)).en(w_cms_any)
         .reads(cms, w_cm_req, w_cm_rx_resp, w_cm_rx_data, w_cm_b, w_cm_rd_fire,
                w_cm_rd_last, w_wait_num, wk_all, w_rsp_fire, w_aw_fire, w_ar_fire,
                w_w_fire) = [](auto src) {

@@ -211,7 +211,22 @@ PosTable::PosTable() {
     };
 
     // ---- s1 流水 + 控制寄存器（整项；alloc 经 per-set 门控的 alloc_s0_valid） ----
-    s1.update().on(posedge(clk)).reads(s1, alloc_s0_valid, alloc_s0_addr, alloc_s0_channel,
+    // 静止门（§23）：候选 = alloc_s0 || reqPoS fire || upd_tag 命中本 bank ||
+    // 上拍脉冲未清。allocValid/sleep/block/hnIdxValid/posRespValid 均为一拍脉冲
+    // （每拍无条件重赋），上拍置位本拍必清——allocValid/sleep/block 置位时
+    // hnIdxValid 同拍置位（三者都是 allocS0 的与项），故旧脉冲项只需
+    // hnIdxValid || posRespValid。lock 的清理由 upd_tag 驱动（纯 hnIdx 匹配、
+    // 不看 lock 旧值的旁路通道），upd_tag 命中本 bank 即入候选。
+    w_s1_any.assign().reads(s1, alloc_s0_valid, upd_tag, dir_bank, w_req_pos_fire) =
+        [](auto src) {
+            auto [s1, alloc_s0_valid, upd_tag, dir_bank, fire] = src;
+            if (alloc_s0_valid) return true;
+            if (upd_tag.valid && hnIdxDirBank(upd_tag.bits.hnIdx) == dir_bank) return true;
+            for (uint32_t s = 0; s < 4; ++s)
+                if (fire[s] || s1[s].hnIdxValid || s1[s].posRespValid) return true;
+            return false;
+        };
+    s1.update().on(posedge(clk)).en(w_s1_any).reads(s1, alloc_s0_valid, alloc_s0_addr, alloc_s0_channel,
                                        w_block_s0, w_free_vec, w_mat_tag_vec, w_req_pos_fire,
                                        w_repl_sel_way, upd_tag, dir_bank) = [](auto src) {
         auto [s1, alloc_s0_valid, alloc_s0_addr, alloc_s0_channel, block_s0, free_vec, mat_tag,
@@ -249,7 +264,22 @@ PosTable::PosTable() {
     };
 
     // ---- 64 项表项（alloc/updTag/clean 驱动；wakeup 为 RegNext，读旧 state） ----
-    entries.update().on(posedge(clk)).reads(entries, s1, retry_s1, req_pos_vec, w_req_pos_fire,
+    // 静止门（§23）：候选 = alloc（s1 拍 allocValid 或 reqPoS fire）||
+    // upd_tag/clean 命中本 bank || 上拍 wakeup 未清。updTagHit/cleanHit 为纯
+    // hnIdx 匹配、不看表项有效性（同 §21 commit 的 comp_ack_hit 旁路），必须
+    // 入候选；wakeup 每拍无条件重赋（RegNext(wake)），上拍置位本拍必清。
+    w_ent_any.assign().reads(entries, s1, w_req_pos_fire, upd_tag, clean, dir_bank) =
+        [](auto src) {
+            auto [entries, s1, fire, upd_tag, clean, dir_bank] = src;
+            if (upd_tag.valid && hnIdxDirBank(upd_tag.bits.hnIdx) == dir_bank) return true;
+            if (clean.valid && hnIdxDirBank(clean.bits.hnIdx) == dir_bank) return true;
+            for (uint32_t s = 0; s < 4; ++s)
+                if (s1[s].allocValid || fire[s]) return true;
+            for (const auto& e : entries)
+                if (e.wakeup) return true;
+            return false;
+        };
+    entries.update().on(posedge(clk)).en(w_ent_any).reads(entries, s1, retry_s1, req_pos_vec, w_req_pos_fire,
                                             w_repl_sel_way, upd_tag, clean, dir_bank,
                                             cfg_bank_id) = [](auto src) {
         auto [entries, s1, retry_s1, req_pos_vec, fire, sel_way, upd_tag, clean, dir_bank,

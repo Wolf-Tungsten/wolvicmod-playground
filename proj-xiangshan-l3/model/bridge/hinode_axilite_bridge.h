@@ -227,6 +227,8 @@ private:
     WIRE(uint32_t, w_wait_num);
     WIRE(bool, w_aw_out_fire);
     WIRE(bool, w_wsel_vld);
+    // 整条 cms update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_cms_any);
 };
 
 }  // namespace zj::bridge

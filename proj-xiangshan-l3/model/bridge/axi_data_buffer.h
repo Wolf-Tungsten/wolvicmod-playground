@@ -136,6 +136,8 @@ private:
     WIRE(bool, w_release);    // freelist release.valid
     WIRE(bool, w_cancel);     // freelist cancel.valid
     WIRE(bool, w_allow_new);
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 };
 
 }  // namespace zj::bridge

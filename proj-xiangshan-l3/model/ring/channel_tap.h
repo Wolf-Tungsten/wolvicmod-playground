@@ -77,6 +77,8 @@ private:
     WIRE(bool, w_available_slot);
     WIRE(bool, w_inject_rdy);
     WIRE(bool, w_inject_fire);
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 };
 
 // ---------------- RingPipe：无 tap 通道的纯打拍 ----------------
@@ -100,6 +102,8 @@ private:
     };
 
     REG(St, st);
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 };
 
 // ---------------- ChannelTap：双方向 tap + EjectBuffer + RR 合流 ----------------
@@ -185,7 +189,18 @@ SingleChannelTap<FlitT>::SingleChannelTap() {
         return st.out;
     };
 
-    st.update().on(posedge(clk))
+    // 静止门（§23 续）：候选 = 状态机非 kNormal || 防饿死计数非零 || 输出打拍
+    // 未清空 || 环槽/注入有活动。旁路排查：out.valid/out.rsvd_valid 均每拍无条
+    // 件重赋（RegNext 自清），上拍置位本拍必清——旧值项不可漏；
+    // kNormal→kInjectReserved 由 counter[3] 驱动（counter≠0 覆盖）；
+    // kInjectReserved→kWaitSlot 在无 rsvd 时自走（state≠kNormal 覆盖）；
+    // flit/rsvd_payload 为 RegEnable（事件覆盖）。
+    w_any.assign().reads(st, rx, inject) = [](auto src) {
+        auto [st, rx, inject] = src;
+        return st.state != kNormal || st.counter != 0 || st.out.valid || st.out.rsvd_valid ||
+               rx.valid || rx.rsvd_valid || inject.valid;
+    };
+    st.update().on(posedge(clk)).en(w_any)
         .reads(st, rx, inject, w_inject_rdy, w_inject_fire, w_eject_fire, w_rsvd_mark) =
         [](auto src) {
         auto [st, rx, inject, w_inject_rdy, w_inject_fire, w_eject_fire, w_rsvd_mark] = src;
@@ -228,7 +243,14 @@ RingPipe<FlitT>::RingPipe() {
         auto [st] = src;
         return st.slot;
     };
-    st.update().on(posedge(clk)).reads(st, rx) = [](auto src) {
+    // 静止门（§23 续）：候选 = 环槽有活动 || 打拍未清空。slot.valid/rsvd_valid
+    // 每拍无条件重赋（RegNext 自清），旧值项不可漏；flit/rsvd_payload 为
+    // RegEnable（事件覆盖）。
+    w_any.assign().reads(st, rx) = [](auto src) {
+        auto [st, rx] = src;
+        return rx.valid || rx.rsvd_valid || st.slot.valid || st.slot.rsvd_valid;
+    };
+    st.update().on(posedge(clk)).en(w_any).reads(st, rx) = [](auto src) {
         auto [st, rx] = src;
         St next = st;
         next.slot.valid = rx.valid;  // RegNext

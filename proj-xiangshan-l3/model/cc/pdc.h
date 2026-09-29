@@ -58,6 +58,8 @@ private:
     REG(St, st);
 
     WIRE(bool, w_enq_fire);
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 };
 
 // ---------------- PdcRx ----------------
@@ -88,6 +90,8 @@ private:
     REG(St, st);
 
     WIRE(bool, w_deq_fire);
+    // 整条 update 的静止门（perf-breakdown §23 续）
+    WIRE(bool, w_any);
 };
 
 template <class F>
@@ -107,7 +111,14 @@ PdcTx<F>::PdcTx() {
         auto [enq, st] = src;
         return enq.valid && st.tokens != 0;
     };
-    st.update().on(posedge(clk)).reads(st, enq, pdc_grant, w_enq_fire) = [](auto src) {
+    // 静止门（§23 续）：候选 = enq fire || 对端 grant || txv/rxg 未清。
+    // txv=RegNext(enqFire)、rxg=RegNext(grant) 均自清，旧值项不可漏；tokens
+    // 的变化要求 fire 或 rxg；txd 为 RegEnable(fire)。
+    w_any.assign().reads(st, pdc_grant, w_enq_fire) = [](auto src) {
+        auto [st, pdc_grant, w_enq_fire] = src;
+        return w_enq_fire || pdc_grant || st.txv || st.rxg;
+    };
+    st.update().on(posedge(clk)).en(w_any).reads(st, enq, pdc_grant, w_enq_fire) = [](auto src) {
         auto [st, enq, pdc_grant, w_enq_fire] = src;
         St next = st;
         if (w_enq_fire && !st.rxg)
@@ -142,7 +153,14 @@ PdcRx<F>::PdcRx() {
         auto [rxq_deq, deq_rdy] = src;
         return rxq_deq.valid && deq_rdy;
     };
-    st.update().on(posedge(clk)).reads(st, pdc, w_deq_fire) = [](auto src) {
+    // 静止门（§23 续）：候选 = pdc.valid || deq fire || rxv/txg 未清。
+    // rxv=RegNext(pdc.valid)、txg=RegNext(deq.fire) 均自清，旧值项不可漏；
+    // rxd 为 RegEnable(pdc.valid)。
+    w_any.assign().reads(st, pdc, w_deq_fire) = [](auto src) {
+        auto [st, pdc, w_deq_fire] = src;
+        return pdc.valid || w_deq_fire || st.rxv || st.txg;
+    };
+    st.update().on(posedge(clk)).en(w_any).reads(st, pdc, w_deq_fire) = [](auto src) {
         auto [st, pdc, w_deq_fire] = src;
         St next = st;
         next.rxv = pdc.valid;

@@ -1034,6 +1034,74 @@ FixedArb（纯组合 3 动作）评估后跳过。
 
 **产物**：perf 采样 `build/perf-ab-arbflat.data`（本轮后）。
 
+## 23. 静止门推广：TaskBuffer / PosTable / DirectoryBase 全覆盖（2026-09-29）
+
+**动机**：§21 只门控了 6 处数组 update，当时把 TaskBuffer/PosTable/
+DirectoryBase 判为"候选几乎恒非空，门控不适用"——这与 §21 自己的测量
+（coremark 下 L3 ~98% 拍静默）矛盾，是错误判断。这三者正是 §22 后的
+HNF 前排热点（TaskBuffer 3.2%、DirectoryBase 2.7%、PosTable 1.9%）。
+本轮补齐，门控覆盖 HNF 全部数组/流水状态 update。
+
+**改法**（同 §21 模式：w_any 归约 wire + `.en()`，lambda 本体不动）：
+
+- **TaskBuffer**（×2）：`∃(state≠kFree || validD1) || ∃alloc`。旁路排查
+  出 `validD1` 是 state 的一拍延迟、每拍自清——末项释放后的清零拍也
+  必须唤醒，否则 validD1 滞留引发 othRel 旁路误触发（本轮最易漏点）。
+- **PosTable**（s1/entries 两条各一门）：候选含 `upd_tag`/`clean` 的
+  hnIdx 纯匹配命中（不看表项有效性，同 §21 comp_ack_hit 教训）与
+  `wakeup` 自清脉冲项。
+- **DirectoryBase**（×4 实例）：`sft` 门 = 移位器任一级非零 || d0 fire；
+  `d3`/`d4` 取精确使能（req(D2)/req(D3) 位）；`bp` 门补 `bp.d1d4` 自清
+  脉冲；`lock_tab`/`rsv_tab` 候选与原 lambda 内部条件逐项相同。
+
+**结果**（孤立回放全程，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 全程 loop | 对 RTL eval 比 |
+|---|---|---|---|
+| §22 终版 | 7.82s | 9.28s | 2.5× |
+| + 本轮 | **6.63s（-15.2%）** | **8.05s（-13.3%）** | **2.2×** |
+
+HNF 桶墙钟 1.32s → 0.48s（-64%），HNF 从第二大桶降为与 CcSocket 同
+量级。新热点全部是"真实工作"：引擎派发 18.8%、prefab 扫描/移位
+（VipArb/Queue/ValidPipe/SRAM）21%、Ring 9.3%、harness 14.7%。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉；`REPLAY_AUDIT=1` 全程审计（覆盖门控最
+易错的"门关闭但状态应变"场景）；proj ctest 17/17（10.5s → 9.1s）；
+proj cosim 51 组。
+
+**产物**：perf 采样 `build/perf-ab-gateall.data`（本轮后）。
+
+## 23b. 静止门推广（续）：Ring / CcSocket / AXI 桥全覆盖（2026-09-29）
+
+**改法**：同 §23 模式推广到 HNF 之外——Ring 200 条 update（30 个
+ChannelTap ×（2 SingleTap + 2 EjectBuffer + 2 VipTable）+ 20 RingPipe）、
+CcSocket 12 条（PdcTx/Rx）、桥 3 条（AxiDataBuffer 64 槽、snode cms 64
+项、hinode cms 8 项）。旁路排查出的典型陷阱（全部计入候选）：
+SingleChannelTap 的 `out.valid/rsvd_valid` 自清打拍；VipTable 指针悬空
+自走（上拍 rel 清掉指针项后本拍指针照常搬移）；EjectBuffer 的
+`upd_rel != w_enq_rdy` 双方向精确门；AxiDataBuffer 的 `icn.valid` 广播
+命中（不看 ctrl_valid，comp_ack_hit 同类）；cms 的 `wk_vld_reg` 自清。
+
+**结果**（孤立回放全程，taskset -c 2，两次取优）：
+
+| 阶段 | 全程 eval | 全程 loop | 对 RTL eval 比 |
+|---|---|---|---|
+| §23 终版 | 6.63s | 8.05s | 2.2× |
+| + 本轮 | **5.00s（-24.6%）** | **6.28s（-22.0%）** | **1.7×** |
+
+Ring 桶 9.3% → 6.6%（墙钟 -55%），AXI 桥 5.5% → 0.6%（-92%）。层分布
+前列收敛为：引擎（派发 15.0% + 脏检测/边沿/守卫 ~18.7%）、prefab 真实
+扫描工作（22.3%）、harness（18.8%）、HNF（7.3%）。**模型全部业务状态
+update 现已尽数带静止门**（仅存 dongjiang.cpp 三个标量 reg，按 §22
+教训不值得加门）。
+
+**验证**（全部通过）：30k 排与 coremark 全程各 0 失配（全程 5,423,490
+检查）；`--dut=both` 共栖交叉；`REPLAY_AUDIT=1` 全程审计；proj ctest
+17/17（9.1s → 7.2s）；proj cosim 51 组。
+
+**产物**：perf 采样 `build/perf-ab-gatering.data`（本轮后）。
+
 ## 5. 数据产物与复现
 
 **留存的二进制**（对比实验免重建，`make stash-emu NAME=<变体名>` 约定）：
