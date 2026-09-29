@@ -11,9 +11,35 @@ make -C proj-xiangshan-l3 zjrtl-replay DUT=both    # 等价性对拍（逐拍三
 make -C proj-xiangshan-l3 zjrtl-replay DUT=wolvic  # DUT=rtl|wolvic：孤立计时
 ```
 
-trace（`build/trace/cm_full.txt`，coremark 全程 31.7 万拍）已在库内；RTL
-行为变化后需 `make replay-top` 再生（需先用 `make emu TRACE=fst` 构建的
-emu dump FST）。`REPLAY_AUDIT=1 <二进制>` 开读集审计。
+`REPLAY_AUDIT=1 <二进制>` 开读集审计。
+
+### trace 生成（`build/trace/cm_full.txt`）
+
+trace 已随库提供（coremark 全程 316,748 拍，177 列）；**RTL 侧行为变化后必须再生**，完整流程：
+
+```bash
+make -C proj-xiangshan-l3 emu TRACE=fst   # ① 重建带 FST 波形的 emu（只重 verilate，~23min）
+make -C proj-xiangshan-l3 replay-top      # ② 一键完成下述全链
+```
+
+`replay-top` 内部步骤：
+
+1. 用带波形的 emu 跑 coremark 全程并 dump FST 到 `build/trace/cm_full.fst`
+   （`-b 0 -e 400000 -C 400000 --dump-wave`；coremark ~31.7 万拍自然
+   HIT GOOD TRAP，FULLN 只是防死循环上限）；
+2. `verify/trace/extract_top_trace.cpp`（C++ libfst 直读 FST）提取
+   WolvicZjTop 三边界信号——L2 CHI 缝六通道 + mem AXI + cfg AXI——
+   重建逐拍文本 trace `cm_full.txt`；
+3. 自动跑 `ctest -R wolvic_top_replay`：用新 trace 回放 wolvic 模型
+   逐拍比对，验证 trace 本身可用。
+
+注意：`--dump-wave` 只在 `-b/-e` 窗口内 dump；trace 里 bits 仅在
+valid=1 时有意义（difftest 开 `RANDOMIZE_REG_INIT`，valid=0 时 RTL 的
+bits 是随机初值，比对器按 don't-care 处理）。
+
+前端译码级的 P2 回放用另一条 trace：`make replay [N=20000]`（emu dump
+前 N 拍 FST → `fst2vcd | verify/trace/extract_cc_trace.py` →
+`build/trace/cc_front.txt` → `ctest -R test_trace_replay`）。
 
 ## ② 整机 emu（XiangShan + wolvic L3 vs XiangShan + RTL L3，difftest）
 

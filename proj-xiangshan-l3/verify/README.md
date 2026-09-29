@@ -16,10 +16,12 @@ make zjrtl-rtl                 # 生成 ZhujiangReplayTop RTL（mill，一次性
 make zjrtl-replay DUT=both     # 对拍；DUT=rtl|wolvic 为孤立性能剖析
 ```
 
-trace 再生（RTL 侧行为变化后必须重做）：`make replay-top` —— emu 全程
-dump FST → `trace/extract_top_trace.cpp`（C++ libfst 直读）→
-cm_full.txt → ctest -R wolvic_top_replay。前端译码级回放（P2）：
-`make replay`（→ `trace/extract_cc_trace.py` → ctest -R trace_replay）。
+trace 再生（RTL 侧行为变化后必须重做）的完整步骤与注意事项见
+`../README.md` 路径①的"trace 生成"一节（`make emu TRACE=fst` →
+`make replay-top`：emu 全程 dump FST → `trace/extract_top_trace.cpp`
+C++ libfst 直读 → cm_full.txt → 自动 `ctest -R wolvic_top_replay`
+校验）。前端译码级回放（P2）：`make replay`（→ `extract_cc_trace.py` →
+ctest -R trace_replay）。
 
 ## 路径 2：XiangShan 集成 emu（wolvic vs RTL ZhuJiang L3）
 
