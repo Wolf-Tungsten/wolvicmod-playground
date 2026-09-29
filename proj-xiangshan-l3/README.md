@@ -65,6 +65,22 @@ make -C proj-xiangshan-l3 stash-emu NAME=x # 留存二进制到 build/emu-varian
 + difftest，2026-09-29）：**wolvic 272.9s vs RTL 297.6s**，cycleCnt/IPC
 逐值相等（docs/perf-breakdown.md §28）。
 
+## 子仓库版本
+
+| 路径 | 分支 / 基线 | 提交 | 说明 |
+|---|---|---|---|
+| `wolvicmod/` | `main`（Wolf-Tungsten/wolvicmod） | 随主仓演进 | 框架仓，git submodule |
+| `proj-xiangshan-l3/XiangShan/` | `wolvicmod-l3`（fork 自上游 `kunminghu-v3`，基线 `aa6b520`） | `026aaad30` | 我们的改动：BlackBox 集成（WolvicZjBB）+ ZhujiangReplayTop |
+| `XiangShan/difftest/` | `wolvicmod-l3` | `4cd9de795` | 我们的改动：USER_CXXFILES/CXXFLAGS/LDFLAGS 透传钩子 |
+| `XiangShan/XSCache/` |  detached（上游 `addperfevent` 系） | `300515b` | 纯上游，未改 |
+| `XSCache/ZhuJiang/` | `master` | `dfcf696` | L3 本体源码（RTL 侧基准），纯上游 |
+| `XSCache/OpenNCB/` | `master` | `9a83eb7` | 纯上游 |
+| `XiangShan/ready-to-run/` | 上游 `nemu-ci-workloads` 系 | `4cf9983` | coremark 二进制 + nemu ref |
+
+其余 XiangShan 嵌套子模块（rocket-chip/utility/yunsuan/ChiselAIA/
+ChiselIOPMP）为上游钉版，`make init` 后勿动；`XSCache` 内嵌套的
+rocket-chip/utility 不需要初始化（顶层自有副本）。
+
 ## 其它
 
 - `make -C proj-xiangshan-l3 test`：单测回归网（ctest 17 条）
