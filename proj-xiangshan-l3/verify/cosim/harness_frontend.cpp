@@ -275,17 +275,17 @@ int intcmpFrontend(VFrontend& ref, Frontend& dut, uint64_t c) {
     }
     for (int s = 0; s < 4; ++s) {
         const auto* rs = ps[s];
-        const auto& ds = dut.pos_table.sets[s];
+        const auto& ds1 = dut.pos_table.s1.get()[s];
         char nm[64];
         std::snprintf(nm, sizeof nm, "pos[%d].lock", s);
-        dif(nm, rs->__PVT__lockReg, ds.lock_reg.get());
+        dif(nm, rs->__PVT__lockReg, ds1.lock);
         std::snprintf(nm, sizeof nm, "pos[%d].allocS1v", s);
-        dif(nm, rs->__PVT__allocReg_s1_valid, ds.alloc_reg_s1.get().valid);
+        dif(nm, rs->__PVT__allocReg_s1_valid, ds1.allocValid);
         std::snprintf(nm, sizeof nm, "pos[%d].allocWay", s);
-        dif(nm, rs->__PVT__allocWayReg_s1, ds.alloc_way_reg_s1.get());
+        dif(nm, rs->__PVT__allocWayReg_s1, ds1.allocWay);
         for (int j = 0; j < 16; ++j) {
             const PeRef pr = peRef(*rs, j);
-            const PosState& pst = ds.entries[j].state.get();
+            const PosState& pst = dut.pos_table.entries.get()[s * 16 + j].state;
             std::snprintf(nm, sizeof nm, "pos[%d][%d].req", s, j);
             dif(nm, *pr.req, pst.req);
             std::snprintf(nm, sizeof nm, "pos[%d][%d].snp", s, j);
@@ -558,22 +558,22 @@ uint64_t cosimFrontend(uint32_t seed, uint64_t cycles) {
                       << dut.decode.w_cmt_code_s3.get() << " rcd="
                       << (int)dut.decode.w_resp_comp_data_s3.get() << std::dec << " | pos: s0v="
                       << (int)dut.pos_table.alloc_s0_valid.get() << " blk="
-                      << (int)dut.pos_table.sets[0].w_block_s0.get()
-                      << (int)dut.pos_table.sets[1].w_block_s0.get()
-                      << (int)dut.pos_table.sets[2].w_block_s0.get()
-                      << (int)dut.pos_table.sets[3].w_block_s0.get() << " free="
-                      << std::hex << dut.pos_table.sets[0].w_free_vec.get()
-                      << dut.pos_table.sets[1].w_free_vec.get()
-                      << dut.pos_table.sets[2].w_free_vec.get()
-                      << dut.pos_table.sets[3].w_free_vec.get() << std::dec << " mat="
-                      << std::hex << dut.pos_table.sets[0].w_mat_tag_vec.get()
-                      << dut.pos_table.sets[1].w_mat_tag_vec.get()
-                      << dut.pos_table.sets[2].w_mat_tag_vec.get()
-                      << dut.pos_table.sets[3].w_mat_tag_vec.get() << std::dec << " lock="
-                      << (int)dut.pos_table.sets[0].lock_reg.get()
-                      << (int)dut.pos_table.sets[1].lock_reg.get()
-                      << (int)dut.pos_table.sets[2].lock_reg.get()
-                      << (int)dut.pos_table.sets[3].lock_reg.get() << " | refcmt: v="
+                      << (int)dut.pos_table.w_block_s0.get()[0]
+                      << (int)dut.pos_table.w_block_s0.get()[1]
+                      << (int)dut.pos_table.w_block_s0.get()[2]
+                      << (int)dut.pos_table.w_block_s0.get()[3] << " free="
+                      << std::hex << dut.pos_table.w_free_vec.get()[0]
+                      << dut.pos_table.w_free_vec.get()[1]
+                      << dut.pos_table.w_free_vec.get()[2]
+                      << dut.pos_table.w_free_vec.get()[3] << std::dec << " mat="
+                      << std::hex << dut.pos_table.w_mat_tag_vec.get()[0]
+                      << dut.pos_table.w_mat_tag_vec.get()[1]
+                      << dut.pos_table.w_mat_tag_vec.get()[2]
+                      << dut.pos_table.w_mat_tag_vec.get()[3] << std::dec << " lock="
+                      << (int)dut.pos_table.s1.get()[0].lock
+                      << (int)dut.pos_table.s1.get()[1].lock
+                      << (int)dut.pos_table.s1.get()[2].lock
+                      << (int)dut.pos_table.s1.get()[3].lock << " | refcmt: v="
                       << (int)ref.io_cmtTask_valid << " dl="
                       << (uint32_t)ref.io_cmtTask_bits_decList_0
                       << (uint32_t)ref.io_cmtTask_bits_decList_1 << " op=0x" << std::hex

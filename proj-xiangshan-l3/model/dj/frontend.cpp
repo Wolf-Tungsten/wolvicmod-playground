@@ -259,346 +259,241 @@ Block::Block() {
 
 namespace zj::dj {
 
-// ---------------- PosEntry ----------------
-
-PosEntry::PosEntry() {
-    // alloc/updTag/clean 驱动的状态更新
-    state_reg.update().on(posedge(clk)).reads(
-        state_reg, alloc_valid, alloc_addr, alloc_addr_val, alloc_channel, upd_tag, clean,
-        hn_idx) = [](auto src) {
-        auto [state_reg, alloc_valid, alloc_addr, alloc_addr_val, alloc_channel, upd_tag,
-              clean, hn_idx] = src;
-        PosState n = state_reg;
-        const bool updTagHit = upd_tag.valid && upd_tag.bits.hnIdx == hn_idx;
-        const bool cleanHit = clean.valid && clean.bits.hnIdx == hn_idx;
-        if (alloc_valid) {
-            n.tagVal = alloc_addr_val;
-            n.tag = posTagOf(alloc_addr);
-            n.offset = static_cast<uint8_t>(alloc_addr & 0x3F);
-        } else if (updTagHit) {
-            n.tagVal = upd_tag.bits.addrVal;
-            n.tag = posTagOf(upd_tag.bits.addr);
-            n.offset = static_cast<uint8_t>(upd_tag.bits.addr & 0x3F);
-        }
-        if (cleanHit && clean.bits.channel == 0) {
-            n.req = false;
-        } else if (alloc_valid && alloc_channel == 0) {
-            n.req = true;
-        }
-        if (cleanHit && clean.bits.channel == 3) {
-            n.snp = false;
-        } else if (alloc_valid && alloc_channel == 3) {
-            n.snp = true;
-        }
-        // 更新条件：alloc | updTagHit | cleanHit（RTL 同）
-        return (alloc_valid || updTagHit || cleanHit) ? n : state_reg;
-    };
-    // wakeup = RegNext(cleanHit & one & tagVal)
-    wakeup_reg.update().on(posedge(clk)).reads(state_reg, clean, hn_idx) = [](auto src) {
-        auto [state_reg, clean, hn_idx] = src;
-        const bool cleanHit = clean.valid && clean.bits.hnIdx == hn_idx;
-        return cleanHit && state_reg.one() && state_reg.tagVal;
-    };
-    wakeup_addr_reg.update().on(posedge(clk)).reads(state_reg, clean, hn_idx, cfg_bank_id,
-                                                    wakeup_addr_reg) = [](auto src) {
-        auto [state_reg, clean, hn_idx, cfg_bank_id, wakeup_addr_reg] = src;
-        const bool cleanHit = clean.valid && clean.bits.hnIdx == hn_idx;
-        if (cleanHit && state_reg.one() && state_reg.tagVal)
-            return catPosAddr(cfg_bank_id, state_reg.tag, hnIdxPosSet(hn_idx),
-                              hnIdxDirBank(hn_idx));
-        return wakeup_addr_reg;
-    };
-    wakeup.assign().reads(wakeup_reg, wakeup_addr_reg) = [](auto src) {
-        auto [wakeup_reg, wakeup_addr_reg] = src;
-        return Valid<uint64_t>{wakeup_reg, wakeup_addr_reg};
-    };
-    state = state_reg;
-    state_addr.assign().reads(state_reg, hn_idx, cfg_bank_id) = [](auto src) {
-        auto [state_reg, hn_idx, cfg_bank_id] = src;
-        return catPosAddr(cfg_bank_id, state_reg.tag, hnIdxPosSet(hn_idx),
-                          hnIdxDirBank(hn_idx), state_reg.offset);
-    };
-}
-
-// ---------------- PosSet ----------------
-
-PosSet::PosSet() {
-    for (uint32_t i = 0; i < 16; ++i) {
-        auto& e = entries[i];
-        e.clk = clk;
-        e.cfg_bank_id = cfg_bank_id;
-        e.hn_idx.assign().reads(dir_bank, pos_set) = [i](auto src) {
-            auto [dir_bank, pos_set] = src;
-            return hnIdxOf(dir_bank, pos_set, i);
-        };
-        e.upd_tag = upd_tag;
-        e.clean = clean;
-    }
-    combine(w_states, entries,
-            [](PosEntry& e) -> wolvicmod::Out<PosState>& { return e.state; });
-    combine(w_addrs, entries,
-            [](PosEntry& e) -> wolvicmod::Out<uint64_t>& { return e.state_addr; });
-
-    // s0：matTag / free / block
-    w_mat_tag_vec.assign().reads(w_states, alloc_s0_addr) = [](auto src) -> uint32_t {
-        auto [states, alloc_s0_addr] = src;
-        const uint64_t tag = posTagOf(alloc_s0_addr);
-        uint32_t v = 0;
-        for (uint32_t i = 0; i < 16; ++i)
-            if (states[i].valid() && states[i].tagVal && states[i].tag == tag) v |= (1u << i);
-        return v;
-    };
-    w_free_vec.assign().reads(w_states, alloc_reg_s1, alloc_way_reg_s1) =
-        [](auto src) -> uint32_t {
-            auto [states, alloc_reg_s1, alloc_way_reg_s1] = src;
-            const uint32_t useWay = alloc_reg_s1.valid ? ~(1u << alloc_way_reg_s1) : 0xFFFFu;
-            uint32_t v = 0;
-            for (uint32_t i = 0; i < 16; ++i)
-                if (!states[i].valid()) v |= (1u << i);
-            return v & useWay;
-        };
-    w_block_s0.assign().reads(w_mat_tag_vec, w_free_vec, alloc_s0_valid, alloc_s0_addr,
-                              alloc_s0_channel, alloc_reg_s1, lock_reg, req_pos_valid) =
-        [](auto src) {
-            auto [w_mat_tag_vec, w_free_vec, alloc_s0_valid, alloc_s0_addr, alloc_s0_channel,
-                  alloc_reg_s1, lock_reg, req_pos_valid] = src;
-            const bool hasMatTag = w_mat_tag_vec != 0;
-            const bool hasFree = (w_free_vec & 0x3FFFu) != 0;  // way0-13 有 free
-            const bool blockReq = hasMatTag || !hasFree;
-            const bool blockSnp = hasMatTag || !hasFree;  // 无 BBN canNest 恒 false
-            const bool matchReqS1 = alloc_reg_s1.valid &&
-                                    posTagOf(alloc_s0_addr) == posTagOf(alloc_reg_s1.addr);
-            const bool isSnp = alloc_s0_channel == 3;
-            return (isSnp ? blockSnp : blockReq) || matchReqS1 || lock_reg || req_pos_valid;
-        };
-
-    // s1 寄存
-    alloc_reg_s1.update().on(posedge(clk)).reads(alloc_s0_valid, w_block_s0, alloc_s0_addr,
-                                                alloc_s0_channel, alloc_reg_s1) =
-        [](auto src) {
-            auto [alloc_s0_valid, w_block_s0, alloc_s0_addr, alloc_s0_channel,
-                  alloc_reg_s1] = src;
-            AllocS1 n = alloc_reg_s1;
-            n.valid = alloc_s0_valid && !w_block_s0;
-            if (alloc_s0_valid) {
-                n.addr = alloc_s0_addr;
-                n.channel = alloc_s0_channel;
-            }
-            return n;
-        };
-    alloc_way_reg_s1.update().on(posedge(clk)).reads(alloc_s0_valid, w_free_vec,
-                                                    alloc_way_reg_s1) =
-        [](auto src) -> uint8_t {
-            auto [alloc_s0_valid, w_free_vec, alloc_way_reg_s1] = src;
-            if (!alloc_s0_valid) return alloc_way_reg_s1;
-            // freeWay_s0 = PriorityEncoder(freeVec)
-            for (uint32_t i = 0; i < 16; ++i)
-                if ((w_free_vec >> i) & 1u) return static_cast<uint8_t>(i);
-            return 0;
-        };
-    sleep_reg.update().on(posedge(clk)).reads(alloc_s0_valid, w_mat_tag_vec) = [](auto src) {
-        auto [alloc_s0_valid, w_mat_tag_vec] = src;
-        return alloc_s0_valid && w_mat_tag_vec != 0;
-    };
-    block_reg.update().on(posedge(clk)).reads(alloc_s0_valid, w_block_s0) = [](auto src) {
-        auto [alloc_s0_valid, w_block_s0] = src;
-        return alloc_s0_valid && w_block_s0;
-    };
-    hn_idx_valid_reg.update().on(posedge(clk)).reads(alloc_s0_valid) = [](auto src) {
-        auto [alloc_s0_valid] = src;
-        return alloc_s0_valid;
-    };
-    sleep_s1 = sleep_reg;
-    block_s1.assign().reads(block_reg, req_pos_valid) = [](auto src) {
-        auto [block_reg, req_pos_valid] = src;
-        return block_reg || req_pos_valid;
-    };
-    hn_idx_s1.assign().reads(hn_idx_valid_reg, req_pos_valid, alloc_way_reg_s1, dir_bank,
-                             pos_set) =
-        [](auto src) {
-            auto [hn_idx_valid_reg, req_pos_valid, alloc_way_reg_s1, dir_bank, pos_set] = src;
-            return Valid<uint8_t>{hn_idx_valid_reg && !req_pos_valid,
-                                  hnIdxOf(dir_bank, pos_set, alloc_way_reg_s1)};
-        };
-
-    // reqPoS：replSelWay / reqPosFire / posResp / lockReg
-    w_free_vec2.assign().reads(w_states) = [](auto src) -> uint32_t {
-        auto [states] = src;
-        uint32_t v = 0;
-        for (uint32_t i = 0; i < 16; ++i)
-            if (!states[i].valid()) v |= (1u << i);
-        return v;
-    };
-    w_repl_sel_way.assign().reads(w_free_vec2, req_pos_channel) = [](auto src) -> uint8_t {
-        auto [free_vec, req_pos_channel] = src;
-        const bool isReq = req_pos_channel == 0;
-        const bool isSnp = req_pos_channel == 3;
-        if (isReq && ((free_vec >> 15) & 1u)) return 15;
-        if (isSnp && ((free_vec >> 14) & 1u)) return 14;
-        for (uint32_t i = 0; i < 14; ++i)
-            if ((free_vec >> i) & 1u) return static_cast<uint8_t>(i);
-        return 0;
-    };
-    w_req_pos_fire.assign().reads(req_pos_valid, w_free_vec2, w_repl_sel_way, lock_reg) =
-        [](auto src) {
-            auto [req_pos_valid, free_vec, sel_way, lock_reg] = src;
-            return req_pos_valid && ((free_vec >> sel_way) & 1u) && !lock_reg;
-        };
-    pos_resp_valid_reg.update().on(posedge(clk)).reads(w_req_pos_fire) = [](auto src) {
-        auto [w_req_pos_fire] = src;
-        return w_req_pos_fire;
-    };
-    pos_resp_way_reg.update().on(posedge(clk)).reads(w_req_pos_fire, w_repl_sel_way,
-                                                     pos_resp_way_reg) = [](auto src) {
-        auto [w_req_pos_fire, w_repl_sel_way, pos_resp_way_reg] = src;
-        return w_req_pos_fire ? w_repl_sel_way : pos_resp_way_reg;
-    };
-    pos_resp.assign().reads(pos_resp_valid_reg, pos_resp_way_reg) = [](auto src) {
-        auto [pos_resp_valid_reg, pos_resp_way_reg] = src;
-        return Valid<uint8_t>{pos_resp_valid_reg, pos_resp_way_reg};
-    };
-    lock_reg.update().on(posedge(clk)).reads(lock_reg, w_req_pos_fire, upd_tag, dir_bank,
-                                             pos_set) = [](auto src) {
-        auto [lock_reg, w_req_pos_fire, upd_tag, dir_bank, pos_set] = src;
-        if (w_req_pos_fire) return true;
-        if (upd_tag.valid && hnIdxDirBank(upd_tag.bits.hnIdx) == dir_bank &&
-            hnIdxPosSet(upd_tag.bits.hnIdx) == pos_set)
-            return false;
-        return lock_reg;
-    };
-
-    // entry alloc 驱动（s1 拍或 reqPoS 拍）
-    for (uint32_t i = 0; i < 16; ++i) {
-        auto& e = entries[i];
-        e.alloc_valid.assign().reads(req_pos_valid, w_req_pos_fire, w_repl_sel_way,
-                                     alloc_reg_s1, retry_s1, alloc_way_reg_s1) =
-            [i](auto src) {
-                auto [req_pos_valid, w_req_pos_fire, w_repl_sel_way, alloc_reg_s1, retry_s1,
-                      alloc_way_reg_s1] = src;
-                if (req_pos_valid) return w_req_pos_fire && w_repl_sel_way == i;
-                return alloc_reg_s1.valid && !retry_s1 && alloc_way_reg_s1 == i;
-            };
-        e.alloc_addr_val.assign().reads(req_pos_valid) = [](auto src) {
-            auto [req_pos_valid] = src;
-            return !req_pos_valid;
-        };
-        e.alloc_addr.assign().reads(req_pos_valid, alloc_reg_s1) = [](auto src) {
-            auto [req_pos_valid, alloc_reg_s1] = src;
-            return req_pos_valid ? 0ull : alloc_reg_s1.addr;
-        };
-        e.alloc_channel.assign().reads(req_pos_valid, req_pos_channel, alloc_reg_s1) =
-            [](auto src) {
-                auto [req_pos_valid, req_pos_channel, alloc_reg_s1] = src;
-                return req_pos_valid ? req_pos_channel : alloc_reg_s1.channel;
-            };
-    }
-    // wakeup Mux1H
-    combine(w_wakeup_entries, entries,
-            [](PosEntry& e) -> wolvicmod::Out<Valid<uint64_t>>& { return e.wakeup; });
-    wakeup.assign().reads(w_wakeup_entries) = [](auto src) {
-        auto [ws] = src;
-        for (const auto& w : ws)
-            if (w.valid) return w;
-        return Valid<uint64_t>{false, 0};
-    };
-    state_vec = w_states;
-    addr_vec = w_addrs;
-}
-
-}  // namespace zj::dj
-
-namespace zj::dj {
-
 // ---------------- PosTable ----------------
 
 PosTable::PosTable() {
-    for (uint32_t i = 0; i < 4; ++i) {
-        auto& s = sets[i];
-        s.clk = clk;
-        s.cfg_bank_id = cfg_bank_id;
-        s.dir_bank = dir_bank;
-        s.pos_set = static_cast<uint8_t>(i);
-        s.alloc_s0_valid.assign().reads(alloc_s0_valid, alloc_s0_addr) = [i](auto src) {
-            auto [alloc_s0_valid, alloc_s0_addr] = src;
-            return alloc_s0_valid && posSetOf(alloc_s0_addr) == i;
-        };
-        s.alloc_s0_addr = alloc_s0_addr;
-        s.alloc_s0_channel = alloc_s0_channel;
-        s.retry_s1 = retry_s1;
-        s.req_pos_valid.assign().reads(req_pos_vec) = [i](auto src) {
-            auto [req_pos_vec] = src;
-            return req_pos_vec[i].valid;
-        };
-        s.req_pos_channel.assign().reads(req_pos_vec) = [i](auto src) {
-            auto [req_pos_vec] = src;
-            return req_pos_vec[i].bits.channel;
-        };
-        s.upd_tag = upd_tag;
-        s.clean = clean;
-    }
-    combine(w_sleep_all, sets, [](PosSet& s) -> wolvicmod::Out<bool>& { return s.sleep_s1; });
-    combine(w_block_all, sets, [](PosSet& s) -> wolvicmod::Out<bool>& { return s.block_s1; });
-    combine(w_hn_valid_all, sets,
-            [](PosSet& s) -> wolvicmod::Out<Valid<uint8_t>>& { return s.hn_idx_s1; });
-    combine(w_wakeup_all, sets,
-            [](PosSet& s) -> wolvicmod::Out<Valid<uint64_t>>& { return s.wakeup; });
-    sleep_s1.assign().reads(w_sleep_all) = [](auto src) {
-        auto [v] = src;
-        for (bool x : v) {
-            if (x) return true;
+    // ---- s0 组合（per set 数组化，各一条 assign） ----
+    w_mat_tag_vec.assign().reads(entries, alloc_s0_addr) = [](auto src) {
+        auto [entries, alloc_s0_addr] = src;
+        U32Arr4 v{};
+        const uint64_t tag = posTagOf(alloc_s0_addr);
+        for (uint32_t s = 0; s < 4; ++s)
+            for (uint32_t i = 0; i < 16; ++i) {
+                const PosState& st = entries[s * 16 + i].state;
+                if (st.valid() && st.tagVal && st.tag == tag) v[s] |= (1u << i);
+            }
+        return v;
+    };
+    w_free_vec.assign().reads(entries, s1) = [](auto src) {
+        auto [entries, s1] = src;
+        U32Arr4 v{};
+        for (uint32_t s = 0; s < 4; ++s) {
+            const uint32_t useWay = s1[s].allocValid ? ~(1u << s1[s].allocWay) : 0xFFFFu;
+            uint32_t f = 0;
+            for (uint32_t i = 0; i < 16; ++i)
+                if (!entries[s * 16 + i].state.valid()) f |= (1u << i);
+            v[s] = f & useWay;
         }
+        return v;
+    };
+    // 原 RTL 的 blockReq/blockSnp 因 canNest 恒 false 而同式，isSnp 分流略去
+    w_block_s0.assign().reads(w_mat_tag_vec, w_free_vec, alloc_s0_addr, s1,
+                              req_pos_vec) = [](auto src) {
+        auto [mat_tag, free_vec, alloc_s0_addr, s1, req_pos_vec] = src;
+        BoolArr4 b{};
+        for (uint32_t s = 0; s < 4; ++s) {
+            const bool hasMatTag = mat_tag[s] != 0;
+            const bool hasFree = (free_vec[s] & 0x3FFFu) != 0;  // way0-13 有 free
+            const bool matchReqS1 =
+                s1[s].allocValid && posTagOf(alloc_s0_addr) == posTagOf(s1[s].allocAddr);
+            b[s] = hasMatTag || !hasFree || matchReqS1 || s1[s].lock || req_pos_vec[s].valid;
+        }
+        return b;
+    };
+
+    // ---- reqPoS：replSelWay / reqPosFire ----
+    w_free_vec2.assign().reads(entries) = [](auto src) -> U32Arr4 {
+        auto [entries] = src;
+        U32Arr4 v{};
+        for (uint32_t s = 0; s < 4; ++s)
+            for (uint32_t i = 0; i < 16; ++i)
+                if (!entries[s * 16 + i].state.valid()) v[s] |= (1u << i);
+        return v;
+    };
+    w_repl_sel_way.assign().reads(w_free_vec2, req_pos_vec) = [](auto src) {
+        auto [free_vec, req_pos_vec] = src;
+        U8Arr4 w{};
+        for (uint32_t s = 0; s < 4; ++s) {
+            const uint32_t fv = free_vec[s];
+            const uint8_t ch = req_pos_vec[s].bits.channel;
+            const bool isReq = ch == 0;
+            const bool isSnp = ch == 3;
+            uint8_t sel = 0;
+            if (isReq && ((fv >> 15) & 1u)) {
+                sel = 15;
+            } else if (isSnp && ((fv >> 14) & 1u)) {
+                sel = 14;
+            } else {
+                for (uint32_t i = 0; i < 14; ++i)
+                    if ((fv >> i) & 1u) {
+                        sel = static_cast<uint8_t>(i);
+                        break;
+                    }
+            }
+            w[s] = sel;
+        }
+        return w;
+    };
+    w_req_pos_fire.assign().reads(req_pos_vec, w_free_vec2, w_repl_sel_way, s1) = [](auto src) {
+        auto [req_pos_vec, free_vec, sel_way, s1] = src;
+        BoolArr4 f{};
+        for (uint32_t s = 0; s < 4; ++s)
+            f[s] = req_pos_vec[s].valid && ((free_vec[s] >> sel_way[s]) & 1u) && !s1[s].lock;
+        return f;
+    };
+
+    // ---- s1 流水 + 控制寄存器（整项；alloc 经 per-set 门控的 alloc_s0_valid） ----
+    s1.update().on(posedge(clk)).reads(s1, alloc_s0_valid, alloc_s0_addr, alloc_s0_channel,
+                                       w_block_s0, w_free_vec, w_mat_tag_vec, w_req_pos_fire,
+                                       w_repl_sel_way, upd_tag, dir_bank) = [](auto src) {
+        auto [s1, alloc_s0_valid, alloc_s0_addr, alloc_s0_channel, block_s0, free_vec, mat_tag,
+              fire, sel_way, upd_tag, dir_bank] = src;
+        SetArr n = s1;
+        const uint32_t aset = posSetOf(alloc_s0_addr);
+        for (uint32_t s = 0; s < 4; ++s) {
+            const bool allocS0 = alloc_s0_valid && aset == s;
+            n[s].allocValid = allocS0 && !block_s0[s];
+            if (allocS0) {
+                n[s].allocAddr = alloc_s0_addr;
+                n[s].allocChannel = alloc_s0_channel;
+                // freeWay_s0 = PriorityEncoder(freeVec)
+                uint8_t way = 0;
+                for (uint32_t i = 0; i < 16; ++i)
+                    if ((free_vec[s] >> i) & 1u) {
+                        way = static_cast<uint8_t>(i);
+                        break;
+                    }
+                n[s].allocWay = way;
+            }
+            n[s].sleep = allocS0 && mat_tag[s] != 0;
+            n[s].block = allocS0 && block_s0[s];
+            n[s].hnIdxValid = allocS0;
+            n[s].posRespValid = fire[s];
+            if (fire[s]) n[s].posRespWay = sel_way[s];
+            if (fire[s]) {
+                n[s].lock = true;
+            } else if (upd_tag.valid && hnIdxDirBank(upd_tag.bits.hnIdx) == dir_bank &&
+                       hnIdxPosSet(upd_tag.bits.hnIdx) == s) {
+                n[s].lock = false;
+            }
+        }
+        return n;
+    };
+
+    // ---- 64 项表项（alloc/updTag/clean 驱动；wakeup 为 RegNext，读旧 state） ----
+    entries.update().on(posedge(clk)).reads(entries, s1, retry_s1, req_pos_vec, w_req_pos_fire,
+                                            w_repl_sel_way, upd_tag, clean, dir_bank,
+                                            cfg_bank_id) = [](auto src) {
+        auto [entries, s1, retry_s1, req_pos_vec, fire, sel_way, upd_tag, clean, dir_bank,
+              cfg_bank_id] = src;
+        EntryArr n = entries;
+        for (uint32_t s = 0; s < 4; ++s) {
+            const bool reqPosV = req_pos_vec[s].valid;
+            const uint8_t reqPosCh = req_pos_vec[s].bits.channel;
+            for (uint32_t i = 0; i < 16; ++i) {
+                const uint8_t hn = hnIdxOf(dir_bank, s, i);
+                const PosEntryV& cur = entries[s * 16 + i];
+                PosEntryV& ne = n[s * 16 + i];
+                // entry alloc 驱动（s1 拍或 reqPoS 拍）
+                const bool allocV = reqPosV ? (fire[s] && sel_way[s] == i)
+                                            : (s1[s].allocValid && !retry_s1 &&
+                                               s1[s].allocWay == i);
+                const bool allocAddrVal = !reqPosV;
+                const uint64_t allocAddr = reqPosV ? 0ull : s1[s].allocAddr;
+                const uint8_t allocChannel = reqPosV ? reqPosCh : s1[s].allocChannel;
+                const bool updTagHit = upd_tag.valid && upd_tag.bits.hnIdx == hn;
+                const bool cleanHit = clean.valid && clean.bits.hnIdx == hn;
+                PosState st = cur.state;
+                if (allocV) {
+                    st.tagVal = allocAddrVal;
+                    st.tag = posTagOf(allocAddr);
+                    st.offset = static_cast<uint8_t>(allocAddr & 0x3F);
+                } else if (updTagHit) {
+                    st.tagVal = upd_tag.bits.addrVal;
+                    st.tag = posTagOf(upd_tag.bits.addr);
+                    st.offset = static_cast<uint8_t>(upd_tag.bits.addr & 0x3F);
+                }
+                if (cleanHit && clean.bits.channel == 0) {
+                    st.req = false;
+                } else if (allocV && allocChannel == 0) {
+                    st.req = true;
+                }
+                if (cleanHit && clean.bits.channel == 3) {
+                    st.snp = false;
+                } else if (allocV && allocChannel == 3) {
+                    st.snp = true;
+                }
+                // 更新条件：alloc | updTagHit | cleanHit（RTL 同）
+                if (allocV || updTagHit || cleanHit) ne.state = st;
+                // wakeup = RegNext(cleanHit & one & tagVal)
+                const bool wake = cleanHit && cur.state.one() && cur.state.tagVal;
+                ne.wakeup = wake;
+                if (wake)
+                    ne.wakeupAddr = catPosAddr(cfg_bank_id, cur.state.tag, hnIdxPosSet(hn),
+                                               hnIdxDirBank(hn));
+            }
+        }
+        return n;
+    };
+
+    // ---- 出口 ----
+    sleep_s1.assign().reads(s1) = [](auto src) {
+        auto [s1] = src;
+        for (const auto& v : s1)
+            if (v.sleep) return true;
         return false;
     };
-    block_s1.assign().reads(w_block_all) = [](auto src) {
-        auto [v] = src;
-        for (bool x : v) {
-            if (x) return true;
-        }
+    block_s1.assign().reads(s1, req_pos_vec) = [](auto src) {
+        auto [s1, req_pos_vec] = src;
+        for (uint32_t s = 0; s < 4; ++s)
+            if (s1[s].block || req_pos_vec[s].valid) return true;
         return false;
     };
-    hn_idx_s1.assign().reads(w_hn_valid_all) = [](auto src) {
-        auto [v] = src;
-        for (const auto& x : v)
-            if (x.valid) return x.bits;
+    hn_idx_s1.assign().reads(s1, req_pos_vec, dir_bank) = [](auto src) {
+        auto [s1, req_pos_vec, dir_bank] = src;
+        for (uint32_t s = 0; s < 4; ++s)
+            if (s1[s].hnIdxValid && !req_pos_vec[s].valid) return hnIdxOf(dir_bank, s, s1[s].allocWay);
         return static_cast<uint8_t>(0);
     };
-    hn_idx_s1_valid.assign().reads(w_hn_valid_all) = [](auto src) {
-        auto [v] = src;
-        for (const auto& x : v) {
-            if (x.valid) return true;
-        }
+    hn_idx_s1_valid.assign().reads(s1, req_pos_vec) = [](auto src) {
+        auto [s1, req_pos_vec] = src;
+        for (uint32_t s = 0; s < 4; ++s)
+            if (s1[s].hnIdxValid && !req_pos_vec[s].valid) return true;
         return false;
     };
-    wakeup.assign().reads(w_wakeup_all) = [](auto src) {
-        auto [v] = src;
-        for (const auto& x : v)
-            if (x.valid) return x;
-        return Valid<uint64_t>{false, 0};
-    };
-    combine(w_pos_resp_all, sets,
-            [](PosSet& s) -> wolvicmod::Out<Valid<uint8_t>>& { return s.pos_resp; });
-    pos_resp_vec = w_pos_resp_all;
-    // alrUsePoS / working / addr_vec2
-    addr_vec2.assign().reads(sets[0].addr_vec, sets[1].addr_vec, sets[2].addr_vec,
-                             sets[3].addr_vec) = [](auto src) {
-        auto [a0, a1, a2, a3] = src;
-        AddrVec2 r{a0, a1, a2, a3};
+    pos_resp_vec.assign().reads(s1) = [](auto src) {
+        auto [s1] = src;
+        PosRespArr4 r;
+        for (uint32_t s = 0; s < 4; ++s) r[s] = Valid<uint8_t>{s1[s].posRespValid, s1[s].posRespWay};
         return r;
     };
-    alr_use_pos.assign().reads(sets[0].state_vec, sets[1].state_vec, sets[2].state_vec,
-                               sets[3].state_vec) = [](auto src) -> uint8_t {
-        auto [s0, s1, s2, s3] = src;
+    // wakeup Mux1H：set 优先、way 次之（与原两层 mux 同一优先级序）
+    wakeup.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        for (const auto& e : entries)
+            if (e.wakeup) return Valid<uint64_t>{true, e.wakeupAddr};
+        return Valid<uint64_t>{false, 0};
+    };
+    addr_vec2.assign().reads(entries, cfg_bank_id, dir_bank) = [](auto src) {
+        auto [entries, cfg_bank_id, dir_bank] = src;
+        AddrVec2 r;
+        for (uint32_t s = 0; s < 4; ++s)
+            for (uint32_t i = 0; i < 16; ++i) {
+                const PosState& st = entries[s * 16 + i].state;
+                r[s][i] = catPosAddr(cfg_bank_id, st.tag, s, dir_bank, st.offset);
+            }
+        return r;
+    };
+    alr_use_pos.assign().reads(entries) = [](auto src) -> uint8_t {
+        auto [entries] = src;
         uint8_t cnt = 0;
-        for (const auto* sv : {&s0, &s1, &s2, &s3})
-            for (const auto& st : *sv) cnt += st.valid();
+        for (const auto& e : entries) cnt += e.state.valid();
         return cnt;
     };
-    working.assign().reads(sets[0].state_vec, sets[1].state_vec, sets[2].state_vec,
-                           sets[3].state_vec) = [](auto src) {
-        auto [s0, s1, s2, s3] = src;
-        for (const auto* sv : {&s0, &s1, &s2, &s3})
-            for (const auto& st : *sv)
-                if (st.valid()) return true;
+    working.assign().reads(entries) = [](auto src) {
+        auto [entries] = src;
+        for (const auto& e : entries)
+            if (e.state.valid()) return true;
         return false;
     };
 }

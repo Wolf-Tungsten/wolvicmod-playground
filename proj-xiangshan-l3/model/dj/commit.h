@@ -127,12 +127,19 @@ public:
     IN(bool, clean_pos_rdy);
     OUT(uint8_t, state_out);
 
-    REG(CommitTask, task_reg);
-    REG(Flag, flag_reg);
-    REG(uint8_t, state_reg);  // 3b
-    REG(uint32_t, inst_reg);  // TaskInst 打包（19b）
-    REG(AlrGet, alr_get_reg);
-    REG(uint8_t, resp_err_reg);  // 2b
+    // 整项化：6 个字段寄存器合并为一个（w_set 门控组与每拍直通组在同一条
+    // update 内按各自条件写各字段），省 5 次逐动作的派发/边沿检测/提交开销。
+    struct V {
+        CommitTask task;
+        Flag flag;
+        AlrGet alrGet;
+        uint32_t inst = 0;    // TaskInst 打包（19b）
+        uint8_t state = 0;    // 3b
+        uint8_t respErr = 0;  // 2b
+
+        bool operator==(const V&) const = default;
+    };
+    REG(V, v);
 
     // 派生线网（大量小 wire 跟随 RTL 结构）
     WIRE(bool, w_rx_rsp_hit);

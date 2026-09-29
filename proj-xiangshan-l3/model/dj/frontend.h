@@ -151,94 +151,40 @@ public:
 };
 
 
-// ---------------- PosEntry ----------------
-
-class PosEntry : public wolvicmod::Module {
-public:
-    IN(bool, clk);
-    IN(uint8_t, cfg_bank_id);
-    IN(uint8_t, hn_idx);     // 7bit，elab 常量
-    IN(bool, alloc_valid);
-    IN(uint64_t, alloc_addr);  // addrVal/tag/offset 由父模块拆好（PosSet 内）
-    IN(bool, alloc_addr_val);
-    IN(uint8_t, alloc_channel);
-    IN(Valid<UpdPosTag>, upd_tag);
-    IN(Valid<PosClean>, clean);
-    OUT(Valid<uint64_t>, wakeup);
-    OUT(PosState, state);
-    OUT(uint64_t, state_addr);  // catPoS 重组地址（getAddrVec 用）
-
-    REG(PosState, state_reg);
-    REG(bool, wakeup_reg);
-    REG(uint64_t, wakeup_addr_reg);
-
-    PosEntry();
-};
-
-// ---------------- PosSet ----------------
-
-class PosSet : public wolvicmod::Module {
-public:
-    using PosStateArr = std::array<PosState, 16>;
-    using AddrArr = std::array<uint64_t, 16>;
-    using BoolArr16 = std::array<bool, 16>;
-    using U64Arr16 = std::array<uint64_t, 16>;
-    struct AllocS1 {
-        bool valid = false;
-        uint64_t addr = 0;
-        uint8_t channel = 0;
-
-        bool operator==(const AllocS1&) const = default;
-    };
-
-    IN(bool, clk);
-    IN(uint8_t, cfg_bank_id);
-    IN(uint8_t, dir_bank);
-    IN(uint8_t, pos_set);
-    IN(bool, alloc_s0_valid);
-    IN(uint64_t, alloc_s0_addr);
-    IN(uint8_t, alloc_s0_channel);
-    OUT(bool, sleep_s1);
-    OUT(bool, block_s1);
-    OUT(Valid<uint8_t>, hn_idx_s1);
-    IN(bool, retry_s1);
-    IN(bool, req_pos_valid);
-    IN(uint8_t, req_pos_channel);
-    OUT(Valid<uint8_t>, pos_resp);
-    IN(Valid<UpdPosTag>, upd_tag);
-    IN(Valid<PosClean>, clean);
-    OUT(Valid<uint64_t>, wakeup);
-    OUT(PosStateArr, state_vec);
-    OUT(AddrArr, addr_vec);
-
-    MOD_ARRAY(PosEntry, 16, entries);
-    REG(bool, lock_reg);
-    REG(AllocS1, alloc_reg_s1);
-    REG(uint8_t, alloc_way_reg_s1);
-    REG(bool, sleep_reg);
-    REG(bool, block_reg);
-    REG(bool, hn_idx_valid_reg);
-    REG(bool, pos_resp_valid_reg);
-    REG(uint8_t, pos_resp_way_reg);
-
-    WIRE(PosStateArr, w_states);
-    WIRE(AddrArr, w_addrs);
-    using U64ArrW = std::array<Valid<uint64_t>, 16>;
-    WIRE(uint32_t, w_mat_tag_vec);
-    WIRE(uint32_t, w_free_vec);
-    WIRE(bool, w_block_s0);
-    WIRE(uint32_t, w_free_vec2);
-    WIRE(uint8_t, w_repl_sel_way);
-    WIRE(bool, w_req_pos_fire);
-    WIRE(U64ArrW, w_wakeup_entries);
-
-    PosSet();
-};
-
 // ---------------- PosTable ----------------
+// 拍平建模：RTL 的 PosEntry/PosSet 层次在 C 模型里只是 for 循环，不再做子模块。
+// 64 项表项状态是一个寄存器数组（一条 update 循环算 next）；每 set 的 s1 流水
+// 与控制寄存器整项化为另一个。对外端口与原三层层次版逐位等价。
 
 class PosTable : public wolvicmod::Module {
 public:
+    struct PosEntryV {  // 一个表项的全部状态
+        PosState state;
+        uint64_t wakeupAddr = 0;
+        bool wakeup = false;
+
+        bool operator==(const PosEntryV&) const = default;
+    };
+    struct PosSetS1 {  // 每 set 的 s1 流水 + 控制寄存器
+        bool allocValid = false;
+        uint64_t allocAddr = 0;
+        uint8_t allocChannel = 0;
+        uint8_t allocWay = 0;
+        uint8_t posRespWay = 0;
+        bool lock = false;
+        bool sleep = false;
+        bool block = false;
+        bool hnIdxValid = false;
+        bool posRespValid = false;
+
+        bool operator==(const PosSetS1&) const = default;
+    };
+    using EntryArr = std::array<PosEntryV, 64>;  // [set*16 + way]
+    using SetArr = std::array<PosSetS1, 4>;
+    using U32Arr4 = std::array<uint32_t, 4>;
+    using BoolArr4 = std::array<bool, 4>;
+    using U8Arr4 = std::array<uint8_t, 4>;
+
     IN(bool, clk);
     IN(uint8_t, cfg_bank_id);
     IN(uint8_t, dir_bank);
@@ -262,15 +208,15 @@ public:
     using AddrVec2 = std::array<std::array<uint64_t, 16>, 4>;
     OUT(AddrVec2, addr_vec2);  // getAddrVec 用
 
-    MOD_ARRAY(PosSet, 4, sets);
-    using BoolArr4 = std::array<bool, 4>;
-    using WakeArr = std::array<Valid<uint64_t>, 4>;
-    WIRE(BoolArr4, w_sleep_all);
-    WIRE(BoolArr4, w_block_all);
-    using ValidU8Arr4 = std::array<Valid<uint8_t>, 4>;
-    WIRE(ValidU8Arr4, w_hn_valid_all);
-    WIRE(WakeArr, w_wakeup_all);
-    WIRE(PosRespArr4, w_pos_resp_all);
+    REG(EntryArr, entries);
+    REG(SetArr, s1);
+
+    WIRE(U32Arr4, w_mat_tag_vec);
+    WIRE(U32Arr4, w_free_vec);
+    WIRE(BoolArr4, w_block_s0);
+    WIRE(U32Arr4, w_free_vec2);
+    WIRE(U8Arr4, w_repl_sel_way);
+    WIRE(BoolArr4, w_req_pos_fire);
 
     PosTable();
 };

@@ -106,9 +106,9 @@ BackendDecode<Third>::BackendDecode() {
 
 CommitEntry::CommitEntry() {
     // ---- 基本派生 ----
-    w_valid.assign().reads(state_reg) = [](auto src) {
-        auto [state_reg] = src;
-        return state_reg != kFree;
+    w_valid.assign().reads(v) = [](auto src) {
+        auto [v] = src;
+        return v.state != kFree;
     };
     w_rx_rsp_hit.assign().reads(rx_rsp, hn_txn_id) = [](auto src) {
         auto [rx_rsp, hn_txn_id] = src;
@@ -145,13 +145,17 @@ CommitEntry::CommitEntry() {
         auto [alloc, hn_txn_id] = src;
         return alloc.valid && alloc.bits.hnTxnID == hn_txn_id;
     };
-    state_out = state_reg;
+    state_out.assign().reads(v) = [](auto src) {
+        auto [v] = src;
+        return v.state;
+    };
 
     // ---- alrGet / respErr 跟踪 ----
-    w_alr_get_next.assign().reads(alr_get_reg, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1,
+    w_alr_get_next.assign().reads(v, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1,
                                   clean_pos, clean_pos_rdy) = [](auto src) {
-        auto [alr_get_reg, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1, clean_pos, clean_pos_rdy] =
+        auto [v, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1, clean_pos, clean_pos_rdy] =
             src;
+        const AlrGet& alr_get_reg = v.alrGet;
         AlrGet n = alr_get_reg;
         if (clean_pos.valid && clean_pos_rdy) {
             n = AlrGet{};
@@ -162,10 +166,11 @@ CommitEntry::CommitEntry() {
         }
         return n;
     };
-    w_resp_err_next.assign().reads(resp_err_reg, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1,
+    w_resp_err_next.assign().reads(v, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1,
                                    rx_dat, clean_pos, clean_pos_rdy) = [](auto src) {
-        auto [resp_err_reg, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1, rx_dat, clean_pos,
+        auto [v, w_cm_resp_hit, cm_resp, w_xcb_hit0, w_xcb_hit1, rx_dat, clean_pos,
               clean_pos_rdy] = src;
+        const uint8_t& resp_err_reg = v.respErr;
         uint8_t n = resp_err_reg;
         if (clean_pos.valid && clean_pos_rdy) {
             n = kErrOk;
@@ -179,18 +184,11 @@ CommitEntry::CommitEntry() {
         }
         return n;
     };
-    resp_err_reg.update().on(posedge(clk)).reads(w_resp_err_next) = [](auto src) {
-        auto [w_resp_err_next] = src;
-        return w_resp_err_next;
-    };
-    alr_get_reg.update().on(posedge(clk)).reads(w_alr_get_next) = [](auto src) {
-        auto [w_alr_get_next] = src;
-        return w_alr_get_next;
-    };
-
     // ---- 输出通道 ----
-    req_db.assign().reads(w_valid, flag_reg, task_reg, hn_txn_id) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, hn_txn_id] = src;
+    req_db.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
+        auto [w_valid, v, hn_txn_id] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
         ReqDBQos r;
         r.hnTxnID = hn_txn_id;
         r.dataVec = (flag_reg.sCmTask && dc::tcSnoop(task_reg.task)) ? kFullVec
@@ -198,8 +196,11 @@ CommitEntry::CommitEntry() {
         r.qos = task_reg.qos;
         return Valid<ReqDBQos>{w_valid && flag_reg.sReqDB, r};
     };
-    data_task.assign().reads(w_valid, flag_reg, task_reg, hn_txn_id, resp_err_reg) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, hn_txn_id, resp_err_reg] = src;
+    data_task.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
+        auto [w_valid, v, hn_txn_id] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
+        const uint8_t& resp_err_reg = v.respErr;
         DataTask t;
         const bool replLLC = flag_reg.sWriDir && dc::ccWriLLC(task_reg.cmt) && !task_reg.dir.llc.hit;
         t.dataOp.repl = dc::ccOpRepl(task_reg.cmt);
@@ -220,8 +221,10 @@ CommitEntry::CommitEntry() {
         t.txDat.resp_err = resp_err_reg;
         return Valid<DataTask>{w_valid && flag_reg.sDataTask && task_reg.alr.reqDB, t};
     };
-    repl_task.assign().reads(w_valid, flag_reg, task_reg, hn_txn_id) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, hn_txn_id] = src;
+    repl_task.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
+        auto [w_valid, v, hn_txn_id] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
         ReplTask t;
         t.hnTxnID = hn_txn_id;
         t.qos = task_reg.qos;
@@ -251,8 +254,10 @@ CommitEntry::CommitEntry() {
     };
 
     // cmTask 三路（bits 共享，valid 分流）
-    cm_task_snp.assign().reads(w_valid, flag_reg, task_reg, hn_txn_id) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, hn_txn_id] = src;
+    cm_task_snp.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
+        auto [w_valid, v, hn_txn_id] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
         CMTask t;
         t.chi = task_reg.chi;
         t.chi.channel = dc::tcSnoop(task_reg.task) ? kChSnp : kChReq;
@@ -280,27 +285,34 @@ CommitEntry::CommitEntry() {
         t.cbResp = st == 0 ? 0 : st == 1 ? 1 : st == 3 ? 2 : 6;  // I/SC/UC/UD→I/SC/UC/UD_PD
         t.doDMT = dc::tcDoDMT(task_reg.task);
         t.qos = task_reg.qos;
-        const bool v = w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
-                       dc::tcSnoop(task_reg.task);
-        return Valid<CMTask>{v, t};
+        const bool valid = w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
+                           dc::tcSnoop(task_reg.task);
+        return Valid<CMTask>{valid, t};
     };
-    cm_task_read.assign().reads(w_valid, flag_reg, task_reg, cm_task_snp) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, snp_ch] = src;
+    cm_task_read.assign().reads(w_valid, v, cm_task_snp) = [](auto src) {
+        auto [w_valid, v, snp_ch] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
         CMTask t = snp_ch.bits;
         return Valid<CMTask>{w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
                                  dc::tcRead(task_reg.task),
                              t};
     };
-    cm_task_wri.assign().reads(w_valid, flag_reg, task_reg, cm_task_snp) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, snp_ch] = src;
+    cm_task_wri.assign().reads(w_valid, v, cm_task_snp) = [](auto src) {
+        auto [w_valid, v, snp_ch] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
         CMTask t = snp_ch.bits;
         return Valid<CMTask>{w_valid && flag_reg.sCmTask && !flag_reg.sReqDB &&
                                  dc::tcWrite(task_reg.task),
                              t};
     };
 
-    tx_rsp.assign().reads(w_valid, flag_reg, task_reg, hn_txn_id, resp_err_reg) = [](auto src) {
-        auto [w_valid, flag_reg, task_reg, hn_txn_id, resp_err_reg] = src;
+    tx_rsp.assign().reads(w_valid, v, hn_txn_id) = [](auto src) {
+        auto [w_valid, v, hn_txn_id] = src;
+        const Flag& flag_reg = v.flag;
+        const CommitTask& task_reg = v.task;
+        const uint8_t& resp_err_reg = v.respErr;
         RespFlit f{};
         f.src_id = task_reg.chi.getNoC();
         f.tgt_id = task_reg.chi.nodeId;
@@ -312,13 +324,17 @@ CommitEntry::CommitEntry() {
         f.resp = static_cast<uint8_t>(dc::ccResp(task_reg.cmt));
         f.qos = task_reg.qos;
         f.resp_err = resp_err_reg;
-        const bool v = w_valid && (flag_reg.sDbid || flag_reg.sResp) && !flag_reg.sReqDB;
-        return Valid<RespFlit>{v, f};
+        const bool valid = w_valid && (flag_reg.sDbid || flag_reg.sResp) && !flag_reg.sReqDB;
+        return Valid<RespFlit>{valid, f};
     };
 
     // 译码请求
-    trd_dec_out.assign().reads(state_reg, flag_reg, inst_reg, task_reg, hn_txn_id) = [](auto src) {
-        auto [state_reg, flag_reg, inst_reg, task_reg, hn_txn_id] = src;
+    trd_dec_out.assign().reads(v, hn_txn_id) = [](auto src) {
+        auto [v, hn_txn_id] = src;
+        const uint8_t& state_reg = v.state;
+        const Flag& flag_reg = v.flag;
+        const uint32_t& inst_reg = v.inst;
+        const CommitTask& task_reg = v.task;
         const bool decValid = flag_reg.sDecode &&
                               !(flag_reg.wCmResp || flag_reg.wXCB0 || flag_reg.wXCB1);
         DecMes m;
@@ -327,8 +343,12 @@ CommitEntry::CommitEntry() {
         m.hnTxnID = hn_txn_id;
         return Valid<DecMes>{decValid && state_reg == kFstTask, m};
     };
-    fth_dec_out.assign().reads(state_reg, flag_reg, inst_reg, task_reg, hn_txn_id) = [](auto src) {
-        auto [state_reg, flag_reg, inst_reg, task_reg, hn_txn_id] = src;
+    fth_dec_out.assign().reads(v, hn_txn_id) = [](auto src) {
+        auto [v, hn_txn_id] = src;
+        const uint8_t& state_reg = v.state;
+        const Flag& flag_reg = v.flag;
+        const uint32_t& inst_reg = v.inst;
+        const CommitTask& task_reg = v.task;
         const bool decValid = flag_reg.sDecode &&
                               !(flag_reg.wCmResp || flag_reg.wXCB0 || flag_reg.wXCB1);
         DecMes m;
@@ -338,8 +358,10 @@ CommitEntry::CommitEntry() {
         return Valid<DecMes>{decValid && state_reg == kSecTask, m};
     };
 
-    clean_pos.assign().reads(w_valid, state_reg, task_reg, hn_idx) = [](auto src) {
-        auto [w_valid, state_reg, task_reg, hn_idx] = src;
+    clean_pos.assign().reads(w_valid, v, hn_idx) = [](auto src) {
+        auto [w_valid, v, hn_idx] = src;
+        const uint8_t& state_reg = v.state;
+        const CommitTask& task_reg = v.task;
         PosClean p;
         p.hnIdx = hn_idx;
         p.channel = task_reg.chi.channel;
@@ -348,10 +370,12 @@ CommitEntry::CommitEntry() {
     };
 
     // ---- 状态机（先算 stateNext，供 flag/inst 用） ----
-    w_state_next.assign().reads(state_reg, w_alloc_hit, alloc, dec_list_in, task_code_in,
-                                cmt_code_in, flag_reg, clean_pos, clean_pos_rdy) = [](auto src) {
-        auto [state_reg, w_alloc_hit, alloc, dec_list_in, task_code_in, cmt_code_in, flag_reg,
+    w_state_next.assign().reads(v, w_alloc_hit, alloc, dec_list_in, task_code_in,
+                                cmt_code_in, clean_pos, clean_pos_rdy) = [](auto src) {
+        auto [v, w_alloc_hit, alloc, dec_list_in, task_code_in, cmt_code_in,
               clean_pos, clean_pos_rdy] = src;
+        const uint8_t& state_reg = v.state;
+        const Flag& flag_reg = v.flag;
         const bool allFlagDone = !flag_reg.sDecode && !flag_reg.sReqDB && !flag_reg.sCmTask &&
                                  !flag_reg.sDataTask && !flag_reg.sWriDir &&
                                  !flag_reg.wCmResp && !flag_reg.wReplResp &&
@@ -384,10 +408,12 @@ CommitEntry::CommitEntry() {
     };
 
     // ---- taskNext（decListIn 换入 / alr.reqDB） ----
-    w_task_next.assign().reads(task_reg, dec_list_in, task_code_in, cmt_code_in, state_reg,
+    w_task_next.assign().reads(v, dec_list_in, task_code_in, cmt_code_in,
                                req_db, req_db_rdy) = [](auto src) {
-        auto [task_reg, dec_list_in, task_code_in, cmt_code_in, state_reg, req_db, req_db_rdy] =
+        auto [v, dec_list_in, task_code_in, cmt_code_in, req_db, req_db_rdy] =
             src;
+        const CommitTask& task_reg = v.task;
+        const uint8_t& state_reg = v.state;
         CommitTask n = task_reg;
         if (dec_list_in.valid) {
             n.decList = dec_list_in.bits;
@@ -401,20 +427,24 @@ CommitEntry::CommitEntry() {
     };
 
     // ---- flag 次态 ----
-    w_flag_next.assign().reads(flag_reg, state_reg, w_state_next, w_alloc_hit, alloc, task_reg,
+    w_flag_next.assign().reads(v, w_state_next, w_alloc_hit, alloc,
                                w_task_next, dec_list_in, trd_dec_out, trd_dec_out_rdy,
                                fth_dec_out, fth_dec_out_rdy, req_db, req_db_rdy, cm_task_snp,
                                cm_task_snp_rdy, cm_task_read, cm_task_read_rdy, cm_task_wri,
                                cm_task_wri_rdy, data_task, data_task_rdy, repl_task,
                                repl_task_rdy, w_cm_resp_hit, repl_resp, data_resp, hn_txn_id,
-                               tx_rsp, tx_rsp_rdy, w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1,
-                               alr_get_reg) = [](auto src) {
-        auto [flag_reg, state_reg, w_state_next, w_alloc_hit, alloc, task_reg, w_task_next,
+                               tx_rsp, tx_rsp_rdy, w_comp_ack_hit, w_xcb_hit0,
+                               w_xcb_hit1) = [](auto src) {
+        auto [v, w_state_next, w_alloc_hit, alloc, w_task_next,
               dec_list_in, trd_dec_out, trd_dec_out_rdy, fth_dec_out, fth_dec_out_rdy, req_db,
               req_db_rdy, cm_task_snp, cm_task_snp_rdy, cm_task_read, cm_task_read_rdy,
               cm_task_wri, cm_task_wri_rdy, data_task, data_task_rdy, repl_task, repl_task_rdy,
               w_cm_resp_hit, repl_resp, data_resp, hn_txn_id, tx_rsp, tx_rsp_rdy,
-              w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1, alr_get_reg] = src;
+              w_comp_ack_hit, w_xcb_hit0, w_xcb_hit1] = src;
+        const Flag& flag_reg = v.flag;
+        const uint8_t& state_reg = v.state;
+        const CommitTask& task_reg = v.task;
+        const AlrGet& alr_get_reg = v.alrGet;
         Flag n = flag_reg;
         if (w_alloc_hit || dec_list_in.valid) {
             const uint32_t task = dec_list_in.valid ? w_task_next.task : alloc.bits.task;
@@ -484,10 +514,12 @@ CommitEntry::CommitEntry() {
     };
 
     // ---- inst 次态 ----
-    w_inst_next.assign().reads(inst_reg, state_reg, w_state_next, w_alloc_hit, w_cm_resp_hit,
+    w_inst_next.assign().reads(v, w_state_next, w_alloc_hit, w_cm_resp_hit,
                                cm_resp, w_xcb_hit0, w_xcb_hit1, rx_dat) = [](auto src) {
-        auto [inst_reg, state_reg, w_state_next, w_alloc_hit, w_cm_resp_hit, cm_resp,
+        auto [v, w_state_next, w_alloc_hit, w_cm_resp_hit, cm_resp,
               w_xcb_hit0, w_xcb_hit1, rx_dat] = src;
+        const uint32_t& inst_reg = v.inst;
+        const uint8_t& state_reg = v.state;
         uint32_t n = inst_reg;
         const bool cleanInst =
             (state_reg == kFstTask && w_state_next == kSecTask) || w_state_next == kCommit;
@@ -515,23 +547,21 @@ CommitEntry::CommitEntry() {
         auto [w_alloc_hit, w_valid, w_xcb_hit0, w_xcb_hit1] = src;
         return w_alloc_hit || w_valid || w_xcb_hit0 || w_xcb_hit1;
     };
-    task_reg.update().on(posedge(clk)).reads(w_alloc_hit, alloc, w_task_next, w_set, task_reg) =
-        [](auto src) {
-            auto [w_alloc_hit, alloc, w_task_next, w_set, task_reg] = src;
-            if (!w_set) return task_reg;
-            return w_alloc_hit ? alloc.bits : w_task_next;
-        };
-    flag_reg.update().on(posedge(clk)).reads(w_flag_next, w_set, flag_reg) = [](auto src) {
-        auto [w_flag_next, w_set, flag_reg] = src;
-        return w_set ? w_flag_next : flag_reg;
-    };
-    inst_reg.update().on(posedge(clk)).reads(w_inst_next, w_set, inst_reg) = [](auto src) {
-        auto [w_inst_next, w_set, inst_reg] = src;
-        return w_set ? w_inst_next : inst_reg;
-    };
-    state_reg.update().on(posedge(clk)).reads(w_state_next, w_set, state_reg) = [](auto src) {
-        auto [w_state_next, w_set, state_reg] = src;
-        return w_set ? w_state_next : state_reg;
+    v.update().on(posedge(clk)).reads(v, w_set, w_alloc_hit, alloc, w_task_next, w_flag_next,
+                                      w_inst_next, w_state_next, w_alr_get_next,
+                                      w_resp_err_next) = [](auto src) {
+        auto [v, w_set, w_alloc_hit, alloc, w_task_next, w_flag_next, w_inst_next, w_state_next,
+              w_alr_get_next, w_resp_err_next] = src;
+        V n = v;
+        if (w_set) {
+            n.task = w_alloc_hit ? alloc.bits : w_task_next;
+            n.flag = w_flag_next;
+            n.inst = w_inst_next;
+            n.state = w_state_next;
+        }
+        n.alrGet = w_alr_get_next;
+        n.respErr = w_resp_err_next;
+        return n;
     };
 }
 
