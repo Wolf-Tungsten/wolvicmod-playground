@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(proj_xiangshan_l3 CXX)
 
+# 默认 Release：模型库对仿真速度敏感（-O0 下回放 eval 慢约 9 倍），
+# 未显式指定构建类型时不得落到无优化默认。
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # editor IntelliSense (clangd / cpptools)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)  # DPI 静态库链接进 emu（-pie）需要
 
