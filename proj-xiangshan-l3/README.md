@@ -37,6 +37,14 @@ make emu TRACE=fst   # 构建带 FST 波形的 RTL SoC emu（首次全量 ~25-35
 make trace           # 抓全程波形 → 提取 L3 三边界 trace → 自动校验
 ```
 
+换负载生成其它 trace（`IMG/TNAME/FULLN` 参数化；非 cm_full 不跑自动
+校验，回放用 `TRACE_FILE=` 指定）：
+
+```bash
+make trace IMG=microbench.bin TNAME=microbench FULLN=3000000
+make replay DUT=both TRACE_FILE=build/trace/microbench.txt
+```
+
 `trace` 内部三步：
 
 1. SoC emu 跑 coremark 全程并 dump FST 到 `build/trace/cm_full.fst`
