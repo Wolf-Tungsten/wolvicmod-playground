@@ -1297,7 +1297,16 @@ L3 走单调用点串行 DPI——L3 求值的 12× 提速摊到整拍只剩 ~8%
 构建教训（已发生一次）：emu 二进制缺失时指纹检查会跳过 clean，若
 `build/rtl` 残留异变体 RTL 则 verilate 报 MODMISSING（WolvicZjBB）——
 此时须先 `make emu-clean` 再构建；RTL 变体记得显式 `LLC=ZhuJiang`
-（默认 OpenLLC）。
+（默认 OpenLLC，已于 2026-09-30 改为 ZhuJiang）。
+
+构建教训二（2026-09-30，从零彩排暴露）：**正确性验证对构建类型不敏
+感，性能数字才敏感**。CMakeLists 原先没有默认构建类型，从零配置得到
+空 `CMAKE_BUILD_TYPE`（-O0），模型库慢 ~9 倍而功能全绿——彩排的
+A/B 回放 0 失配完全掩盖了它。修复：CMakeLists 未显式指定时强制
+Release（`4a81844`）。**凡从零/换机复测性能，计时前须做两步光线检
+查**：① `grep CMAKE_BUILD_TYPE build/CMakeCache.txt` 是 Release；
+② 钉核（`taskset -c 2`）跑 30k 排，wolvic eval 应在 0.2s 量级而非
+2s+。
 
 ## 5. 数据产物与复现
 

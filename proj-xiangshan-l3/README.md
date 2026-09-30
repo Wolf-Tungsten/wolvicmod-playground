@@ -59,10 +59,15 @@ bits 是随机初值，比对器按 don't-care 处理）。**RTL 侧行为变化
 
 ```bash
 make replay DUT=both    # 等价性对拍（逐拍三边界交叉验证）
-make replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
+make replay DUT=wolvic  # wolvic单侧孤立计时
+make replay DUT=rtl     # rtl单侧孤立计时
 ```
 
-`REPLAY_AUDIT=1 <二进制>` 开读集审计。
+`REPLAY_AUDIT=1 <二进制>` 开读集审计。计时口径：钉核
+（`taskset -c 2 <二进制> --dut=wolvic`）取两次最优；并先确认模型库
+是 Release 构建（`grep CMAKE_BUILD_TYPE build/CMakeCache.txt`，空值
+= -O0，会慢 ~9 倍且功能照样全绿——从零构建后必查，见
+docs/perf-breakdown.md §28 构建教训二）。
 
 前端译码级（XscChiAdapter+CcSocket）还有一条更细粒度的回放：
 `make trace-front [N=20000]`（emu dump 前 N 拍 FST →
