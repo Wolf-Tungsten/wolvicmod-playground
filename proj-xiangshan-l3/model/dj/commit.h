@@ -1,7 +1,7 @@
 #pragma once
 
 // Commit / CommitEntry / BackendDecode：对齐 backend/{Commit,Decode}.scala
-// （语义 docs/dongjiang-semantics.md §5.2/§5.3）。
+// （语义 docs/wolvicmod-zhujiang-model.md §5.5.2/§5.5.3）。
 //   BackendDecode — Third/Fourth 译码（2 拍流水 + dj_decode 查表）
 //   CommitEntry   — 五态 FSM + 双层 flag（entry=112：2 dirBank × posSets4 × way0-13）
 //   Commit        — entry 阵列 + 两级译码 + 输出仲裁

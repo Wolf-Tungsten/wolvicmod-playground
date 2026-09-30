@@ -1,7 +1,7 @@
 #pragma once
 
 // Directory / DirectoryBase：对齐 dongjiang/directory/{Directory,DirectoryBase}.scala，
-// 语义提炼见 docs/dongjiang-semantics.md §3（流水阶段记号 d0..d4 与该文档一致）。
+// 语义提炼见 docs/wolvicmod-zhujiang-model.md §5.3（流水阶段记号 d0..d4 与该文档一致）。
 //
 // DirectoryBase<Cfg>：单口 meta/tag SRAM（setup=1+latency=2+outputReg ⇒ d3 出数）、
 // 双口 repl SRAM（latency=1+outputReg ⇒ d2 出数）、4 拍移位流水、

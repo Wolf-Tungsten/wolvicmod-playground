@@ -1,8 +1,8 @@
 # proj-xiangshan-l3/verify/ —— 验证基建
 
 两条端到端测试路径（2026-09-29 清理后只保留这两条；预制菜 RTL 对拍
-基建 cosim/refgen/run.sh 已删除，历史结论见 docs/perf-breakdown.md 各节
-验证记录）：
+基建 cosim/refgen/run.sh 已删除，历史结论见 ../docs/verification-report.md
+§2 验证记录）：
 
 ## 路径 1：L3 隔离回放（wolvic L3 vs 独立 ZhuJiang L3 RTL）
 
@@ -36,7 +36,7 @@ make stash-emu NAME=<变体名>   # 留存二进制到 build/emu-variants/ 供�
 `dpi/` 即 wolvic 版的 DPI-C glue（`wolvic_zj_step`：set 输入 → 沉定 eval
 → clk 0→1 eval 提交 → 读输出 → clk 拉回 0；守卫预过滤要求
 settle-then-pulse，见框架规划 §5.2）。指纹校验与切换防呆见
-docs/perf-breakdown.md §5/§28。
+../docs/verification-report.md §3.4。
 
 ## 目录
 

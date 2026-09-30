@@ -1,7 +1,7 @@
 # Wolvicmod 仿真引擎规划：Flat 调度
 
 > 姊妹篇：《Wolvicmod 框架规划》（下称《框架规划》，引用其章节号为 §x.y）；
-> 性能数据出处：`proj-xiangshan-l3/docs/perf-breakdown.md`（下称《拆解》，§10 为最新基线）。
+> 性能数据出处：`proj-xiangshan-l3/docs/verification-report.md` §3（原《拆解》`perf-breakdown.md` 已于 2026-09-30 文档整理时并入该处，原文可从 git 历史检索）。
 > 本文档只涉及**引擎**（elaboration 之后的执行机制），不改变任何建模 API 的语义。
 >
 > **状态注记（2026-09-29）**：本文是 Flat 调度的规划文档，其实施与后续优化（别名化、

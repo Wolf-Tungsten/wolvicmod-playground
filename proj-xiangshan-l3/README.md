@@ -75,7 +75,7 @@ make replay DUT=rtl     # rtl单侧孤立计时
 （`taskset -c 2 <二进制> --dut=wolvic`）取两次最优；并先确认模型库
 是 Release 构建（`grep CMAKE_BUILD_TYPE build/CMakeCache.txt`，空值
 = -O0，会慢 ~9 倍且功能照样全绿——从零构建后必查，见
-docs/perf-breakdown.md §28 构建教训二）。
+docs/verification-report.md §3.4 构建类型教训）。
 
 前端译码级（XscChiAdapter+CcSocket）还有一条更细粒度的回放：
 `make trace-front [N=20000]`（emu dump 前 N 拍 FST →
@@ -96,7 +96,7 @@ make stash-emu NAME=x # 留存二进制到 build/emu-variants/ 供对比
 
 切换配置由 `.llc-config` 印记自动 clean 重建；当前对比结果（全程 coremark
 + difftest，2026-09-29）：**wolvic 272.9s vs RTL 297.6s**，cycleCnt/IPC
-逐值相等（docs/perf-breakdown.md §28）。
+逐值相等（docs/verification-report.md §3.1）。
 
 ## 依赖
 
@@ -122,5 +122,4 @@ rocket-chip/utility 不需要初始化（顶层自有副本）。
 ## 其它
 
 - `make test`：单测回归网（ctest 17 条）
-- 环境搭建、L3 边界探查、历史基线：`docs/xiangshan-l3-notes.md`
-- 性能优化全记录：`docs/perf-breakdown.md`
+- 文档（`docs/`）：ZhuJiang 概念读物 `zhujiang-primer.md`；模型实现层次 `wolvicmod-zhujiang-model.md`；与香山 RTL 集成 `xiangshan-wolvicmod-l3-integration.md`；测试方法与测试报告 `verification-report.md`

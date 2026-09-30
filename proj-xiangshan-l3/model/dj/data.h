@@ -1,6 +1,6 @@
 #pragma once
 
-// DataBlock 模型：对齐 dongjiang/data/*.scala（语义 docs/dongjiang-semantics.md §4）。
+// DataBlock 模型：对齐 dongjiang/data/*.scala（语义 docs/wolvicmod-zhujiang-model.md §5.4）。
 //   BeatStorage   — HomeDatRam（SpSram 2,2,outreg，5 拍）+ 5 拍移位 + respPipe
 //   DBIDPool      — 双 FastQueue(64) dbid 池（预充/长短平衡）
 //   DBIDCtrl      — dbid 分配/释放组合逻辑

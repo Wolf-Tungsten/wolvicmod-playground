@@ -2,7 +2,7 @@
 
 // Backend 共享载荷类型（backend/Bundle.scala + dongjiang/bundle/*）。
 // TaskCode(24b)/CommitCode(29b)/TaskInst(19b) 保持打包位图，位段见 dj_decode.h；
-// 其余按运行期结构体。语义 docs/dongjiang-semantics.md §5。
+// 其余按运行期结构体。语义 docs/wolvicmod-zhujiang-model.md §5.5。
 
 #include <array>
 #include <cstdint>

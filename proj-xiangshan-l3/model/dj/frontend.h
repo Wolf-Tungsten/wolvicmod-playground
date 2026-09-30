@@ -1,7 +1,7 @@
 #pragma once
 
 // Frontend 模型：对齐 frontend/{Frontend,ToChiTask,TaskBuffer,Block,PoS,Decode}.scala
-// （语义 docs/dongjiang-semantics.md §7；本配置 hasHPR=false，HPR 通道空转，
+// （语义 docs/wolvicmod-zhujiang-model.md §5.7；本配置 hasHPR=false，HPR 通道空转，
 //   但 TaskBuffer 的 sort/lock 机制全量建模）。
 
 #include <array>

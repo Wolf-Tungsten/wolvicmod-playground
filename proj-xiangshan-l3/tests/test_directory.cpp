@@ -1,6 +1,6 @@
 // Directory / DirectoryBase 单测：PLRU 纯函数、复位横扫窗口、读 miss/命中、
 // wriNoHit 分配+回读、sf reservation 挤占、Directory 顶层读联动与写分发。
-// 时序预期值推导见 docs/dongjiang-semantics.md §3（对拍 harness 做全量验证）。
+// 时序预期值推导见 docs/wolvicmod-zhujiang-model.md §5.3（对拍 harness 做全量验证）。
 
 #include <doctest/doctest.h>
 #include <wolvicmod/wolvicmod.h>

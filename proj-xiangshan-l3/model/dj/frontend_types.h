@@ -1,6 +1,6 @@
 #pragma once
 
-// Frontend 共享载荷类型（frontend/* 语见 docs/dongjiang-semantics.md §7）。
+// Frontend 共享载荷类型（frontend/* 语见 docs/wolvicmod-zhujiang-model.md §5.7）。
 
 #include <array>
 #include <cstdint>

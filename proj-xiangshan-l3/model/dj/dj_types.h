@@ -1,7 +1,7 @@
 #pragma once
 
 // DongJiang 公共类型与纯函数（kunminghu-v3 DefaultConfig + LLC=ZhuJiang 单核
-// 真实配置，推导见 docs/dongjiang-semantics.md §1）：
+// 真实配置，推导见 docs/wolvicmod-zhujiang-model.md §5.1）：
 //   - 地址切片：useAddr = addr[47:13]++addr[11:6]（剔除 bank 位 addr[12]），
 //     dirBank/llcSet/sfSet/tag 均从 useAddr 切
 //   - HnIdx：7bit {dirBank[6], posSet[5:4], posWay[3:0]}（= hnTxnID）

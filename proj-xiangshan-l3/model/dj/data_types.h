@@ -1,6 +1,6 @@
 #pragma once
 
-// DataBlock 公共类型与常量（kunminghu-v3 单核配置，语义 docs/dongjiang-semantics.md §4）。
+// DataBlock 公共类型与常量（kunminghu-v3 单核配置，语义 docs/wolvicmod-zhujiang-model.md §5.4）。
 // 维度：Beat 32B、每 cacheline 2 beat；DS 4 bank × 2 beat 的 BeatStorage；
 // dbid 7bit（128 项 DataBuffer）；dcid 6bit（64 项 DataCtrlEntry）。
 

@@ -1,5 +1,7 @@
 # Wolvicmod：显式结构 CModel 框架规划
 
+> 引用注记：本文多处引用的 `perf-breakdown.md`（《拆解》）已于 2026-09-30 文档整理时删除，其性能结论并入 `proj-xiangshan-l3/docs/verification-report.md` §3；文中"《拆解》/perf-breakdown §N"的章节号均指原文档，可从 git 历史检索。
+
 ---
 
 ## 1. 设计动机：建模粒度的选择
