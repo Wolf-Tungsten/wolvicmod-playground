@@ -7,9 +7,14 @@
 录没有 Makefile；从根目录用 `make -C proj-xiangshan-l3 ...` 等价）。下
 文一律写 `make xxx`。
 
-两条对比路径：
+两条对比路径，区别只在 RTL 侧的规模和激励来源：
 
-## ① 孤立 L3 回放（wolvic vs verilated RTL，同一 coremark trace）
+| | 路径①：L3 隔离回放 | 路径②：SoC 仿真 |
+|---|---|---|
+| RTL 侧 | **独立 ZhuJiang L3**（`ZhujiangReplayTop`：只有 L3 模块 + 边界 socket/remap，**不含**香山核/L2/总线/外设） | **XiangShan SoC 仿真器**（difftest emu：香山核 + L2 + ZhuJiang L3 + 仿真内存与外设） |
+| 激励 | 预先抓好的 trace 文件回放（秒级迭代） | 真跑 coremark 二进制 + difftest 在线比对（分钟级） |
+
+## ① L3 隔离回放（wolvic L3 vs 独立 ZhuJiang L3 RTL，同一 trace）
 
 按顺序三步：**造 RTL → 造 trace → 跑回放**。trace 与 RTL 都不随库
 （`build/` 已入 .gitignore），删除全部 build 目录后按本流程一次跑通。
@@ -17,26 +22,28 @@
 ### 第 1 步：生成回放用 RTL
 
 ```bash
-make replay-rtl   # mill 生成 ZhujiangReplayTop（与整机内 zhujiang_opt
-                 # 同配置，端口即三边界）→ build/zjrtl/rtl/
+make replay-rtl   # mill 生成 ZhujiangReplayTop：独立的 ZhuJiang L3 RTL，
+                  # 与 SoC 内例化的 zhujiang_opt 同参同源（XSCache/ZhuJiang
+                  # 子模块），端口即三边界 → build/zjrtl/rtl/
 ```
 
 ### 第 2 步：生成 trace（`build/trace/cm_full.txt`）
 
-trace 来自**整机 RTL emu 跑 coremark 时抓的波形**：
+trace 来自 **XiangShan SoC 仿真器（RTL 版）跑 coremark 时抓的 L3 边界
+波形**——先在 SoC 里录下 L3 的输入输出，再拿到路径① 里回放：
 
 ```bash
-make emu TRACE=fst   # 构建带 FST 波形的 RTL emu（首次全量 ~25-35min）
-make trace      # 抓全程波形 → 提取 trace → 自动校验
+make emu TRACE=fst   # 构建带 FST 波形的 RTL SoC emu（首次全量 ~25-35min）
+make trace           # 抓全程波形 → 提取 L3 三边界 trace → 自动校验
 ```
 
 `trace` 内部三步：
 
-1. emu 跑 coremark 全程并 dump FST 到 `build/trace/cm_full.fst`
+1. SoC emu 跑 coremark 全程并 dump FST 到 `build/trace/cm_full.fst`
    （`-b 0 -e 400000 -C 400000 --dump-wave`；coremark ~31.7 万拍自然
    HIT GOOD TRAP，FULLN 只是防死循环上限）；
 2. `verify/trace/extract_top_trace.cpp`（C++ libfst 直读 FST）提取
-   WolvicZjTop 三边界信号——L2 CHI 缝六通道 + mem AXI + cfg AXI——
+   L3 三边界信号——L2 CHI 缝六通道 + mem AXI + cfg AXI——
    重建逐拍文本 trace（316,748 拍 × 177 列）；
 3. 自动 `ctest -R wolvic_top_replay`：用新 trace 回放 wolvic 模型逐拍
    比对，验证 trace 可用。
@@ -48,6 +55,8 @@ bits 是随机初值，比对器按 don't-care 处理）。**RTL 侧行为变化
 
 ### 第 3 步：跑回放
 
+同一份 trace 同时喂给独立 L3 RTL 和 wolvic L3 模型，逐拍对拍：
+
 ```bash
 make replay DUT=both    # 等价性对拍（逐拍三边界交叉验证）
 make replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
@@ -55,11 +64,15 @@ make replay DUT=wolvic  # DUT=rtl|wolvic：单侧孤立计时
 
 `REPLAY_AUDIT=1 <二进制>` 开读集审计。
 
-前端译码级的 P2 回放用另一条 trace：`make replay [N=20000]`（emu dump
-前 N 拍 FST → `fst2vcd | verify/trace/extract_cc_trace.py` →
+前端译码级（XscChiAdapter+CcSocket）还有一条更细粒度的回放：
+`make trace-front [N=20000]`（emu dump 前 N 拍 FST →
+`fst2vcd | verify/trace/extract_cc_trace.py` →
 `build/trace/cc_front.txt` → `ctest -R test_trace_replay`）。
 
-## ② 整机 emu（XiangShan + wolvic L3 vs XiangShan + RTL L3，difftest）
+## ② SoC 仿真（XiangShan SoC + wolvic L3 vs XiangShan SoC + RTL L3）
+
+difftest 仿真器，差别只在 L3 由谁实现——RTL 还是 wolvicmod 模型
+（chisel BlackBox `WolvicZjBB` + DPI 替换）：
 
 ```bash
 make emu              # RTL ZhuJiang L3 版（8 线程）
