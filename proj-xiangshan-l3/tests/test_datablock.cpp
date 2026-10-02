@@ -57,6 +57,40 @@ TEST_CASE("dj DBIDPool: 预充 64 拍后双queue出 id，单取从长queue") {
     comb(d);
 }
 
+TEST_CASE("dj DBIDPool: clock gate freezes both precharge counter and queues") {
+    DBIDPool d;
+    d.elaborate();
+    d.clk_en.set(false);
+    d.enq0.set({false, 0});
+    d.enq1.set({false, 0});
+    d.deq0_rdy.set(false);
+    d.deq1_rdy.set(false);
+
+    cycle(d);  // RTL clock gate passes its initial edge.
+    CHECK(d.rst.get().cnt == 1);
+    CHECK(d.q0.count.get() == 1);
+    CHECK(d.q1.count.get() == 1);
+    for (int i = 0; i < 100; ++i) cycle(d);
+    CHECK(d.rst.get().cnt == 1);
+    CHECK(d.q0.count.get() == 1);
+    CHECK(d.q1.count.get() == 1);
+
+    d.clk_en.set(true);
+    for (int i = 0; i < 63; ++i) cycle(d);
+    comb(d);
+    CHECK(d.rst.get().done);
+    CHECK(d.q0.count.get() == 64);
+    CHECK(d.q1.count.get() == 64);
+    CHECK(d.deq0.get().bits == 0);
+    CHECK(d.deq1.get().bits == 64);
+    d.deq0_rdy.set(true);
+    d.deq1_rdy.set(true);
+    cycle(d);
+    comb(d);
+    CHECK(d.deq0.get().bits == 1);
+    CHECK(d.deq1.get().bits == 65);
+}
+
 TEST_CASE("dj BeatStorage: 写后读，响应恰好 5 拍") {
     BeatStorage d;
     d.elaborate();

@@ -34,6 +34,22 @@ ReplaceCM::ReplaceCM() {
     req_db_arb.clk = clk;
     for (uint32_t i = 0; i < 8; ++i) req_pos_arbs[i].clk = clk;
 
+    // Keep the replacement diagnosis in the waveform rather than in a
+    // per-instance printf stream.  RTL handles the direct-allocation victim
+    // in ReplaceCM entry 1; expose that entry and the response handshakes.
+    wolvicmod::probe(entries, "e1_state", [](const EntryArr& v) { return v[1].state; });
+    wolvicmod::probe(entries, "e1_hn", [](const EntryArr& v) { return v[1].hnTxnID; });
+    wolvicmod::probe(entries, "e1_repl_hn", [](const EntryArr& v) { return v[1].replHnTxnID; });
+    wolvicmod::probe(entries, "e1_wri_sf", [](const EntryArr& v) { return v[1].wriSF; });
+    wolvicmod::probe(entries, "e1_direct_sf", [](const EntryArr& v) { return v[1].directAllocSF; });
+    wolvicmod::probe(task, "valid", [](const Valid<ReplTask>& v) { return v.valid; });
+    wolvicmod::probe(task, "hn", [](const Valid<ReplTask>& v) { return v.bits.hnTxnID; });
+    wolvicmod::probe(resp, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(resp, "hn", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(write_dir, "valid", [](const Valid<DirWrBoth>& v) { return v.valid; });
+    wolvicmod::probe(write_dir_done, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(write_dir_done, "hn", [](const Valid<uint8_t>& v) { return v.bits; });
+
     // ---- Alloc 池化 ----
     w_alloc_rdy_all.assign().reads(entries) = [](auto src) {
         auto [entries] = src;
@@ -320,10 +336,10 @@ ReplaceCM::ReplaceCM() {
         entries, alloc_arb.out, pos_resp_vec, w_dir_hits, resp_dir_sf, resp_dir_llc, cfg_ci,
         req_db_arb.in_rdy, wri_arb.in_rdy, snp_arb.in_rdy, cm_resp, data_task_arb.in_rdy,
         data_resp, clean_arb.in_rdy, write_dir_done, w_req_pos_rdy_all,
-        wdir_arb.in_rdy) = [](auto src) {
+        wdir_arb.in_rdy, resp_arb.in_rdy) = [](auto src) {
         auto [entries, alloc_out, pos_resp, hits, resp_dir_sf, resp_dir_llc, cfg_ci, req_db_rdy,
               wri_rdy, snp_rdy, cm_resp, data_task_rdy, data_resp, clean_rdy, write_dir_done,
-              req_pos_rdy, wdir_rdy] = src;
+              req_pos_rdy, wdir_rdy, resp_rdy] = src;
         EntryArr n = entries;
         for (uint32_t i = 0; i < kEntries; ++i) {
             const ReplReg& reg = entries[i];
@@ -392,6 +408,10 @@ ReplaceCM::ReplaceCM() {
                     break;
                 case replst::kUpdateId: next.state = replst::kWrite; break;
                 case replst::kRespCmt:
+                    // resp is a Valid output backed by fastRRArb.validOut.
+                    // RTL advances only on io.resp.fire, i.e. when this
+                    // entry wins the RR arbiter in the current cycle.
+                    if (!resp_rdy[i]) break;
                     if (isReplSF) {
                         next.state = reg.needSnp ? replst::kReqDB : replst::kCleanPosR;
                     } else if (isReplLLC) {

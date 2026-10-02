@@ -546,19 +546,50 @@ struct WvSide {
     std::unique_ptr<WolvicZjTop> top;
     Score                        sb{"wolvic"};
     double                       tEval0 = 0, tEval1 = 0;
+    bool                         waveEnabled = false;
+    long                         waveLo = -1, waveHi = -1;
+
+    ~WvSide() {
+#ifdef WOLVICMOD_WITH_FST
+        if (top != nullptr && waveEnabled) top->waveOff();
+#endif
+    }
 
     void create() {
         top = std::make_unique<WolvicZjTop>();
         top->elaborate();
         top->ci.set(0);  // 单核恒 0
+#ifdef WOLVICMOD_WITH_FST
+        // WOLVIC_FST=<file>:<first-cycle>:<last-cycle> enables a small,
+        // explicit model waveform window.  It is deliberately opt-in: the
+        // normal replay path has no waveform overhead.
+        if (const char* spec = std::getenv("WOLVIC_FST")) {
+            char file[1024]{};
+            if (std::sscanf(spec, "%1023[^:]:%ld:%ld", file, &waveLo, &waveHi) == 3 &&
+                waveLo <= waveHi) {
+                top->waveOn(file);
+                waveEnabled = true;
+            } else {
+                std::fprintf(stderr, "WOLVIC_FST expects <file>:<first-cycle>:<last-cycle>\n");
+            }
+        }
+#endif
     }
     void eval0() {
         top->clk.set(0);
         top->eval();
+#ifdef WOLVICMOD_WITH_FST
+        if (waveEnabled && (long)g_cyc >= waveLo && (long)g_cyc <= waveHi)
+            top->waveDump(g_cyc * 2);
+#endif
     }
     void eval1() {
         top->clk.set(1);
         top->eval();
+#ifdef WOLVICMOD_WITH_FST
+        if (waveEnabled && (long)g_cyc >= waveLo && (long)g_cyc <= waveHi)
+            top->waveDump(g_cyc * 2 + 1);
+#endif
     }
 
     void drive(size_t r) {
@@ -646,13 +677,15 @@ int main(int argc, char** argv) {
                 (unsigned long)g_tr.cycs.back());
     std::printf("mode=%s（两侧均不开波形；预滚仅 RTL 侧）\n", mode.c_str());
 
-    RtlSide rtl;
-    WvSide  wv;
+    RtlSide  rtl;
+    WvSide   wv;
     if (useRtl) {
         rtl.create();
         rtl.preroll(preroll);
     }
-    if (useWv) wv.create();
+    if (useWv) {
+        wv.create();
+    }
 
     const size_t rows = (maxRows && maxRows < g_tr.rows.size()) ? maxRows : g_tr.rows.size();
 

@@ -1,5 +1,4 @@
 #include <wolvicmod/wolvicmod.h>
-
 #include "model/dj/data.h"
 
 namespace zj::dj {
@@ -37,6 +36,16 @@ DataCM::DataCM() {
     chi_hi_arb.clk = clk;
     chi_lo_arb.clk = clk;
 
+    // DataCM readToDB selects the BeatStorage bank/beat; keep its payload
+    // visible in the model FST for narrow RTL comparisons.
+    wolvicmod::probe(read_to_db, "valid", [](const Valid<ReadDS>& v) { return v.valid; });
+    wolvicmod::probe(read_to_db, "dcid", [](const Valid<ReadDS>& v) { return v.bits.dcid; });
+    wolvicmod::probe(read_to_db, "dbid", [](const Valid<ReadDS>& v) { return v.bits.dbid; });
+    wolvicmod::probe(read_to_db, "beat", [](const Valid<ReadDS>& v) { return v.bits.beatNum; });
+    wolvicmod::probe(read_to_db, "bank", [](const Valid<ReadDS>& v) { return v.bits.ds.bank; });
+    wolvicmod::probe(read_to_db, "idx", [](const Valid<ReadDS>& v) { return v.bits.ds.idx; });
+    wolvicmod::probe(read_to_db, "to_chi", [](const Valid<ReadDS>& v) { return v.bits.toCHI; });
+    wolvicmod::probe(read_to_db_rdy, "value", [](bool v) { return v; });
     task_d.update().on(posedge(clk)).reads(task_d, task) = [](auto src) {
         auto [task_d, task] = src;
         TaskD next;
@@ -528,6 +537,18 @@ DataBlock::DataBlock() {
         beat_storages[i].clk = clk;
         beat_storages[i].clk_en = clk_en;
     }
+
+    wolvicmod::probe(w_ds_resp_arbed, "valid", [](const Valid<DsResp>& v) { return v.valid; });
+    wolvicmod::probe(w_ds_resp_arbed, "dcid", [](const Valid<DsResp>& v) { return v.bits.dcid; });
+    wolvicmod::probe(w_ds_resp_arbed, "dbid", [](const Valid<DsResp>& v) { return v.bits.dbid; });
+    wolvicmod::probe(w_ds_resp_arbed, "beat", [](const Valid<DsResp>& v) { return v.bits.beatNum; });
+    wolvicmod::probe(w_ds_resp_arbed, "word0", [](const Valid<DsResp>& v) { return v.bits.beat[0]; });
+    wolvicmod::probe(w_ds_resp_arbed, "to_chi", [](const Valid<DsResp>& v) { return v.bits.toCHI; });
+    wolvicmod::probe(tx_dat, "valid", [](const Valid<DataFlit>& v) { return v.valid; });
+    wolvicmod::probe(tx_dat, "data0", [](const Valid<DataFlit>& v) { return v.bits.data[0]; });
+    wolvicmod::probe(tx_dat, "data1", [](const Valid<DataFlit>& v) { return v.bits.data[1]; });
+    wolvicmod::probe(w_db_to_chi, "value", [](bool v) { return v; });
+    wolvicmod::probe(w_ds_to_chi, "value", [](bool v) { return v; });
 
     // ---- DS 读交叉分发 ----
     for (uint32_t i = 0; i < kNrDSBank * kNrBeat; ++i) {

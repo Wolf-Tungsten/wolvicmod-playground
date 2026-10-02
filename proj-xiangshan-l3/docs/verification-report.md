@@ -2,7 +2,7 @@
 
 本文是项目的验证总账：正确性判据、四级验证策略、全部对拍数据、性能结论与复现入口。模型层次与实现细节见 `wolvicmod-zhujiang-model.md`，DPI-C 集成与构建见 `xiangshan-wolvicmod-l3-integration.md`，ZhuJiang 概念背景见 `zhujiang-primer.md`。
 
-**最终结论**：wolvicmod 周期精确建模的 ZhuJiang L3（WolvicZjTop）经 DPI-C 整体替换 XiangShan 昆明湖 V3 SoC 中的 ZhuJiang RTL，coremark 系统级仿真 `HIT GOOD TRAP`、difftest 663,692 指令零失配、**cycleCnt = 316,801 与 RTL 逐拍完全相等**；各级对拍累计逾 10 亿次信号比对零失配。
+**最终结论**：wolvicmod 周期精确建模的 ZhuJiang L3（WolvicZjTop）经 DPI-C 整体替换 XiangShan 昆明湖 V3 SoC 中的 ZhuJiang RTL，coremark 系统级仿真 `HIT GOOD TRAP`、difftest 663,692 指令零失配、**cycleCnt = 316,801 与 RTL 逐拍完全相等**；Linux 启动阶段截取的 2,999,715 拍 trace 也通过 RTL/模型共栖回放；各级对拍累计逾 10 亿次信号比对零失配。
 
 ## 1. 验证方法论
 
@@ -67,6 +67,7 @@
 | ③ trace | coremark 全程 golden trace 重放（`make replay-top`）：驱动 L2 tx 三通道 + rx ready + mem/cfg b/r 返回，比对 L2 ready/rx + mem/cfg aw/w/ar + cc_tx_req 断言 | **316,748 拍** | **5,423,490** | 零失配 |
 | ③ trace | 孤立共栖 A/B 回放：verilated 独立 ZhuJiang RTL 对同一 trace 重放（RTL 侧直接证据） | 316,748 拍 | RTL 5,106,742 / wolvic 5,423,490 | 各自零失配 |
 | ③ trace | **microbench 负载**共栖 A/B 回放（2026-09-30 补测，`make replay DUT=both TRACE_FILE=build/trace/microbench.txt`） | 252,597 拍 | RTL 4,104,436 / wolvic 4,357,033 | 各自零失配 |
+| ③ trace | **Linux 启动阶段**共栖 A/B 回放（2026-10-02，截取 trace 全部行；`make replay DUT=both TRACE_FILE=build/trace/linux.txt`） | 2,999,715 拍 | RTL 48,775,066 / wolvic 51,774,781 | 各自零失配 |
 | ④ 系统级 | `make emu WOLVIC=1` + coremark + difftest（EMU_THREADS=16，host time ≈ 876s） | 全程 | 663,692 指令 | 三判据全中（见下） |
 | 回归 | proj ctest（含组合穿透审计与全程 trace 重放） | — | — | **17/17 全绿** |
 
@@ -88,6 +89,7 @@
 | ④ | 时钟门控上电横扫冻结 | P4b 全程 trace 重放 | HomeWrapper 时钟门控将上电横扫（目录 SRAM/DBID 预充）冻结至首请求唤醒，两 HNF 独立（coremark 实测 hnf_0 cyc~1038 醒、hnf_1 cyc~9323 醒）。**省略则首笔内存访问早 ~1000 拍，边界立即失配**；已建模为 DongJiang 顶层 `woken` 锁存 + 横扫/预充 `clk_en` 功能使能 |
 | ⑤ | getDBID 多匹配取首个 dcid | DataBlock 对拍 | 多匹配时 RTL 按 PriorityEncoder 取**首个** dcid；模型初版取末位，在违例域才暴露，修为忠实 |
 | ⑥ | DPI 打包三 bug | DPI 冒烟（`verify/dpi/run.sh`） | `bit_pack.h::setWide` 末字越界；`fromSv`/`toSv` 须按 nbits 截断（Verilator `svBitVecVal` 是 uint32，缓冲 `ceil(nbits/32)`）；`elaborate()` 之后才允许 set 端口。冒烟台不经 emu、几十秒定位 |
+| ⑦ | DBIDPool 时钟门控只冻结计数器 | Linux 启动 trace + wolvicmod 探针/FST | 旧模型在 DongJiang 上电后、首请求唤醒前冻结预充计数器，却继续为两条 ID queue 打时钟，导致重复入队 `0/64`；探针显示队头一直是 `0/64`，RTL 对应读取为 `0x33/0x73`，首个边界失配在 cycle 81,289。现让计数器与两条队列共用门控时钟，保留 RTL 上电首次时钟沿；回归覆盖首次沿、100 拍冻结、预充完成和后续出队 ID。Linux 截取 trace 全部 2,999,715 拍回放零失配 |
 
 ## 3. 性能报告
 
@@ -174,7 +176,7 @@ cat XiangShan/build/.llc-config           # wolvic 版 = "ZhuJiang-wolvic trace=
 
 | 项 | 现状 |
 |---|---|
-| 负载覆盖 | coremark-2-iteration（全程，正确性 + 性能基线）+ microbench（252,597 拍，L3 压力型负载，2026-09-30 补测）；Linux boot trace 抓取进行中，尚未纳入对拍 |
+| 负载覆盖 | coremark-2-iteration（全程，正确性 + 性能基线）+ microbench（252,597 拍，L3 压力型负载）+ Linux 启动阶段截取 trace（2,999,715 拍，2026-10-02 回放通过）；不据此宣称 Linux 完整启动或系统级 Linux difftest 已验证 |
 | 配置覆盖 | 单 tile DefaultConfig：ZhuJiang 32MB / 2 HNF（各 16MB），CHI Issue E.b，参数全部锁定。多核/多 tile、其他 LLC 容量未验证 |
 | CHI 特性子集 | DataCheck/Poison 关闭（配置强制）；无 linkactive/sysco 链路管理（模型按常通链路处理）；无 DVM/MPAM 语义（mpam 字段落 zhujiang 零宽字段，无语义）；c2c、BBN、HPR/DBG 环未建模（配置关闭或不进数据通路） |
 | 防死锁机制 | 环 rsvd 令牌、EjectBuffer VIP 末槽、目录 lockTable 在 coremark 中未必触发——靠合成流量对拍覆盖（环级 4.86 亿、socket 5220 万、Directory 544 万比对），少一个就可能在某次反压下死锁，故全部建模 |
@@ -187,6 +189,7 @@ cat XiangShan/build/.llc-config           # wolvic 版 = "ZhuJiang-wolvic trace=
 |---|---|
 | `make -C proj-xiangshan-l3 test` | ctest 回归（17/17，含组合穿透审计与全程 trace 重放） |
 | `make -C proj-xiangshan-l3 replay-rtl && make -C proj-xiangshan-l3 trace && make -C proj-xiangshan-l3 replay DUT=both` | 孤立 L3 共栖回放：造 RTL → 造 coremark 全程 trace → wolvic vs verilated RTL 逐拍对拍（`DUT=rtl\|wolvic` 为孤立性能剖析） |
+| `cmake --build proj-xiangshan-l3/build -j --target zjmodel && make -C proj-xiangshan-l3 replay DUT=both TRACE_FILE=build/trace/linux.txt` | 重建模型库并回放已提取的 Linux 启动阶段 trace（RTL 48,775,066 / wolvic 51,774,781 次比对，均零失配） |
 | `make -C proj-xiangshan-l3 trace IMG=<bin> TNAME=<名> FULLN=<拍数>` + `make replay DUT=both TRACE_FILE=build/trace/<名>.txt` | 换负载（microbench 等任意镜像）生成 trace 并回放；非 cm_full 不跑自动校验 |
 | `make -C proj-xiangshan-l3 trace` | coremark 全程 golden trace 生成 + 自动重放校验（`ctest -R test_wolvic_top_replay`，即源文档所称 `replay-top`） |
 | `make -C proj-xiangshan-l3 emu WOLVIC=1 && make -C proj-xiangshan-l3 coremark` | 系统级：wolvic 版 emu 构建 + coremark + difftest（三判据见 §2.1） |

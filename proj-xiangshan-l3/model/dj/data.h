@@ -109,6 +109,8 @@ public:
     using IdQ = FastQueue<uint8_t, kNrDataBuf / 2, false>;
     MOD(IdQ, q0);
     MOD(IdQ, q1);
+    REG(bool, clock_started);
+    WIRE(bool, pool_clk);
 
     // 预充状态（原 rst_cnt/rst_done）：同沿同使能（clk_en 门控）的计数器与
     // 完成锁存，并为一个 struct + 一条 update。

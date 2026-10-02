@@ -96,6 +96,16 @@ Commit::Commit() {
     data_task_arb.clk = clk;
     clean_arb.clk = clk;
 
+    // Targeted waveform observability for the first DBID divergence.
+    wolvicmod::probe(entries, "e73_state", [](const EntryArr& v) { return v[73].state; });
+    wolvicmod::probe(entries, "e73_txn", [](const EntryArr& v) { return v[73].task.chi.txnID; });
+    wolvicmod::probe(entries, "e73_w_repl", [](const EntryArr& v) { return v[73].flag.wReplResp; });
+    wolvicmod::probe(entries, "e73_w_comp", [](const EntryArr& v) { return v[73].flag.wCompAck; });
+    wolvicmod::probe(repl_task, "valid", [](const Valid<ReplTask>& v) { return v.valid; });
+    wolvicmod::probe(repl_task, "hn", [](const Valid<ReplTask>& v) { return v.bits.hnTxnID; });
+    wolvicmod::probe(repl_resp, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(repl_resp, "hn", [](const Valid<uint8_t>& v) { return v.bits; });
+
     // ---- 基本派生 ----
     w_valid.assign().reads(entries) = [](auto src) {
         auto [entries] = src;

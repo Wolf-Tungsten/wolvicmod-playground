@@ -11,6 +11,35 @@ BeatStorage::BeatStorage() {
     array.clk_en = clk_en;
     resp_pipe.clk = clk;
 
+    // Field-level probes mirror BeatStorage.scala's read/resp contract. Keep
+    // these in the model FST for narrow, cycle-accurate RTL comparisons.
+    wolvicmod::probe(read, "valid", [](const Valid<ReadDS>& v) { return v.valid; });
+    wolvicmod::probe(read, "dcid", [](const Valid<ReadDS>& v) { return v.bits.dcid; });
+    wolvicmod::probe(read, "dbid", [](const Valid<ReadDS>& v) { return v.bits.dbid; });
+    wolvicmod::probe(read, "beat", [](const Valid<ReadDS>& v) { return v.bits.beatNum; });
+    wolvicmod::probe(read, "bank", [](const Valid<ReadDS>& v) { return v.bits.ds.bank; });
+    wolvicmod::probe(read, "idx", [](const Valid<ReadDS>& v) { return v.bits.ds.idx; });
+    wolvicmod::probe(read, "to_chi", [](const Valid<ReadDS>& v) { return v.bits.toCHI; });
+    wolvicmod::probe(write, "valid", [](const Valid<WriteDS>& v) { return v.valid; });
+    wolvicmod::probe(write, "idx", [](const Valid<WriteDS>& v) { return v.bits.ds.idx; });
+    wolvicmod::probe(write, "word0", [](const Valid<WriteDS>& v) { return v.bits.beat[0]; });
+    wolvicmod::probe(array.req, "valid", [](const auto& v) { return v.valid; });
+    wolvicmod::probe(array.req, "write", [](const auto& v) { return v.bits.write; });
+    wolvicmod::probe(array.req, "addr", [](const auto& v) { return v.bits.addr; });
+    wolvicmod::probe(array.req, "word0", [](const auto& v) { return v.bits.data[0][0]; });
+    wolvicmod::probe(array.resp, "valid", [](const auto& v) { return v.valid; });
+    wolvicmod::probe(resp_pipe.deq, "valid", [](const Valid<RespInfo>& v) { return v.valid; });
+    wolvicmod::probe(resp_pipe.deq, "dcid", [](const Valid<RespInfo>& v) { return v.bits.dcid; });
+    wolvicmod::probe(resp_pipe.deq, "dbid", [](const Valid<RespInfo>& v) { return v.bits.dbid; });
+    wolvicmod::probe(resp_pipe.deq, "beat", [](const Valid<RespInfo>& v) { return v.bits.beatNum; });
+    wolvicmod::probe(resp, "valid", [](const Valid<DsResp>& v) { return v.valid; });
+    wolvicmod::probe(resp, "dcid", [](const Valid<DsResp>& v) { return v.bits.dcid; });
+    wolvicmod::probe(resp, "dbid", [](const Valid<DsResp>& v) { return v.bits.dbid; });
+    wolvicmod::probe(resp, "beat", [](const Valid<DsResp>& v) { return v.bits.beatNum; });
+    wolvicmod::probe(resp, "word0", [](const Valid<DsResp>& v) { return v.bits.beat[0]; });
+    wolvicmod::probe(resp, "to_chi", [](const Valid<DsResp>& v) { return v.bits.toCHI; });
+    wolvicmod::probe(array.resp, "word0", [](const auto& v) { return v.bits.data[0][0]; });
+
     // reqReady：5bit 移位里 bit4（d1）无请求 → 请求隔 2 拍（对齐 SRAM interval=2）
     w_req_ready.assign().reads(st) = [](auto src) {
         auto [st] = src;
@@ -76,16 +105,40 @@ BeatStorage::BeatStorage() {
 // ---------------- DBIDPool ----------------
 
 DBIDPool::DBIDPool() {
-    q0.clk = clk;
-    q1.clk = clk;
+    // The RTL gate passes its initial edge, then holds the entire pool until
+    // DongJiang wakes. The queues and precharge counter must see the same edges.
+    clock_started.update().on(posedge(clk)).reads(clock_started) = [](auto) {
+        return true;
+    };
+    pool_clk.assign().reads(clk, clk_en, clock_started) = [](auto src) {
+        auto [clk, clk_en, started] = src;
+        return clk && (clk_en || !started);
+    };
+    q0.clk = pool_clk;
+    q1.clk = pool_clk;
+
+    wolvicmod::probe(deq0, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(deq0, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(deq1, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(deq1, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(enq0, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(enq0, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(enq1, "valid", [](const Valid<uint8_t>& v) { return v.valid; });
+    wolvicmod::probe(enq1, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(q0.deq, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(q1.deq, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(q0.enq, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(q1.enq, "bits", [](const Valid<uint8_t>& v) { return v.bits; });
+    wolvicmod::probe(rst, "cnt", [](const Rst& v) { return v.cnt; });
+    wolvicmod::probe(rst, "done", [](const Rst& v) { return v.done; });
 
     // Counter(64).inc() 每拍调用；值 63 的那拍返回真 → done 次拍锁存。
     // clk_en=0（门控冻结期）计数保持——HomeWrapper ICG 冻结预充至 DongJiang 唤醒
-    rst.update().on(posedge(clk)).reads(rst, clk_en) = [](auto src) {
-        auto [rst, clk_en] = src;
+    rst.update().on(posedge(pool_clk)).reads(rst) = [](auto src) {
+        auto [rst] = src;
         Rst next;
-        next.cnt = !clk_en ? rst.cnt : static_cast<uint8_t>(rst.cnt == 63 ? 0 : rst.cnt + 1);
-        next.done = rst.done || (clk_en && rst.cnt == 63);
+        next.cnt = static_cast<uint8_t>(rst.cnt == 63 ? 0 : rst.cnt + 1);
+        next.done = rst.done || rst.cnt == 63;
         return next;
     };
 
@@ -186,6 +239,26 @@ DataBuffer::DataBuffer() {
     dat_buf.clk_en = clk_en;
     to_ds_q.clk = clk;
     to_chi_q.clk = clk;
+
+    // Keep the byte-array read/write boundary visible: a wrong line here
+    // means the cache data was stored incorrectly before BeatStorage.
+    wolvicmod::probe(dat_buf.rreq, "valid", [](const auto& v) { return v.valid; });
+    wolvicmod::probe(dat_buf.rreq, "addr", [](const auto& v) { return v.bits; });
+    wolvicmod::probe(dat_buf.rresp, "valid", [](const auto& v) { return v.valid; });
+    wolvicmod::probe(dat_buf.rresp, "word0", [](const auto& v) { return v.bits.data[0]; });
+    wolvicmod::probe(dat_buf.wreq, "valid", [](const auto& v) { return v.valid; });
+    wolvicmod::probe(dat_buf.wreq, "addr", [](const auto& v) { return v.bits.addr; });
+    wolvicmod::probe(dat_buf.wreq, "word0", [](const auto& v) { return v.bits.data[0]; });
+    wolvicmod::probe(read_to_ds, "valid", [](const Valid<ReadDB>& v) { return v.valid; });
+    wolvicmod::probe(read_to_ds, "dbid", [](const Valid<ReadDB>& v) { return v.bits.dbid; });
+    wolvicmod::probe(read_to_ds, "idx", [](const Valid<ReadDB>& v) { return v.bits.ds.idx; });
+    wolvicmod::probe(read_to_chi, "dbid", [](const Valid<ReadDB>& v) { return v.bits.dbid; });
+    wolvicmod::probe(write_ds, "valid", [](const Valid<WriteDS>& v) { return v.valid; });
+    wolvicmod::probe(write_ds, "beat", [](const Valid<WriteDS>& v) { return v.bits.beatNum; });
+    wolvicmod::probe(write_ds, "idx", [](const Valid<WriteDS>& v) { return v.bits.ds.idx; });
+    wolvicmod::probe(write_ds, "word0", [](const Valid<WriteDS>& v) { return v.bits.beat[0]; });
+    wolvicmod::probe(from_chi, "valid", [](const Valid<FromCHI>& v) { return v.valid; });
+    wolvicmod::probe(from_chi, "dbid", [](const Valid<FromCHI>& v) { return v.bits.dbid; });
 
     // ---- 读请求侧（w_has_free_* 内联：空位须多于在途读） ----
     read_to_chi_rdy.assign().reads(to_chi_q.free_num, rd_ctl, read_to_ds) = [](auto src) {
