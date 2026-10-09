@@ -418,9 +418,10 @@ WOLVIC_ZJ_TRACE=/tmp/zj.txt WOLVIC_ZJ_TRACE_MAX=100000 \
 ## 6. 已知限制与扩展方向
 
 - **配置面**：当前验证的是 `DefaultConfig` 单 tile（1 个 rn 口）、ZhuJiang 32MB/
-  2 HNF 配置。chisel BlackBox 已按 `Vec(numCores)` 参数化，但 SV 薄壳与打包布局
-  目前按单 rn 例化——多 tile 需要扩展 SV 壳与 pack 表（模型内部拓扑参数化，
-  改动集中在打包层）；
+  2 HNF 配置。香山原生 ZhuJiang 的 Scala 拓扑支持 1 或 2 个 CC，但 wolvicmod
+  C++ 模型当前仍是单 CC、10 站环、单组 CHI 边界；chisel BlackBox 虽按
+  `Vec(numCores)` 声明，SV 薄壳与 DPI pack 仍只实现 `rn[0]`。多核需要同时扩展
+  C++ 拓扑/目录 snoop 状态、SV 壳和 pack 表，不能只改 BlackBox 端口；
 - **CHI 特性子集**：按香山实际使用面建模（DataCheck/Poison 关闭、无 linkactive
   管理、无 DVM/MPAM 语义）；若上游打开这些开关，模型需相应扩展，打包层的
   字段裁剪清单也要同步；

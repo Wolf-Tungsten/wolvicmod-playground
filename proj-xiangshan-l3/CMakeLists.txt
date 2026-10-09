@@ -28,6 +28,11 @@ target_include_directories(zjmodel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(zjmodel PRIVATE WOLVICMOD_AUDIT=1)
 target_link_libraries(zjmodel PUBLIC wolvicmod)
 
+# 直接 C++ 周期接口：gem5/独立 C++ 驱动均只需链接此 target，无 DPI/SV 依赖。
+add_library(wolviczj_cpp STATIC cpp/wolvic_zj_model.cpp)
+target_compile_definitions(wolviczj_cpp PRIVATE WOLVICMOD_AUDIT=1)
+target_link_libraries(wolviczj_cpp PUBLIC zjmodel)
+
 # DPI-C 集成静态库：emu 链接注入（difftest USER_LDFLAGS），见 dpi/sv/WolvicZjBB.sv。
 # -fPIC：emu 以 -pie 链接时静态库必需。
 add_library(wolviczj_dpi STATIC ${CMAKE_CURRENT_SOURCE_DIR}/dpi/csrc/wolvic_zj_dpi.cpp)
@@ -48,6 +53,9 @@ foreach(src ${ZJ_PREFAB_TEST_SOURCES})
     # 与 wolvicmod/tests 一致：测试套件编入读集对账插桩（运行时开关默认仍关）
     target_compile_definitions(${name} PRIVATE WOLVICMOD_AUDIT=1)
     target_link_libraries(${name} PRIVATE wolvicmod zjmodel)
+    if(name STREQUAL "test_wolvic_zj_model")
+        target_link_libraries(${name} PRIVATE wolviczj_cpp)
+    endif()
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
 

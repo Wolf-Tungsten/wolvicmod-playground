@@ -33,12 +33,50 @@ TRACE ?=
 
 SHELL := /bin/bash
 
-.PHONY: test emu coremark emu-clean stash-emu replay replay-rtl trace trace-front
+.PHONY: test emu coremark emu-clean stash-emu replay replay-rtl trace trace-front \
+	gem5-build wolvic-smoke wolvic-regression wolvic-coremark-short wolvic-coremark
 
 test:
 	cmake -S . -B build
 	cmake --build build -j
 	cd build && ctest --output-on-failure
+
+# --- project-local gem5 stage-7 entry points ---
+# Keep the gem5 binary, logs, traces, and validation records under this
+# project.  GEM5_NEMU_REF is optional; the stage-7 runner discovers the newest
+# normal reference under build/nemu/releases when it is omitted.
+GEM5_DIR       ?= $(CURDIR)/xs-gem5
+GEM5_BIN       ?= $(GEM5_DIR)/build/RISCV/gem5.opt
+GEM5_JOBS      ?= 8
+GEM5_RUNS      ?= $(CURDIR)/build/runs
+GEM5_NEMU_REF  ?=
+
+gem5-build:
+	@mkdir -p $(GEM5_RUNS)
+	cd $(GEM5_DIR) && scons build/RISCV/gem5.opt --gold-linker -j$(GEM5_JOBS) \
+		> $(GEM5_RUNS)/gem5-stage7-build.log 2>&1
+
+wolvic-smoke: gem5-build
+	@mkdir -p $(GEM5_RUNS)/gem5-stage7-smoke
+	cd $(GEM5_DIR) && $(GEM5_BIN) \
+		--outdir=$(GEM5_RUNS)/gem5-stage7-smoke \
+		configs/example/wolvic_zj_smoke.py \
+		> $(GEM5_RUNS)/gem5-stage7-smoke/run.log 2>&1
+
+wolvic-regression: gem5-build
+	python3 $(GEM5_DIR)/configs/example/run_wolvic_zj_stage7_tests.py \
+		--gem5=$(GEM5_BIN) --outdir=$(GEM5_RUNS)/gem5-stage7 \
+		$(if $(GEM5_NEMU_REF),--nemu-ref=$(GEM5_NEMU_REF))
+
+wolvic-coremark-short: gem5-build
+	python3 $(GEM5_DIR)/configs/example/run_wolvic_zj_stage7_tests.py \
+		--gem5=$(GEM5_BIN) --outdir=$(GEM5_RUNS)/gem5-stage7-coremark-short \
+		--only=coremark-short $(if $(GEM5_NEMU_REF),--nemu-ref=$(GEM5_NEMU_REF))
+
+wolvic-coremark: gem5-build
+	python3 $(GEM5_DIR)/configs/example/run_wolvic_zj_stage7_tests.py \
+		--gem5=$(GEM5_BIN) --outdir=$(GEM5_RUNS)/gem5-stage7-coremark \
+		--only=coremark $(if $(GEM5_NEMU_REF),--nemu-ref=$(GEM5_NEMU_REF))
 
 # --- XiangShan emu ---
 LLC    ?= ZhuJiang
