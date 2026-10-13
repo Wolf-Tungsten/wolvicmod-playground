@@ -8,45 +8,39 @@
 //   0 HF(b0p0) | 1 CC | 2 HF(b1p0) | 3 RI | 4 HI(defaultHni) |
 //   5 HF(b1p1) | 6 S  | 7 HF(b0p1) | 8 M  | 9 P
 //
-// 每站每通道（REQ/RSP/DAT/HRQ）：有注入或弹出 → ChannelTap（双方向 tap +
-// EjectBuffer + RR 合流），否则 → RingPipe 纯打拍。链路：rings(0).rx 来自左邻
-// （idx-1）rings(0).tx，rings(1).rx 来自右邻（idx+1）（Ring.scala:23-26）。
-// 注入路径（BaseRouter.scala:192-225）：icn 端口 →（CC/RI 的 REQ 先经 RnRouter
-// 地址译码改 TgtID）→ InjQueue(2) → SrcID 盖章（nid 覆写、aid 保留）+ 静态
-// 最短路选向（rightNodes/leftNodes，ZJParameters.scala:127-133）→ tap.inject。
-// 弹出路径：tap.eject → icn 端口（HRQ 在 CC 侧转 SnoopFlit、S 侧转 HReqFlit）。
-// HF 的 HRQ 注入 = ERQ+SNP 经 ResetRRArbiter(2) 合并（BaseRouter.scala:144-148）；
+// 结构（扁平语义模型，逐拍等价于 RTL 模块层次）：每站每通道（REQ/RSP/DAT/HRQ）
+// 一个 ChanStop 状态（ring_chan.h）= 双方向 RingSlot 打拍寄存器 + 注入 FSM +
+// InjQueue(2) + 双 EjectBuffer + 两个 RR 指针；逻辑为纯函数 chanComb/chanNext。
+// 链路 = 索引运算：站 i 的 rx0/rx1 即站 (i+9)%10 的 dir[0] 打拍、站 (i+1)%10 的
+// dir[1] 打拍（Ring.scala:23-26）——站间只经寄存器相连，无跨站组合路径，故
+// 全站合并为同一 update 循环是构造性等价。注入路径（BaseRouter.scala:192-225）：
+// icn 端口 →（CC/RI 的 REQ 先经 RnRouter 地址译码改 TgtID）→ InjQueue(2) →
+// SrcID 盖章（nid 覆写、aid 保留）+ 静态最短路选向 → tap 注入仲裁。弹出路径：
+// tap 弹出匹配 → EjectBuffer → RR 合流 → icn 端口（HRQ 在 CC 侧转 SnoopFlit、
+// S 侧转 HReqFlit）。HF 的 HRQ 注入 = ERQ+SNP 经 ResetRRArbiter(2) 合并；
 // HI 仅 ERQ 直连。
 //
 // M 节点两相复位按简化准则省略（全局同步复位、初始态=复位后态）；
 // FlitMonitor/NodeRegister（tfbParams=None）不建模。
-//
-// 同名解包约定的例外说明：本站逻辑由表驱动helper构建，lambda 形参按**角色**
-// 命名（rx/injq_deq 等），无法逐站对齐端口名；框架不强制此约定，此处以角色
-// 名为准（README §3.9 约定靠评审维持，本文件即评审记录）。
 
 #include <array>
 #include <cstdint>
-#include <string>
 #include <tuple>
+#include <utility>
 
-#include "model/ring/channel_tap.h"
 #include "model/ring/hrq_flit.h"
+#include "model/ring/ring_chan.h"
 #include "model/ring/ring_slot.h"
 #include "model/flit/zj_flit.h"
 #include "wolvicmod/core/edge.h"
 #include "wolvicmod/core/module.h"
-#include "wolvicmod/prefab/arb.h"
 #include "wolvicmod/prefab/valid.h"
-#include "wolvicmod/prefab/queue.h"
 
 namespace zj::ring {
 
 using wolvicmod::In;
 using wolvicmod::Out;
 using wolvicmod::prefab::Valid;
-using wolvicmod::prefab::Queue;
-using wolvicmod::prefab::RRArb;
 using namespace zj::chi;
 
 enum NodeKind : uint8_t { kHF, kCC, kRI, kHI, kS, kM, kP };
@@ -313,86 +307,30 @@ public:
     Ring();
 
 private:
-    // 链路端点表（构造期局部使用）：每通道每站每方向的 rx/tx 端口
-    template <class F>
-    struct LaneEnds {
-        std::array<In<RingSlot<F>>*, 10>  rx0{}, rx1{};
-        std::array<Out<RingSlot<F>>*, 10> tx0{}, tx1{};
+    // 每站每通道的实体三元组：状态 + 组合视图 + 静止门
+    template <class F, uint32_t EjD, bool IsDat>
+    struct ChanEnts {
+        using StopT = ChanStop<F, EjD, IsDat>;
+        using CombT = ChanComb<F>;
+        std::array<wolvicmod::Reg<StopT>*, 10> st{};
+        std::array<wolvicmod::Wire<CombT>*, 10> cb{};
+        std::array<wolvicmod::Wire<bool>*, 10> gt{};
     };
-
-    // 通道构建：有 tap（ChannelTap）或纯打拍（RingPipe×2）；注入侧含
-    // InjQueue(2) + SrcID 盖章 + 选向；弹出侧由调用方接边界端口。
-    template <class F, uint32_t EjDepth, bool IsDat>
-    void buildChannel(int i, LaneEnds<F>& lane, bool hasInj, bool hasEj,
-                      ChannelTap<F, EjDepth, IsDat>*& tapOut, Queue<F, 2>*& injqOut,
-                      const char* chn) {
-        const StopSpec& sp  = kStopTable[i];
-        const std::string pfx = "n" + std::to_string(i) + "_" + chn + "_";
-        if (!hasInj && !hasEj) {
-            auto& p0 = createChildModule<RingPipe<F>>(pfx + "pipe0");
-            auto& p1 = createChildModule<RingPipe<F>>(pfx + "pipe1");
-            p0.clk = clk;
-            p1.clk = clk;
-            lane.rx0[i] = &p0.rx;
-            lane.rx1[i] = &p1.rx;
-            lane.tx0[i] = &p0.tx;
-            lane.tx1[i] = &p1.tx;
-            tapOut      = nullptr;
-            injqOut     = nullptr;
-            return;
-        }
-        auto& tap = createChildModule<ChannelTap<F, EjDepth, IsDat>>(pfx + "tap");
-        tap.clk = clk;
-        tap.match_tag = uint16_t(sp.gid << 3);
-        lane.rx0[i] = &tap.rx0;
-        lane.rx1[i] = &tap.rx1;
-        lane.tx0[i] = &tap.tx0;
-        lane.tx1[i] = &tap.tx1;
-        tapOut      = &tap;
-        if (hasInj) {
-            auto& q = createChildModule<Queue<F, 2>>(pfx + "injq");
-            q.clk = clk;
-            // SrcID 盖章（BaseRouter.scala:208-210：nid 覆写、aid 保留）+ 注入
-            const uint16_t nidBase = uint16_t(sp.gid << 3);
-            tap.inject.assign().reads(q.deq) = [nidBase](auto src) {
-                auto [q_deq] = src;
-                Valid<F> d   = q_deq;
-                d.bits.src_id = nidBase | (q_deq.bits.src_id & 0x7);
-                return d;
-            };
-            // 静态最短路选向（BaseRouter.scala:199-200）
-            tap.tap_sel_oh.assign().reads(q.deq) = [&sp](auto src) {
-                auto [q_deq] = src;
-                return tapSelOf(q_deq.bits.tgt_id, sp);
-            };
-            q.deq_rdy.assign().reads(tap.inject_rdy) = [](auto src) {
-                auto [tap_inject_rdy] = src;
-                return tap_inject_rdy;
-            };
-            injqOut = &q;
-        } else {
-            tap.inject     = Valid<F>{};
-            tap.tap_sel_oh = std::array<bool, 2>{};
-            injqOut        = nullptr;
-        }
-        if (!hasEj) tap.eject_rdy = false;
-    }
+    ChanEnts<RReqFlit, 5, false> reqE;  // EjDepth 对齐 RTL（EjectBuffer 深度）
+    ChanEnts<RespFlit, 3, false> rspE;
+    ChanEnts<DataFlit, 3, true>  datE;
+    ChanEnts<HrqFlit, 5, false>  hrqE;
 
     // RnRouter 译码（CC/RI 的 REQ 注入）：按地址改 TgtID，其余字段直通
     static Valid<RReqFlit> rnDecode(Valid<RReqFlit> in, uint8_t ci, const RnDec& dec);
 
-    // 四个通道的建站 helper（端口空指针 = 该方向不存在，与 STOP_TABLE 一致）
-    void buildReqChan(int i, In<Valid<RReqFlit>>* rx, Out<bool>* rxRdy, Out<Valid<RReqFlit>>* tx,
-                      In<bool>* txRdy, LaneEnds<RReqFlit>& lane);
-    void buildRspChan(int i, In<Valid<RespFlit>>* rx, Out<bool>* rxRdy, Out<Valid<RespFlit>>* tx,
-                      In<bool>* txRdy, LaneEnds<RespFlit>& lane);
-    void buildDatChan(int i, In<Valid<DataFlit>>* rx, Out<bool>* rxRdy, Out<Valid<DataFlit>>* tx,
-                      In<bool>* txRdy, LaneEnds<DataFlit>& lane);
-    void buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Valid<HReqFlit>>* erqIn,
-                      Out<bool>* erqInRdy, In<Valid<SnoopFlit>>* snpIn, Out<bool>* snpInRdy,
-                      Out<Valid<HReqFlit>>* erqOut, In<bool>* erqOutRdy,
-                      Out<Valid<SnoopFlit>>* snpOut, In<bool>* snpOutRdy);
+    // 每通道：先 createChanEnts 建好 10 站实体，再 buildStop 逐站注册逻辑
+    template <class F, uint32_t EjD, bool IsDat>
+    void createChanEnts(ChanEnts<F, EjD, IsDat>& E, const char* pfx);
+    template <class F, uint32_t EjD, bool IsDat, size_t I>
+    void buildStop(ChanEnts<F, EjD, IsDat>& E, std::integral_constant<size_t, I>);
+    template <size_t I>
+    void buildHrqStop(std::integral_constant<size_t, I>);
 };
-
 
 }  // namespace zj::ring

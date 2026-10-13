@@ -4,6 +4,9 @@
 
 namespace zj::ring {
 
+using wolvicmod::Reg;
+using wolvicmod::Wire;
+
 Valid<RReqFlit> Ring::rnDecode(Valid<RReqFlit> in, uint8_t ci, const RnDec& dec) {
     const bool     device = (in.bits.mem_attr >> 1) & 1;  // MemAttr.device
     const uint64_t a      = in.bits.addr;
@@ -21,136 +24,192 @@ Valid<RReqFlit> Ring::rnDecode(Valid<RReqFlit> in, uint8_t ci, const RnDec& dec)
     return in;
 }
 
-void Ring::buildReqChan(int i, In<Valid<RReqFlit>>* rx, Out<bool>* rxRdy,
-                        Out<Valid<RReqFlit>>* tx, In<bool>* txRdy,
-                        LaneEnds<RReqFlit>& lane) {
-    const StopSpec&                 sp = kStopTable[i];
-    ChannelTap<RReqFlit, 5, false>* tap;
-    Queue<RReqFlit, 2>*             injq;
-    buildChannel(i, lane, sp.injReq, sp.ejReq, tap, injq, "req");
-    if (injq != nullptr) {
-        if (sp.dec.enabled) {  // CC/RI：RnRouter 地址译码改 TgtID
-            const RnDec dec = sp.dec;
-            injq->enq.assign().reads(*rx, ci) = [dec](auto src) {
-                auto [rx, ci] = src;
-                return rnDecode(rx, ci, dec);
-            };
-        } else {
-            injq->enq = *rx;
-        }
-        *rxRdy = injq->enq_rdy;
-    }
-    if (tap != nullptr && sp.ejReq) {
-        *tx = tap->eject;
-        tap->eject_rdy = *txRdy;
+template <class F, uint32_t EjD, bool IsDat>
+void Ring::createChanEnts(ChanEnts<F, EjD, IsDat>& E, const char* pfx) {
+    for (int i = 0; i < 10; ++i) {
+        const std::string p = std::string(pfx) + "_s" + std::to_string(i);
+        E.st[i]             = &createReg<ChanStop<F, EjD, IsDat>>(p + "_st");
+        E.cb[i]             = &createWire<ChanComb<F>>(p + "_c");
+        E.gt[i]             = &createWire<bool>(p + "_g");
     }
 }
 
-void Ring::buildRspChan(int i, In<Valid<RespFlit>>* rx, Out<bool>* rxRdy,
-                        Out<Valid<RespFlit>>* tx, In<bool>* txRdy,
-                        LaneEnds<RespFlit>& lane) {
-    const StopSpec&                sp = kStopTable[i];
-    ChannelTap<RespFlit, 3, false>* tap;
-    Queue<RespFlit, 2>*            injq;
-    buildChannel(i, lane, sp.injRsp, sp.ejRsp, tap, injq, "rsp");
-    if (injq != nullptr) {
-        injq->enq = *rx;
-        *rxRdy = injq->enq_rdy;
+// REQ/RSP/DAT 通道的单站注册：组合视图 + 静止门 + 次态 + 边界端口。
+// rx0 = 左邻 dir[0] 打拍、rx1 = 右邻 dir[1] 打拍（Ring.scala:23-26）。
+template <class F, uint32_t EjD, bool IsDat, size_t I>
+void Ring::buildStop(ChanEnts<F, EjD, IsDat>& E, std::integral_constant<size_t, I>) {
+    constexpr StopSpec sp     = kStopTable[I];
+    constexpr bool     kIsReq = std::is_same_v<F, RReqFlit>;
+    constexpr bool     kIsRsp = std::is_same_v<F, RespFlit>;
+    constexpr bool     hasInj = kIsReq ? sp.injReq : kIsRsp ? sp.injRsp : sp.injDat;
+    constexpr bool     hasEj  = kIsReq ? sp.ejReq : kIsRsp ? sp.ejRsp : sp.ejDat;
+
+    auto& st  = *E.st[I];
+    auto& cb  = *E.cb[I];
+    auto& g   = *E.gt[I];
+    auto& stL = *E.st[(I + 9) % 10];
+    auto& stR = *E.st[(I + 1) % 10];
+
+    In<Valid<F>>*  rxP    = nullptr;
+    Out<bool>*     rxRdyP = nullptr;
+    Out<Valid<F>>* txP    = nullptr;
+    In<bool>*      txRdyP = nullptr;
+    if constexpr (kIsReq) {
+        rxP = stops[I].rx_req;  rxRdyP = stops[I].rx_req_rdy;
+        txP = stops[I].tx_req;  txRdyP = stops[I].tx_req_rdy;
+    } else if constexpr (kIsRsp) {
+        rxP = stops[I].rx_resp; rxRdyP = stops[I].rx_resp_rdy;
+        txP = stops[I].tx_resp; txRdyP = stops[I].tx_resp_rdy;
+    } else {
+        rxP = stops[I].rx_data; rxRdyP = stops[I].rx_data_rdy;
+        txP = stops[I].tx_data; txRdyP = stops[I].tx_data_rdy;
     }
-    if (tap != nullptr && sp.ejRsp) {
-        *tx = tap->eject;
-        tap->eject_rdy = *txRdy;
+
+    constexpr uint16_t rm  = sp.rightMask;
+    constexpr uint16_t lm  = sp.leftMask;
+    constexpr uint8_t  gid = sp.gid;
+
+    // 组合视图（注入源存在性/译码/弹出反压按站型别编译期分支）
+    if constexpr (hasInj && kIsReq) {
+        // CC/RI REQ 注入：RnRouter 地址译码改 TgtID（router/package.scala:11-35）
+        const RnDec dec = sp.dec;
+        if constexpr (hasEj) {
+            cb.assign().reads(st, stL, stR, *rxP, *txRdyP, ci) = [=](auto src) {
+                auto [s, l, r, rxv, txr, ciV] = src;
+                return chanComb<F, EjD, IsDat>(s, l.dir[0].slot, r.dir[1].slot,
+                                               rnDecode(rxv, ciV, dec), Valid<F>{}, false,
+                                               rm, lm, gid, hasInj, hasEj, txr);
+            };
+        } else {
+            cb.assign().reads(st, stL, stR, *rxP, ci) = [=](auto src) {
+                auto [s, l, r, rxv, ciV] = src;
+                return chanComb<F, EjD, IsDat>(s, l.dir[0].slot, r.dir[1].slot,
+                                               rnDecode(rxv, ciV, dec), Valid<F>{}, false,
+                                               rm, lm, gid, hasInj, hasEj, false);
+            };
+        }
+    } else if constexpr (hasInj && hasEj) {
+        cb.assign().reads(st, stL, stR, *rxP, *txRdyP) = [=](auto src) {
+            auto [s, l, r, rxv, txr] = src;
+            return chanComb<F, EjD, IsDat>(s, l.dir[0].slot, r.dir[1].slot, rxv, Valid<F>{},
+                                           false, rm, lm, gid, hasInj, hasEj, txr);
+        };
+    } else if constexpr (hasInj) {
+        cb.assign().reads(st, stL, stR, *rxP) = [=](auto src) {
+            auto [s, l, r, rxv] = src;
+            return chanComb<F, EjD, IsDat>(s, l.dir[0].slot, r.dir[1].slot, rxv, Valid<F>{},
+                                           false, rm, lm, gid, hasInj, hasEj, false);
+        };
+    } else if constexpr (hasEj) {
+        cb.assign().reads(st, stL, stR, *txRdyP) = [=](auto src) {
+            auto [s, l, r, txr] = src;
+            return chanComb<F, EjD, IsDat>(s, l.dir[0].slot, r.dir[1].slot, Valid<F>{},
+                                           Valid<F>{}, false, rm, lm, gid, hasInj, hasEj, txr);
+        };
+    } else {
+        // 纯打拍站（无注入无弹出 ⇒ RingPipe 直透）
+        cb.assign().reads(st, stL, stR) = [=](auto src) {
+            auto [s, l, r] = src;
+            return chanComb<F, EjD, IsDat>(s, l.dir[0].slot, r.dir[1].slot, Valid<F>{},
+                                           Valid<F>{}, false, rm, lm, gid, false, false, false);
+        };
     }
+    g.assign().reads(st, cb) = [](auto src) {
+        auto [s, c] = src;
+        return chanActive<F, EjD, IsDat>(s, c);
+    };
+    st.update().on(posedge(clk)).en(g).reads(st, cb) = [](auto src) {
+        auto [s, c] = src;
+        return chanNext<F, EjD, IsDat>(s, c, false, hasInj, hasEj);
+    };
+    if constexpr (hasInj)
+        rxRdyP->assign().reads(cb) = [](auto src) { return std::get<0>(src).inj_src_rdy[0]; };
+    if constexpr (hasEj) txP->assign().reads(cb) = [](auto src) { return std::get<0>(src).tx; };
 }
 
-void Ring::buildDatChan(int i, In<Valid<DataFlit>>* rx, Out<bool>* rxRdy,
-                        Out<Valid<DataFlit>>* tx, In<bool>* txRdy,
-                        LaneEnds<DataFlit>& lane) {
-    const StopSpec&               sp = kStopTable[i];
-    ChannelTap<DataFlit, 3, true>* tap;
-    Queue<DataFlit, 2>*           injq;
-    buildChannel(i, lane, sp.injDat, sp.ejDat, tap, injq, "dat");
-    if (injq != nullptr) {
-        injq->enq = *rx;
-        *rxRdy = injq->enq_rdy;
-    }
-    if (tap != nullptr && sp.ejDat) {
-        *tx = tap->eject;
-        tap->eject_rdy = *txRdy;
-    }
-}
+// HRQ 通道：HF = ERQ+SNP 双源 RR 合并注入（无弹出）；HI = 仅 ERQ 注入；
+// CC = 弹出转 SnoopFlit；S = 弹出转 HReqFlit；其余站纯打拍。
+template <size_t I>
+void Ring::buildHrqStop(std::integral_constant<size_t, I>) {
+    constexpr StopSpec sp     = kStopTable[I];
+    constexpr bool     hasInj = sp.injHrq;
+    constexpr bool     hasEj  = sp.ejHrq;
+    constexpr bool     dual   = sp.hrqInjArb;
 
-void Ring::buildHrqChan(int i, LaneEnds<HrqFlit>& lane, In<Valid<HReqFlit>>* erqIn,
-                        Out<bool>* erqInRdy, In<Valid<SnoopFlit>>* snpIn,
-                        Out<bool>* snpInRdy, Out<Valid<HReqFlit>>* erqOut,
-                        In<bool>* erqOutRdy, Out<Valid<SnoopFlit>>* snpOut,
-                        In<bool>* snpOutRdy) {
-    const StopSpec&               sp = kStopTable[i];
-    const std::string             pfx = "n" + std::to_string(i) + "_";
-    ChannelTap<HrqFlit, 5, false>* tap;
-    Queue<HrqFlit, 2>*            injq;
-    buildChannel(i, lane, sp.injHrq, sp.ejHrq, tap, injq, "hrq");
-    if (injq != nullptr) {
-        if (sp.hrqInjArb) {
-            // HF：ERQ+SNP 经 ResetRRArbiter 合并（BaseRouter.scala:144-148）
-            auto& arb = createChildModule<RRArb<HrqFlit, 2>>(pfx + "hrq_arb");
-            arb.clk = clk;
-            arb.in.assign().reads(*erqIn, *snpIn) = [](auto src) {
-                auto [erq, snp] = src;
-                std::array<Valid<HrqFlit>, 2> arr;
-                arr[0].valid = erq.valid;
-                arr[0].bits  = HrqFlit::fromHreq(erq.bits);
-                arr[1].valid = snp.valid;
-                arr[1].bits  = HrqFlit::fromSnp(snp.bits);
-                return arr;
+    auto& st  = *hrqE.st[I];
+    auto& cb  = *hrqE.cb[I];
+    auto& g   = *hrqE.gt[I];
+    auto& stL = *hrqE.st[(I + 9) % 10];
+    auto& stR = *hrqE.st[(I + 1) % 10];
+
+    constexpr uint16_t rm  = sp.rightMask;
+    constexpr uint16_t lm  = sp.leftMask;
+    constexpr uint8_t  gid = sp.gid;
+
+    if constexpr (dual) {
+        // HF：ERQ+SNP 经 ResetRRArbiter(2) 合并（BaseRouter.scala:144-148）
+        cb.assign().reads(st, stL, stR, *stops[I].rx_erq, *stops[I].rx_snoop) =
+            [=](auto src) {
+                auto [s, l, r, erq, snp] = src;
+                Valid<HrqFlit> a{erq.valid, HrqFlit::fromHreq(erq.bits)};
+                Valid<HrqFlit> b{snp.valid, HrqFlit::fromSnp(snp.bits)};
+                return chanComb<HrqFlit, 5, false>(s, l.dir[0].slot, r.dir[1].slot, a, b, true,
+                                                   rm, lm, gid, true, false, false);
             };
-            erqInRdy->assign().reads(arb.in_rdy) = [](auto src) { return std::get<0>(src)[0]; };
-            snpInRdy->assign().reads(arb.in_rdy) = [](auto src) { return std::get<0>(src)[1]; };
-            injq->enq = arb.out;
-            arb.out_rdy.assign().reads(injq->enq_rdy) = [](auto src) { return std::get<0>(src); };
-        } else {
-            // HI：仅 ERQ 直连（BaseRouter.scala:149-150）
-            injq->enq.assign().reads(*erqIn) = [](auto src) {
-                auto [erq] = src;
-                Valid<HrqFlit> d;
-                d.valid = erq.valid;
-                d.bits  = HrqFlit::fromHreq(erq.bits);
-                return d;
+        stops[I].rx_erq_rdy->assign().reads(cb) =
+            [](auto src) { return std::get<0>(src).inj_src_rdy[0]; };
+        stops[I].rx_snoop_rdy->assign().reads(cb) =
+            [](auto src) { return std::get<0>(src).inj_src_rdy[1]; };
+    } else if constexpr (hasInj) {
+        // HI：仅 ERQ 直连（BaseRouter.scala:149-150）
+        cb.assign().reads(st, stL, stR, *stops[I].rx_erq) = [=](auto src) {
+            auto [s, l, r, erq] = src;
+            Valid<HrqFlit> a{erq.valid, HrqFlit::fromHreq(erq.bits)};
+            return chanComb<HrqFlit, 5, false>(s, l.dir[0].slot, r.dir[1].slot, a,
+                                               Valid<HrqFlit>{}, false, rm, lm, gid, true,
+                                               false, false);
+        };
+        stops[I].rx_erq_rdy->assign().reads(cb) =
+            [](auto src) { return std::get<0>(src).inj_src_rdy[0]; };
+    } else if constexpr (hasEj) {
+        // CC（弹 SNP）/ S（弹 ERQ）
+        constexpr bool toSnp   = sp.kind == kCC;
+        In<bool>*      ejRdyP  = toSnp ? stops[I].tx_snoop_rdy : stops[I].tx_erq_rdy;
+        cb.assign().reads(st, stL, stR, *ejRdyP) = [=](auto src) {
+            auto [s, l, r, ejr] = src;
+            return chanComb<HrqFlit, 5, false>(s, l.dir[0].slot, r.dir[1].slot,
+                                               Valid<HrqFlit>{}, Valid<HrqFlit>{}, false, rm,
+                                               lm, gid, false, true, ejr);
+        };
+        if constexpr (toSnp)
+            stops[I].tx_snoop->assign().reads(cb) = [](auto src) {
+                auto [c] = src;
+                return Valid<SnoopFlit>{c.tx.valid, c.tx.bits.toSnp()};
             };
-            *erqInRdy = injq->enq_rdy;
-        }
+        else
+            stops[I].tx_erq->assign().reads(cb) = [](auto src) {
+                auto [c] = src;
+                return Valid<HReqFlit>{c.tx.valid, c.tx.bits.toHreq()};
+            };
+    } else {
+        cb.assign().reads(st, stL, stR) = [=](auto src) {
+            auto [s, l, r] = src;
+            return chanComb<HrqFlit, 5, false>(s, l.dir[0].slot, r.dir[1].slot,
+                                               Valid<HrqFlit>{}, Valid<HrqFlit>{}, false, rm,
+                                               lm, gid, false, false, false);
+        };
     }
-    if (tap != nullptr && sp.ejHrq) {
-        if (snpOut != nullptr) {
-            // CC：HRQ 车道 → SnoopFlit（RingFlit(128) 截断为 113b，字段 LSB 对齐）
-            snpOut->assign().reads(tap->eject) = [](auto src) {
-                auto [tap_eject] = src;
-                Valid<SnoopFlit> d;
-                d.valid = tap_eject.valid;
-                d.bits  = tap_eject.bits.toSnp();
-                return d;
-            };
-            tap->eject_rdy = *snpOutRdy;
-        } else {
-            // S：HRQ 车道 → HReqFlit（ERQ）
-            erqOut->assign().reads(tap->eject) = [](auto src) {
-                auto [tap_eject] = src;
-                Valid<HReqFlit> d;
-                d.valid = tap_eject.valid;
-                d.bits  = tap_eject.bits.toHreq();
-                return d;
-            };
-            tap->eject_rdy = *erqOutRdy;
-        }
-    }
+    g.assign().reads(st, cb) = [](auto src) {
+        auto [s, c] = src;
+        return chanActive<HrqFlit, 5, false>(s, c);
+    };
+    st.update().on(posedge(clk)).en(g).reads(st, cb) = [](auto src) {
+        auto [s, c] = src;
+        return chanNext<HrqFlit, 5, false>(s, c, dual, hasInj, hasEj);
+    };
 }
 
 Ring::Ring() {
-    LaneEnds<RReqFlit> reqLane;
-    LaneEnds<RespFlit> rspLane;
-    LaneEnds<DataFlit> datLane;
-    LaneEnds<HrqFlit>  hrqLane;
-
     // 站边界端口视图填充（按站索引；空缺字段保持 nullptr，与 kStopTable 一致）
     stops[1].rx_req = &n1_rx_req;  stops[1].rx_req_rdy = &n1_rx_req_rdy;
     stops[3].rx_req = &n3_rx_req;  stops[3].rx_req_rdy = &n3_rx_req_rdy;
@@ -207,28 +266,17 @@ Ring::Ring() {
     stops[7].rx_snoop = &n7_rx_snoop; stops[7].rx_snoop_rdy = &n7_rx_snoop_rdy;
     stops[1].tx_snoop = &n1_tx_snoop; stops[1].tx_snoop_rdy = &n1_tx_snoop_rdy;
 
-    // 建站
-    for (int i = 0; i < 10; ++i) {
-        const StopIO& io = stops[i];
-        buildReqChan(i, io.rx_req, io.rx_req_rdy, io.tx_req, io.tx_req_rdy, reqLane);
-        buildRspChan(i, io.rx_resp, io.rx_resp_rdy, io.tx_resp, io.tx_resp_rdy, rspLane);
-        buildDatChan(i, io.rx_data, io.rx_data_rdy, io.tx_data, io.tx_data_rdy, datLane);
-        buildHrqChan(i, hrqLane, io.rx_erq, io.rx_erq_rdy, io.rx_snoop, io.rx_snoop_rdy,
-                     io.tx_erq, io.tx_erq_rdy, io.tx_snoop, io.tx_snoop_rdy);
-    }
-
-    // 链路（Ring.scala:23-26）：rings(0).rx ← 左邻 rings(0).tx；rings(1).rx ← 右邻
-    for (int i = 0; i < 10; ++i) {
-        const int l = (i + 9) % 10, r = (i + 1) % 10;
-        *reqLane.rx0[i] = *reqLane.tx0[l];
-        *reqLane.rx1[i] = *reqLane.tx1[r];
-        *rspLane.rx0[i] = *rspLane.tx0[l];
-        *rspLane.rx1[i] = *rspLane.tx1[r];
-        *datLane.rx0[i] = *datLane.tx0[l];
-        *datLane.rx1[i] = *datLane.tx1[r];
-        *hrqLane.rx0[i] = *hrqLane.tx0[l];
-        *hrqLane.rx1[i] = *hrqLane.tx1[r];
-    }
+    // 建站：先实体后逻辑（编译期展开 10 站）
+    createChanEnts(reqE, "req");
+    createChanEnts(rspE, "rsp");
+    createChanEnts(datE, "dat");
+    createChanEnts(hrqE, "hrq");
+    [this]<size_t... Is>(std::index_sequence<Is...>) {
+        (buildStop(reqE, std::integral_constant<size_t, Is>{}), ...);
+        (buildStop(rspE, std::integral_constant<size_t, Is>{}), ...);
+        (buildStop(datE, std::integral_constant<size_t, Is>{}), ...);
+        (buildHrqStop(std::integral_constant<size_t, Is>{}), ...);
+    }(std::make_index_sequence<10>{});
 }
 
 }  // namespace zj::ring

@@ -1,9 +1,9 @@
-// P1 环模块单测：
-//   RingPipe 打拍/保持语义；SingleChannelTap 注入仲裁/弹出/防饿死令牌；
-//   VipTable alloc/rel/指针轮转；EjectBuffer 占用反压 + VIP 末槽；
+// P1 环单测（扁平语义模型版）：
+//   chanComb/chanNext 纯函数：打拍/保持、注入仲裁/弹出匹配/防饿死令牌；
+//   vipNext：alloc/rel/指针轮转；EjectBuffer 占用反压 + VIP 末槽（经 ChanComb）；
 //   Ring 端到端：RnRouter 译码、SrcID 盖章、HRQ 通道 ERQ/SNP 混合、弹出反压。
-// 精确逐拍时序的权威验收在 verify/ 的 RTL 对拍（ZRING 合成流量）；此处为定向
-// 语义用例。
+// 精确逐拍时序的权威验收在 verify/ 的 RTL 对拍（ZRING 合成流量）与 golden trace
+// 重放（test_wolvic_top_replay）；此处为定向语义用例。
 
 #include <cstdint>
 
@@ -34,240 +34,211 @@ RReqFlit mkReq(uint16_t tgtGid, uint64_t addr = 0x80000000, uint8_t memAttr = 0,
     return f;
 }
 
-TEST_CASE("RingPipe：1 拍延迟 + RegEnable 保持") {
-    RingPipe<RReqFlit> pipe;
-    pipe.elaborate();
+// REQ 通道单站驱动助手：等价于旧 SingleChannelTap 单测（gid0、双向 tap、
+// InjQueue 在环模块内——经 inj_enq 注入）。
+using ReqStop = ChanStop<RReqFlit, 5, false>;
 
+ChanComb<RReqFlit> reqComb(const ReqStop& s, const RingSlot<RReqFlit>& rx0,
+                           const RingSlot<RReqFlit>& rx1, Valid<RReqFlit> injA,
+                           bool ejOutRdy, uint8_t gid = 0) {
+    const auto& sp = kStopTable[gid];
+    return chanComb<RReqFlit, 5, false>(s, rx0, rx1, injA, Valid<RReqFlit>{}, false,
+                                        sp.rightMask, sp.leftMask, gid,
+                                        /*hasInj=*/true, /*hasEj=*/true, ejOutRdy);
+}
+
+ReqStop reqNext(const ReqStop& s, const ChanComb<RReqFlit>& c) {
+    return chanNext<RReqFlit, 5, false>(s, c, false, true, true);
+}
+
+TEST_CASE("环打拍（RingPipe 等价）：1 拍延迟 + RegEnable 保持") {
+    ReqStop s{};
+    // 空输入：无活动
+    auto c0 = reqComb(s, {}, {}, {}, false);
+    CHECK(!chanActive<RReqFlit, 5, false>(s, c0));
+
+    // t0：valid 进入（纯打拍形态用 hasInj/hasEj=false 重算）
     RingSlot<RReqFlit> in{};
-    pipe.rx.set(in);
-    comb(pipe);
-    CHECK(!pipe.tx.get().valid);
-
-    // t0：valid 进入
     in.valid        = true;
     in.flit.txn_id  = 0x55;
     in.rsvd_valid   = true;
     in.rsvd_payload = 0x123;
-    pipe.rx.set(in);
-    cycle(pipe);
-    // t1：输出可见；输入撤掉后 bits 保持（RegEnable）
-    comb(pipe);
-    CHECK(pipe.tx.get().valid);
-    CHECK(pipe.tx.get().flit.txn_id == 0x55);
-    CHECK(pipe.tx.get().rsvd_valid);
-    CHECK(pipe.tx.get().rsvd_payload == 0x123);
-    in.valid = false;
-    in.rsvd_valid = false;
-    in.flit.txn_id = 0xAA;
-    pipe.rx.set(in);
-    cycle(pipe);
-    comb(pipe);
-    CHECK(!pipe.tx.get().valid);
-    CHECK(pipe.tx.get().flit.txn_id == 0x55);  // 保持
-    CHECK(!pipe.tx.get().rsvd_valid);
-    CHECK(pipe.tx.get().rsvd_payload == 0x123);
+    auto pipeComb   = [](const ReqStop& st, const RingSlot<RReqFlit>& rx0) {
+        return chanComb<RReqFlit, 5, false>(st, rx0, RingSlot<RReqFlit>{}, Valid<RReqFlit>{},
+                                            Valid<RReqFlit>{}, false, 0, 0, 0, false, false,
+                                            false);
+    };
+    auto pipeNext = [](const ReqStop& st, const ChanComb<RReqFlit>& c) {
+        return chanNext<RReqFlit, 5, false>(st, c, false, false, false);
+    };
+    auto c1 = pipeComb(s, in);
+    CHECK(chanActive<RReqFlit, 5, false>(s, c1));  // 来流唤醒
+    s = pipeNext(s, c1);
+    // t1：输出寄存器可见
+    CHECK(s.dir[0].slot.valid);
+    CHECK(s.dir[0].slot.flit.txn_id == 0x55);
+    CHECK(s.dir[0].slot.rsvd_valid);
+    CHECK(s.dir[0].slot.rsvd_payload == 0x123);
+    // t2：输入撤掉后 bits 保持（RegEnable）
+    in.valid        = false;
+    in.rsvd_valid   = false;
+    in.flit.txn_id  = 0xAA;
+    auto c2 = pipeComb(s, in);
+    s       = pipeNext(s, c2);
+    CHECK(!s.dir[0].slot.valid);
+    CHECK(s.dir[0].slot.flit.txn_id == 0x55);  // 保持
+    CHECK(!s.dir[0].slot.rsvd_valid);
+    CHECK(s.dir[0].slot.rsvd_payload == 0x123);
 }
 
-TEST_CASE("SingleChannelTap：空环注入 1 拍到 tx；环流量优先；弹出匹配") {
-    SingleChannelTap<RReqFlit> tap;
-    tap.elaborate();
-    tap.match_tag.set(uint16_t(0));  // 本节点 gid0
-    tap.tap_idx.set(uint8_t(0));
-    tap.rx.set(RingSlot<RReqFlit>{});
-    tap.inject.set(Valid<RReqFlit>{});
-    tap.eject_rdy.set(true);
+TEST_CASE("注入仲裁：空环注入 1 拍到打拍寄存器；环流量优先；弹出匹配") {
+    ReqStop s{};
+    // 注入请求进 InjQueue（tgt gid=2：gid0 的 right 表内 → dir0）
+    auto c0 = reqComb(s, {}, {}, {true, mkReq(2)}, false);
+    CHECK(c0.inj_enq_rdy);  // 空 InjQueue
+    s = reqNext(s, c0);
 
-    // 空环：inject_rdy 组合即真
-    comb(tap);
-    CHECK(tap.inject_rdy.get());
-    CHECK(!tap.tx.get().valid);
+    // t1：InjQueue 非空 → 注入仲裁；空环 → dir0 fire
+    auto c1 = reqComb(s, {}, {}, {}, false);
+    CHECK(c1.inj_vld_dir[0]);
+    CHECK(c1.inj_rdy_dir[0]);
+    CHECK(c1.inj_fire[0]);
+    CHECK(!c1.eject_vld[0]);
+    s = reqNext(s, c1);
+    // t2：flit 上环（打拍寄存器），盖章 = nid(0<<3)|aid(3)
+    CHECK(s.dir[0].slot.valid);
+    CHECK(s.dir[0].slot.flit.txn_id == 0x12);
+    CHECK(s.dir[0].slot.flit.src_id == 0x03);
+    CHECK(!s.dir[0].slot.rsvd_valid);
 
-    // 注入（tgt gid=2，非本节点 → 不弹出）
-    Valid<RReqFlit> inj;
-    inj.valid = true;
-    inj.bits  = mkReq(2);
-    tap.inject.set(inj);
-    comb(tap);
-    CHECK(tap.inject_rdy.get());     // fire
-    CHECK(!tap.eject.get().valid);
-    edge(tap);
-    tap.inject.set(Valid<RReqFlit>{});
-    comb(tap);
-    CHECK(tap.tx.get().valid);       // 1 拍后上环
-    CHECK(tap.tx.get().flit.txn_id == 0x12);
-    CHECK(!tap.tx.get().rsvd_valid);
+    // 环流量优先：rx0 占用（tgt gid=5，非本站）→ 注入被挡（emptySlot=false）
+    s = ReqStop{};  // 重置场景
+    s = reqNext(s, reqComb(s, {}, {}, {true, mkReq(2)}, false));  // injq 压入
+    RingSlot<RReqFlit> busy{};
+    busy.valid = true;
+    busy.flit  = mkReq(5);
+    auto c2 = reqComb(s, busy, {}, {}, false);
+    CHECK(!c2.inj_rdy_dir[0]);  // 环上占用
+    CHECK(!c2.eject_vld[0]);    // 不弹出
 
-    // 下一拍：该 flit 回到 rx（模拟邻站直透），tgt gid=2 不匹配 → 不弹出、续传
-    edge(tap);
-    RingSlot<RReqFlit> rin{};
-    rin.valid = true;
-    rin.flit  = mkReq(2);
-    tap.rx.set(rin);
-    comb(tap);
-    CHECK(!tap.eject.get().valid);
-    CHECK(!tap.inject_rdy.get());    // 环上占用：注入被挡（emptySlot=false）
-    edge(tap);
-
-    // 换成 tgt gid=0（本节点）：弹出 + 同拍空槽可注入（emptySlot=ejectFire）
-    rin.flit       = mkReq(0);
-    rin.flit.txn_id = 0x77;
-    tap.rx.set(rin);
-    tap.inject.set(inj);
-    comb(tap);
-    CHECK(tap.eject.get().valid);
-    CHECK(tap.eject.get().bits.txn_id == 0x77);
-    CHECK(tap.inject_rdy.get());     // ejectFire → emptySlot
-    edge(tap);
-    tap.rx.set(RingSlot<RReqFlit>{});
-    tap.inject.set(Valid<RReqFlit>{});
-    comb(tap);
-    CHECK(tap.tx.get().valid);       // 注入的 flit 上环（弹出的已被消费）
-    CHECK(tap.tx.get().flit.txn_id == 0x12);
+    // 弹出匹配 + 同拍空槽注入：rx0 tgt gid=0（本站）
+    RingSlot<RReqFlit> mine{};
+    mine.valid       = true;
+    mine.flit        = mkReq(0);
+    mine.flit.txn_id = 0x77;
+    auto c3 = reqComb(s, mine, {}, {}, /*ejOutRdy=*/true);
+    CHECK(c3.eject_vld[0]);
+    CHECK(c3.tx.valid == false);  // 弹出先进 EjectBuffer，不直达 tx
+    CHECK(c3.inj_rdy_dir[0]);     // ejectFire → emptySlot
+    CHECK(c3.inj_fire[0]);
+    s = reqNext(s, c3);
+    // 注入的 flit 上环（弹出的已进 EjectBuffer）
+    CHECK(s.dir[0].slot.valid);
+    CHECK(s.dir[0].slot.flit.txn_id == 0x12);
 }
 
-TEST_CASE("SingleChannelTap：防饿死——阻塞 8 拍盖令牌，令牌回来必注入") {
-    SingleChannelTap<RReqFlit> tap;
-    tap.elaborate();
-    tap.match_tag.set(uint16_t(3 << 3));  // 本节点 gid3
-    tap.tap_idx.set(uint8_t(1));
-    tap.eject_rdy.set(false);             // 弹出端永不接收（制造阻塞）
-    tap.inject.set(Valid<RReqFlit>{});
-    tap.rx.set(RingSlot<RReqFlit>{});
+TEST_CASE("防饿死：阻塞 8 拍盖令牌，令牌回来必注入") {
+    // gid=3（奇序站，right=[4..8]）；注入 tgt gid=9 → left 表 → dir1
+    ReqStop s{};
+    s = reqNext(s, reqComb(s, {}, {}, {true, mkReq(9)}, false, /*gid=*/3));
 
-    // 持续环流量（tgt 其它节点，不弹出）+ 持续注入请求
-    RingSlot<RReqFlit> rin{};
-    rin.valid = true;
-    rin.flit  = mkReq(5);
-    Valid<RReqFlit> inj;
-    inj.valid = true;
-    inj.bits  = mkReq(6);
-    tap.rx.set(rin);
-    tap.inject.set(inj);
-
-    // 阻塞期间：inject_rdy 恒 0，tx.rsvd 不置位
+    // 持续环流量（rx1，tgt gid=5 非本站）+ InjQueue 待注入
+    RingSlot<RReqFlit> busy{};
+    busy.valid = true;
+    busy.flit  = mkReq(5);
     for (int t = 0; t < 8; ++t) {
-        comb(tap);
-        CHECK(!tap.inject_rdy.get());
-        CHECK(!tap.tx.get().rsvd_valid);
-        edge(tap);
+        auto c = reqComb(s, {}, busy, {}, false, /*gid=*/3);
+        CHECK(!c.inj_rdy_dir[1]);
+        CHECK(!c.inj_fire[1]);
+        CHECK(!s.dir[1].slot.rsvd_valid);
+        s = reqNext(s, c);
     }
-    // 第 9 拍：state 转入 inject_reserved；再 1 拍输出寄存器才载令牌
-    comb(tap);
-    CHECK(!tap.inject_rdy.get());  // 环仍占用
-    edge(tap);                     // state ← inject_reserved
-    comb(tap);
-    CHECK(!tap.tx.get().rsvd_valid);  // rsvdNext 本拍才算出
-    edge(tap);                        // out ← rsvd
-    comb(tap);
-    CHECK(tap.tx.get().rsvd_valid);
-    CHECK(tap.tx.get().rsvd_payload == ((3 << 3) | 1));  // {nid=3, tapIdx=1}
+    CHECK(s.dir[1].counter == 8);  // timerBits=4：bit3 置位
+    // 下一拍：state 转入 inject_reserved
+    s = reqNext(s, reqComb(s, {}, busy, {}, false, 3));
+    CHECK(s.dir[1].state == kTapInjectReserved);
+    // 再一拍：输出寄存器载令牌（rsvd_valid）
+    s = reqNext(s, reqComb(s, {}, busy, {}, false, 3));
+    CHECK(s.dir[1].slot.rsvd_valid);
+    CHECK(s.dir[1].slot.rsvd_payload == ((3 << 3) | 1));  // {nid=3, tapIdx=1}
 
-    // 令牌绕环回来（rx.rsvd_valid=1, payload 匹配）：即使环上有 flit 也……
-    // （emptySlot 仍需空槽；本场景 rx.flit 一直占用且 eject 不开 → 等空槽）
-    // 先给空槽 + 令牌：
-    rin.valid       = false;       // 空槽
-    rin.rsvd_valid  = true;
-    rin.rsvd_payload = (3 << 3) | 1;
-    tap.rx.set(rin);
-    comb(tap);
-    CHECK(tap.inject_rdy.get());   // 令牌在手 → 必注入
-    edge(tap);
-    comb(tap);
-    CHECK(tap.tx.get().valid);     // 注入成功上环
-    CHECK(tap.tx.get().flit.txn_id == 0x12);
-    CHECK(!tap.tx.get().rsvd_valid);  // 令牌消费掉
+    // 令牌绕环回来（rx1.rsvd 匹配）+ 空槽 → 必注入
+    RingSlot<RReqFlit> tok{};
+    tok.rsvd_valid   = true;
+    tok.rsvd_payload = (3 << 3) | 1;
+    auto c = reqComb(s, {}, tok, {}, false, 3);
+    CHECK(c.inj_rdy_dir[1]);
+    CHECK(c.inj_fire[1]);
+    s = reqNext(s, c);
+    CHECK(s.dir[1].slot.valid);
+    CHECK(s.dir[1].slot.flit.txn_id == 0x12);
+    CHECK(!s.dir[1].slot.rsvd_valid);  // 令牌消费掉
+    CHECK(s.dir[1].state == kTapNormal);
 }
 
-TEST_CASE("VipTable：alloc/rel/指针轮转") {
-    VipTable<4> vt;
-    vt.elaborate();
-    vt.update.set(VipUpd{});
-    comb(vt);
-    CHECK(!vt.vip.get().valid);
+TEST_CASE("vipNext：alloc/rel/指针轮转") {
+    VipState<4> v{};
+    CHECK(!vipSel(v).valid);
 
-    // alloc tag=0x11（valid 且 rel=false）
-    vt.update.set(VipUpd{true, false, 0x11});
-    edge(vt);
-    vt.update.set(VipUpd{});
-    comb(vt);
-    CHECK(vt.vip.get().valid);       // ptr=0 → tag 0x11
-    CHECK(vt.vip.get().tag == 0x11);
+    // alloc tag=0x11
+    v = vipNext(v, true, false, 0x11);
+    CHECK(vipSel(v).valid);
+    CHECK(vipSel(v).bits == 0x11);
 
-    // 同 tag 重复 update 不重复 alloc；再 alloc 0x22
-    vt.update.set(VipUpd{true, false, 0x11});
-    edge(vt);
-    comb(vt);  // edge 后 clk 停在 1，须先 comb 归零才有下一个 posedge
-    vt.update.set(VipUpd{true, false, 0x22});
-    edge(vt);
-    vt.update.set(VipUpd{});
-    comb(vt);
-    CHECK(vt.vip.get().tag == 0x11);  // ptr 不动
+    // 同 tag 重复不重复 alloc；再 alloc 0x22
+    v = vipNext(v, true, false, 0x11);
+    v = vipNext(v, true, false, 0x22);
+    CHECK(vipSel(v).bits == 0x11);  // ptr 不动
 
-    // rel 0x11：当拍 valids[0] 仍在（vip 仍 0x11）；下一拍 valids[0] 清、vip 失效、
-    // ptrMove 触发；再下一拍 ptr 才搬到 0x22（与 RTL 逐拍一致）
-    vt.update.set(VipUpd{true, true, 0x11});
-    comb(vt);
-    CHECK(vt.vip.get().valid);       // rel 当拍 vip 仍指向 0x11
-    CHECK(vt.vip.get().tag == 0x11);
-    edge(vt);
-    vt.update.set(VipUpd{});
-    comb(vt);
-    CHECK(!vt.vip.get().valid);      // valids[0] 已清、ptr 未搬
-    edge(vt);
-    comb(vt);
-    CHECK(vt.vip.get().valid);
-    CHECK(vt.vip.get().tag == 0x22);
+    // rel 0x11：次态 valids[0] 清、ptr 未搬（vip 失效）；再一次 next 指针搬到 0x22
+    v = vipNext(v, true, true, 0x11);
+    CHECK(!vipSel(v).valid);
+    CHECK(vipDangling(v));
+    v = vipNext(v, false, true, 0);
+    CHECK(vipSel(v).valid);
+    CHECK(vipSel(v).bits == 0x22);
 }
 
-TEST_CASE("EjectBuffer：占用反压 + VIP 末槽只放行命中 tag") {
-    EjectBuffer<RReqFlit, 3, false> eb;  // RSP/DAT 配置深度 3
-    eb.elaborate();
-    eb.enq.set(Valid<RReqFlit>{});
-    eb.deq_rdy.set(false);
-
+TEST_CASE("EjectBuffer 占用反压 + VIP 末槽只放行命中 tag") {
+    // RSP/DAT 配置深度 3：gid0 仅弹出场景
+    using EbStop = ChanStop<RReqFlit, 3, false>;
+    auto ejComb = [](const EbStop& s, const RingSlot<RReqFlit>& rx0, bool ejRdy) {
+        const auto& sp = kStopTable[0];
+        return chanComb<RReqFlit, 3, false>(s, rx0, RingSlot<RReqFlit>{}, Valid<RReqFlit>{},
+                                            Valid<RReqFlit>{}, false, sp.rightMask,
+                                            sp.leftMask, 0, false, true, ejRdy);
+    };
     auto flitWith = [](uint16_t src, uint16_t txn) {
         auto f   = mkReq(0);
         f.src_id = src;
         f.txn_id = txn;
         return f;
     };
-    // tag = Cat(src, txn, tgtAid)：src/txn 区分即可
-    auto tagOf = [](const RReqFlit& f) {
-        return (uint32_t(f.src_id) << 15) | (uint32_t(f.txn_id) << 3) | (f.tgt_id & 0x7);
-    };
 
-    // 填满到 empties==1（A、B 进，deq 不开）。注意：末槽（empties==1）是 VIP
-    // 保留槽——未登记的 tag 直接进不了第 3 项。
-    Valid<RReqFlit> d;
-    d.valid = true;
+    // 填满到 empties==1（A、B 进，tx 不开）。末槽是 VIP 保留槽。
+    EbStop s{};
     for (int k = 0; k < 2; ++k) {
-        d.bits = flitWith(0x10 + k, 0x20 + k);
-        eb.enq.set(d);
-        comb(eb);
-        CHECK(eb.enq_rdy.get());
-        edge(eb);
+        RingSlot<RReqFlit> in{};
+        in.valid = true;
+        in.flit  = flitWith(0x10 + k, 0x20 + k);
+        auto c   = ejComb(s, in, false);
+        CHECK(c.eject_vld[0]);
+        CHECK(c.eb_enq_rdy[0]);  // empties>1 → 放行
+        s = chanNext<RReqFlit, 3, false>(s, c, false, false, true);
     }
-    comb(eb);
-    CHECK(!eb.enq_rdy.get());  // empties==1 且 VIP 表空 → 新 tag 被挡
-
-    // 提供 D（新 tag）：t2 被挡（VIP 表未登记）；t3 upd 链命中但仍未提交 alloc；
-    // t4 D 已登记为 VIP → 放行
-    d.bits = flitWith(0x77, 0x33);
-    eb.enq.set(d);
-    comb(eb);
-    const bool try1 = eb.enq_rdy.get();
-    edge(eb);
-    eb.enq.set(d);
-    comb(eb);
-    const bool try2 = eb.enq_rdy.get();
-    edge(eb);
-    eb.enq.set(d);
-    comb(eb);
-    const bool try3 = eb.enq_rdy.get();
-    CHECK(!try1);  // VIP 表还没登记 D
-    CHECK(!try2);  // alloc 本拍末才提交
-    CHECK(try3);   // D 已是 VIP → 放行
-    CHECK(eb.deq.get().valid);  // A 在出口
+    // 新 tag D：empties==1 且 VIP 表空 → 被挡；upd 链登记后放行
+    RingSlot<RReqFlit> in{};
+    in.valid = true;
+    in.flit  = flitWith(0x77, 0x33);
+    auto c1  = ejComb(s, in, false);
+    CHECK(!c1.eb_enq_rdy[0]);  // VIP 表还没登记 D
+    s = chanNext<RReqFlit, 3, false>(s, c1, false, false, true);  // upd 链打拍
+    auto c2 = ejComb(s, in, false);
+    CHECK(!c2.eb_enq_rdy[0]);  // alloc 本拍末才提交
+    s = chanNext<RReqFlit, 3, false>(s, c2, false, false, true);
+    auto c3 = ejComb(s, in, false);
+    CHECK(c3.eb_enq_rdy[0]);  // D 已是 VIP → 放行
+    CHECK(c3.tx.valid);       // A 在出口（oqueue 头部）
 }
 
 TEST_CASE("tapSelOf/STOP_TABLE：方向表抽查") {
